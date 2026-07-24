@@ -1,0 +1,155 @@
+/* Gmarket 판매자 수집기 v2.0 — 라이트 테마 (WORK_ORDER §7.3)
+   유효한 Qt Style Sheet 문법만 사용 (미지원 CSS 속성 배제). */
+
+QWidget {
+    background-color: #f5f6f8;
+    color: #22262b;
+    font-family: "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    font-size: 13px;
+}
+
+/* ── 그룹 박스 ─────────────────────────────────────────────── */
+QGroupBox {
+    background-color: #ffffff;
+    border: 1px solid #d9dde2;
+    border-radius: 8px;
+    margin-top: 14px;
+    padding: 10px 12px 12px 12px;
+    font-weight: 600;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+    color: #2f6fed;
+    font-weight: 700;
+}
+
+/* ── 버튼 ──────────────────────────────────────────────────── */
+QPushButton {
+    background-color: #2f6fed;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 600;
+}
+
+QPushButton:hover {
+    background-color: #4a82f2;
+}
+
+QPushButton:pressed {
+    background-color: #2559c4;
+}
+
+QPushButton:disabled {
+    background-color: #c3c8cf;
+    color: #eef0f2;
+}
+
+/* ── 테이블 ────────────────────────────────────────────────── */
+QTableWidget {
+    background-color: #ffffff;
+    alternate-background-color: #f2f5fb;
+    border: 1px solid #d9dde2;
+    border-radius: 6px;
+    gridline-color: #e6e9ee;
+    selection-background-color: #d6e4ff;
+    selection-color: #17233a;
+}
+
+QTableWidget::item {
+    padding: 4px 6px;
+}
+
+QHeaderView::section {
+    background-color: #eef1f6;
+    color: #3a4048;
+    border: none;
+    border-right: 1px solid #dde1e7;
+    border-bottom: 1px solid #dde1e7;
+    padding: 6px 8px;
+    font-weight: 600;
+}
+
+/* ── 진행률 바 ─────────────────────────────────────────────── */
+QProgressBar {
+    background-color: #eceff3;
+    border: 1px solid #d9dde2;
+    border-radius: 6px;
+    text-align: center;
+    color: #22262b;
+    min-height: 18px;
+}
+
+QProgressBar::chunk {
+    background-color: #37b24d;
+    border-radius: 5px;
+}
+
+/* ── 입력 위젯 ─────────────────────────────────────────────── */
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox {
+    background-color: #ffffff;
+    border: 1px solid #cfd4da;
+    border-radius: 6px;
+    padding: 5px 8px;
+    selection-background-color: #d6e4ff;
+    selection-color: #17233a;
+}
+
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus {
+    border: 1px solid #2f6fed;
+}
+
+QLineEdit:disabled,
+QSpinBox:disabled,
+QDoubleSpinBox:disabled {
+    background-color: #f0f1f3;
+    color: #9aa0a8;
+}
+
+/* ── 로그 텍스트 영역 ──────────────────────────────────────── */
+QPlainTextEdit {
+    background-color: #1e2229;
+    color: #d6dae0;
+    border: 1px solid #d9dde2;
+    border-radius: 6px;
+    padding: 6px;
+    selection-background-color: #3a4a66;
+    selection-color: #ffffff;
+}
+
+/* ── 체크박스 ──────────────────────────────────────────────── */
+QCheckBox {
+    spacing: 6px;
+    padding: 2px;
+    background-color: transparent;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #b6bcc4;
+    border-radius: 4px;
+    background-color: #ffffff;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #2f6fed;
+    border: 1px solid #2f6fed;
+}
+
+QCheckBox::indicator:hover {
+    border: 1px solid #2f6fed;
+}
+
+QCheckBox:disabled {
+    color: #9aa0a8;
+}

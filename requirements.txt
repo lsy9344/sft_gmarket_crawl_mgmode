@@ -1,0 +1,11 @@
+# Gmarket 판매자 수집 시스템 v2.0 (Fast Crawl) — 의존성 (WORK_ORDER §10)
+requests>=2.28
+beautifulsoup4>=4.12
+# [fetchers] extra 필수: StealthySession 은 curl_cffi/playwright 등 fetcher 백엔드에
+# 의존한다. 기본 `scrapling` 만 설치하면 Phase 0 Pre-scan(StealthySession import)이
+# ModuleNotFoundError 로 실패한다.
+scrapling[fetchers]>=0.4.11
+PyQt6>=6.5
+
+# 설치 후 Chromium 브라우저 다운로드 필요(~300MB):
+#   scrapling install
