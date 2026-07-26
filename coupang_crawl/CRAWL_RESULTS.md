@@ -16,8 +16,9 @@
 **`https://www.coupang.com/np/omp` 페이지의 '전체' 탭**(무한 스크롤 피드)에서
 상품을 스크롤로 모아들인 뒤, **Coupang 자체 스토어 API 3개**를 호출해
 판매자 사업자정보를 수집하는 데 성공했다. 카테고리 페이지도, 상품
-상세페이지도 사용하지 않는다. **필수 수집 항목 7개 중 6개를 100% 확보**했다
-(이메일 포함 — 기존 설계의 "이메일 불가" 판단은 틀렸음).
+상세페이지도 사용하지 않는다. **필수 수집 항목 7개 전부를 확보**했다
+(이메일 포함 — 기존 설계의 "이메일 불가" 판단은 틀렸음). `url` 은 판매자당
+대표 상품 1건의 URL(`itemId`/`vendorItemId` 조합)로 채운다.
 
 ---
 
@@ -99,6 +100,7 @@
 | `qualitySellerBadgeDto` | `power_seller` (bool) + `power_seller_title` | 파워셀러 여부 |
 | `ratingCount` / `thumbUpRatio` | `rating_count` / `thumb_up_ratio` | (보너스) |
 | `storeInfoArea.displayName` (Phase 4) | `store_name` (스토어명) | ✅ 스토어 |
+| `productId`+`itemId`+`vendorItemId` (Phase 4) | `url` (대표 상품 URL) | ✅ url |
 
 ---
 
@@ -121,6 +123,7 @@
 
 | 필드 | 확보율 |
 |------|--------|
+| url (대표 상품 URL) | 156/156 (100%) |
 | company_name (상호명) | 156/156 (100%) |
 | ceo_name (대표자명) | 156/156 (100%) |
 | business_number (사업자번호) | 156/156 (100%) |
@@ -161,7 +164,7 @@
 
 | # | 필수 항목 | 수집 여부 | 실측 확보율 | 비고 |
 |---|----------|----------|------------|------|
-| 1 | url (상품 페이지 URL) | **△ 미수집** | — | 판매자 단위 수집이라 상품 URL을 레코드에 저장하지 않음. 파이프라인 내부에 `itemId`/`vendorItemId`가 있으므로 대표 상품 URL(`https://www.coupang.com/vp/products/{itemId}?...&vendorItemId={vid}`) 조합은 가능 |
+| 1 | url (상품 페이지 URL) | ✅ | 100% | 판매자당 대표 상품 1건 URL — Phase 4의 `productId`/`itemId`/`vendorItemId` 로 조합 (`https://www.coupang.com/vp/products/{productId}?itemId={itemId}&vendorItemId={vendorItemId}`) |
 | 2 | 사업자명 (상호명) | ✅ | 100% | `name` |
 | 3 | 이메일 주소 | ✅ | 100% | `repEmail` — **기존 설계(불가)와 달리 확보 성공** |
 | 4 | 대표자명 | ✅ | 100% | `repPersonName` — Gmarket보다 우수 (Gmarket은 미수집) |
@@ -169,16 +172,15 @@
 | 6 | 전화번호 | ✅ | 100% | `repPhoneNum` (마스킹 없음) |
 | 7 | 사업자번호 | ✅ | 100% | `businessNumber` |
 
-**결론: 필수 7항목 중 6개 100% 수집 성공.** 유일한 미수집 항목은 `url`이며,
-이는 수집 단위가 "상품"이 아니라 "판매자(사업자)"이기 때문이지 기술적
-실패가 아니다. 상품 URL이 필요하면 Phase 3에서 확보한 `itemId`/
-`vendorItemId`로 대표 상품 URL을 조합해 레코드에 추가하면 된다
-(`coupang_omp_crawler.py` 에 필드 추가 필요).
+**결론: 필수 7항목 전부(7/7) 수집 성공.** 사업자명·이메일·대표자명·스토어·
+전화·사업자번호는 `getStoreReview` 로, `url` 은 Phase 4 매핑 시 확보한 상품
+ID 조합으로 채운다. `url` 은 판매자당 대표 상품 1건이며(한 판매자가 여러
+상품을 운영해도 대표 1건 URL만 저장), 기술적 실패 없이 전 레코드에 채워진다.
 
-> **Gmarket 대비.** Gmarket(`mg.gmarket.co.kr`)은 대표자명·이메일 중
-> 대표자명을 못 얻지만(7개 중 6개), Coupang은 오히려 **대표자명과 이메일을
-> 모두** 얻는다. 단, 상품 단위 URL은 Gmarket이 goodscode 로 직접 만들고
-> Coupang은 판매자 단위라 기본 레코드에 없다.
+> **Gmarket 대비.** Gmarket(`mg.gmarket.co.kr`)은 대표자명을 못 얻지만(7개 중
+> 6개), Coupang은 **대표자명과 이메일을 모두** 얻어 필수 7항목을 전부
+> 충족한다. 상품 URL은 Gmarket이 goodscode 로, Coupang이 대표 상품
+> `productId`/`itemId`/`vendorItemId` 조합으로 만든다.
 
 ---
 

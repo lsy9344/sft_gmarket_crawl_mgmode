@@ -111,6 +111,9 @@ def get_vendors_for_items(page, vendor_item_ids, store_id=109671, vendor_id="A00
                                 "vendorId": vid,
                                 "storeId": store_info.get("storeId"),
                                 "displayName": store_info.get("displayName"),
+                                "productId": product.get("productId"),
+                                "itemId": product.get("itemId"),
+                                "vendorItemId": product.get("vendorItemId"),
                             }
                     return vendors
         return {}
@@ -256,9 +259,16 @@ def main():
             data = fetch_vendor_business_info(page, vendor_id)
 
             if data and data.get("name"):
+                vinfo = all_vendors.get(vendor_id, {})
+                pid = vinfo.get("productId")
+                iid = vinfo.get("itemId")
+                viid = vinfo.get("vendorItemId")
+                url = (f"https://www.coupang.com/vp/products/{pid}"
+                       f"?itemId={iid}&vendorItemId={viid}") if pid and iid and viid else ""
                 record = {
                     "vendor_id": vendor_id,
-                    "store_name": all_vendors.get(vendor_id, {}).get("displayName", ""),
+                    "url": url,
+                    "store_name": vinfo.get("displayName", ""),
                     "company_name": data.get("name"),
                     "ceo_name": data.get("repPersonName"),
                     "business_number": data.get("businessNumber"),

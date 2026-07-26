@@ -226,7 +226,7 @@ Gmarket의 "파워딜러"에 대응하는 Coupang 측 표식을 수집한다.
 
 | Field | Gmarket (mg.*) | **Coupang (스토어 API, 실측)** | Final |
 |-------|---------------|--------------------------------|-------|
-| url | ✅ (goodscode) | **△ 미수집** — 판매자 단위 수집 (itemId/vendorItemId로 조합 가능) | △ |
+| url | ✅ (goodscode) | ✅ 100% — 판매자당 대표 상품 URL (`productId`/`itemId`/`vendorItemId` 조합) | ✅ |
 | store_name | ✅ | ✅ 91% (`storeInfoArea.displayName`) | ✅ |
 | company_name | ✅ | ✅ 100% (`name`) | ✅ |
 | ceo_name | ❌ | ✅ 100% (`repPersonName`) — Gmarket에 없는 필드 | ✅ |
@@ -238,12 +238,11 @@ Gmarket의 "파워딜러"에 대응하는 Coupang 측 표식을 수집한다.
 
 **결론 (rev.6 실측).**
 
-- **필수 7항목(COLLECTION_SPEC.md) 중 6개 100% 수집 성공.** 사업자명·이메일·
-  대표자명·스토어·전화·사업자번호를 전부 확보했다. 대표자명과 이메일은
+- **필수 7항목(COLLECTION_SPEC.md) 전부(7/7) 수집 성공.** 사업자명·이메일·
+  대표자명·스토어·전화·사업자번호·url 을 전부 확보했다. 대표자명과 이메일은
   Gmarket보다 오히려 우수하다(Gmarket은 대표자명 미수집).
-- **유일한 미수집 필수항목은 `url`** — 수집 단위가 상품이 아니라 판매자
-  (사업자)이기 때문이며 기술적 실패가 아니다. Phase 3에서 확보한
-  `itemId`/`vendorItemId` 로 대표 상품 URL 조합이 필요하면
-  `coupang_omp_crawler.py` 에 필드를 추가한다.
+- **`url` 은 판매자당 대표 상품 1건 URL** 이다 — Phase 4 매핑 시 확보한
+  `productId`/`itemId`/`vendorItemId` 로 조합하며 전 레코드에 채워진다
+  (`coupang_omp_crawler.py` 구현 완료).
 - 사업자정보의 실제 출처는 **`getStoreReview` 스토어 API** 하나다 —
   상세페이지 스크래핑(rev.4/5)은 403으로 성립하지 않는다.
