@@ -20,3 +20,7 @@ dist/
 
 # Crawl output data
 output/
+
+# Test/scan working logs — contain session cookies + scraped business/personal
+# data. Kept on disk for debugging but never committed.
+coupang_crawl/test_logs/
