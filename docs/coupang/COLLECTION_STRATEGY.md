@@ -4,6 +4,9 @@
 > - **수집 대상 확정: `https://www.coupang.com/np/omp` 의 '전체' 탭 하나.**
 >   무한 스크롤 피드이며, 카테고리 페이지·검색·상품 상세페이지는 사용하지
 >   않는다 (상세페이지는 항상 403).
+> - **피드 총량 실측: 약 180개 고유 상품** (4페이지에서 자연 종료 — 사실상
+>   유한 피드). 전량 수집해도 소규모라 기존 보수적 딜레이로 IP 안전
+>   (`CRAWL_RESULTS.md` §4.3).
 > - **동작하는 파이프라인: 스토어 API 3개** — `getPromotion`(vendorItemId)
 >   → `individualInfo/products`(vendorId 매핑) → `getStoreReview`(사업자정보).
 >   아래 rev.4의 "Stage C 상세페이지 직접 스크래핑"은 403으로 불가.

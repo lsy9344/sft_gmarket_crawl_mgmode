@@ -4,7 +4,8 @@
 > - **수집 대상: `https://www.coupang.com/np/omp` '전체' 탭 하나.** 접속 즉시
 >   상품이 보이는 라이브딜 피드이며 **무한 스크롤**로 로드된다. 페이지네이션은
 >   §1의 `?listSize=120&page={N}` 가 아니라 **`getPromotion` API의
->   `continuationToken` 커서** 방식이다.
+>   `continuationToken` 커서** 방식이다. 실측 총량은 **약 180개 고유 상품**
+>   (4페이지에서 토큰 소진·자연 종료 — 사실상 유한 피드, `CRAWL_RESULTS.md` §4.3).
 > - **상품 상세페이지(`/vp/products/*`)는 항상 403** — 앱 레벨 차단으로 우회
 >   불가. 따라서 §3·§4의 "상세페이지 최하단 사업자정보 란 스크래핑"은 전부
 >   사용 불가. 사업자정보 실제 출처는 **`getStoreReview` 스토어 API**.

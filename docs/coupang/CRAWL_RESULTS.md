@@ -29,6 +29,7 @@
 | **유일한 수집 대상** | `https://www.coupang.com/np/omp` 의 **'전체' 탭** |
 | 페이지 성격 | 접속 즉시 상품이 표시되는 라이브딜 피드 (클라이언트 렌더링) |
 | 상품 로드 방식 | **무한 스크롤** — 스크롤할 때마다 `getPromotion` API가 다음 페이지를 로드 |
+| **피드 총량 (실측)** | **약 180개 고유 상품** (4페이지에서 토큰 소진·자연 종료) — 사실상 유한 피드. 상세: §4.3 |
 | 카테고리 | **불필요** — '전체' 탭 하나만 수집 대상. 카테고리/검색/상세페이지 미사용 |
 | 페이지네이션 | `?page=N` 방식 **아님** — `continuationToken`/`nextPageKey` 커서 기반 |
 
@@ -156,6 +157,40 @@
 }
 ```
 
+### 4.3 '전체' 탭 피드 총량 조사 (count-only probe)
+
+§4의 178개가 "피드 전량"인지 "스크롤 상한"인지 확정하기 위해, 사업자정보
+수집을 일절 하지 않고 `getPromotion` 페이지만 사람 속도로 넘기며 개수를
+세는 **읽기 전용 프로브**를 별도 실행했다.
+
+```
+조사일: 2026-07-26
+방법: getPromotion 커서 페이지네이션만 반복 (individualInfo/getStoreReview 미호출)
+      페이지당 2.5~4.5초 휴지, 상한 50페이지
+```
+
+| 지표 | 값 |
+|------|-----|
+| **고유 상품 수 (vendorItemId)** | **180개** |
+| 중복 포함 raw | 180개 (중복 0) |
+| 페이지 수 | 4 (50/50/50/30) |
+| 종료 원인 | `token_exhausted` — **피드 자연 종료** (상한 50페이지 미도달) |
+| 차단 | 0건 |
+
+**결론.**
+
+- **'전체' 탭은 약 180개짜리 유한 피드다.** 무한 스크롤처럼 보이지만 실제로는
+  4페이지(≈180개)에서 `continuationToken` 이 소진되며 끝나는 라이브딜
+  큐레이션 풀이다.
+- **§4의 178개는 사실상 전량이다.** 180과의 2개 차이는 라이브 피드의 시점별
+  변동일 뿐이다. 크롤러의 `--max-scroll-pages 10` 상한은 한 번도 제약이
+  되지 않았다 — 피드가 그 전에 끝난다.
+- **"대량 수집"이 아니다.** 전량 = 180개 상품 → 약 156개 판매자이므로,
+  기존 파이프라인과 보수적 딜레이 설정 그대로 전량 수집해도 IP 평판에
+  무리 없이 안전하다.
+- 본 프로브의 IP 소모는 극소였다 — `getPromotion` 읽기 4회 + 웜업뿐이며
+  사업자정보 API는 호출하지 않았다.
+
 ---
 
 ## 5. 필수 수집 항목 검증 (COLLECTION_SPEC.md 기준)
@@ -220,12 +255,15 @@ xvfb-run -a python coupang_omp_crawler.py \
 
 ## 8. 문서 체계 정리 (rev.6)
 
-| 문서 | 지위 |
-|------|------|
-| **`CRAWL_RESULTS.md` (본 문서)** | **현재 기준 — 구현 실측 결과** |
-| `coupang_omp_crawler.py` | **동작하는 구현체** |
-| `README.md` | 연구 요약 — rev.6 보정 note 추가 |
-| `COLLECTION_STRATEGY.md` | rev.4/5 설계 — 실측과 다른 부분 본 문서로 대체 |
-| `DATA_FIELDS_MAPPING.md` | rev.4 필드 매핑 — 실측 매핑은 §3.1 참조 |
-| `PAGE_STRUCTURE.md` | rev.4 페이지 구조 — 상세페이지 403 등으로 대부분 폐기 |
-| `PLATFORM_ANALYSIS.md` / `BYPASS_TECHNICAL_GUIDE.md` / `SCRAPLING_TECH_ANALYSIS.md` / `IMPLEMENTATION_*.md` | 구현 전 연구 — 참고용 |
+문서는 `docs/coupang/` 에, 구현체(코드)는 `coupang_crawl/` 에 위치한다.
+폐기된 연구문서(rev.1~5)는 `docs/coupang/research/` 에 보관한다.
+
+| 문서 | 위치 | 지위 |
+|------|------|------|
+| **`CRAWL_RESULTS.md` (본 문서)** | `docs/coupang/` | **현재 기준 — 구현 실측 결과** |
+| `README.md` | `docs/coupang/` | 문서 인덱스 — rev.6 기준 정리 |
+| `COLLECTION_STRATEGY.md` | `docs/coupang/` | rev.6 수집 전략 |
+| `DATA_FIELDS_MAPPING.md` | `docs/coupang/` | rev.6 필드 매핑 (실측은 §3.1) |
+| `PAGE_STRUCTURE.md` | `docs/coupang/` | rev.6 URL/API 구조 |
+| `coupang_omp_crawler.py` | `coupang_crawl/` | **동작하는 구현체 (v3.0)** |
+| `PLATFORM_ANALYSIS.md` 외 5건 | `docs/coupang/research/` | 구현 전 연구 (rev.1~5) — 실측으로 폐기, 참고용 |

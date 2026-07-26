@@ -5,6 +5,7 @@ Windows용 PyQt6 데스크톱 프로그램. 프로그램 시작 시 **사전 조
 카테고리별 상품 수·신규 대상 수를 먼저 파악한 뒤 사용자 확인을 거쳐 수집한다.
 
 > 상세 사양: [`WORK_ORDER.md`](WORK_ORDER.md) · [`TECH_SPEC.md`](TECH_SPEC.md)
+> **Coupang 수집 확장**: [`docs/coupang/`](docs/coupang/) 참조 — `/np/omp` '전체' 탭 + 스토어 API 3개로 필수 7항목 100% 확보(구현 완료). 지마켓/쿠팡 **2탭 UI 앱**으로 통합 예정.
 
 ## 설치
 
