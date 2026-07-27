@@ -17,7 +17,7 @@ import traceback
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.core.base import Control
-from app.core.crawler import SellerCrawler
+from app.core.crawler import CrawlSummary, SellerCrawler
 from app.core.plan import CrawlPlan
 from app.core.storage import Storage
 
@@ -55,7 +55,7 @@ class CrawlWorker(QThread):
         self.control = control
         self.delay = delay
         # 스레드 종료 후 메인 윈도우가 읽을 수집 요약 결과.
-        self.summary = None
+        self.summary: CrawlSummary | None = None
 
     def run(self) -> None:
         try:
