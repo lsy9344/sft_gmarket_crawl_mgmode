@@ -15,6 +15,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows 콘솔(cp949 등)에서 유니코드(예: em-dash) 출력 시 UnicodeEncodeError 로
+# 스크립트가 중단되는 것을 막는다. frozen 콘솔 exe 에서 특히 중요하다.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.coupang.preflight import (

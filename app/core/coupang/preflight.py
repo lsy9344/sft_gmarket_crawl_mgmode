@@ -3,7 +3,8 @@
 암묵적 다운로드를 유발하지 않고 파일시스템 검사만으로 준비 상태를 판정한다.
 Camoufox 0.5.4 실제 캐시 구조:
   INSTALL_DIR (~/.cache/camoufox)
-    config.json          — {"active_version": "browsers/official/<ver>", "channel": ..., "pinned": ...}
+    config.json          — {"active_version": "browsers/official/<ver>-<sha8>"}
+                            (channel/pinned 키는 pinned fetch 후 남지 않는다 — 2026-07-27 실측)
     browsers/official/<version>/version.json   — {"version": "152.0.4", "build": "beta.28", ...}
     browsers/official/<version>/camoufox       — 실행 파일
     geoip/config.yml     — "name: MaxMind GeoLite2"
@@ -249,7 +250,11 @@ def _diagnostic_scan(install_dir: Path) -> str:
 
 
 def _check_browser(install_dir: Path) -> PreflightResult | None:
-    """브라우저 검증 (fail-closed): config.json + active_version + channel + pinned 모두 필수."""
+    """브라우저 검증 (fail-closed): config.json active_version + version.json + 실행 파일.
+
+    버전 고정은 active_version 경로 prefix 와 version.json(version/build) 로 강제한다.
+    config.json 의 channel/pinned 키는 검사하지 않는다(아래 주석 참조).
+    """
     config = _read_config_json(install_dir)
     if config is None:
         diag = _diagnostic_scan(install_dir)
@@ -266,25 +271,11 @@ def _check_browser(install_dir: Path) -> PreflightResult | None:
             f"config.json active_version이 비어 있거나 문자열이 아닙니다. ({diag})\n{INSTALL_GUIDE}",
         )
 
-    channel = config.get("channel", "")
-    if not isinstance(channel, str):
-        channel = ""
-    expected_channel = f"{PINNED_BROWSER_CHANNEL}/stable"
-    if channel != expected_channel:
-        return PreflightResult(
-            PreflightStatus.BROWSER_VERSION_MISMATCH,
-            f"config.json channel 불일치: '{channel}' (요구: '{expected_channel}').\n{INSTALL_GUIDE}",
-        )
-
-    pinned = config.get("pinned", "")
-    if not isinstance(pinned, str):
-        pinned = ""
-    if pinned != PINNED_BROWSER_VERSION:
-        return PreflightResult(
-            PreflightStatus.BROWSER_VERSION_MISMATCH,
-            f"config.json pinned 불일치: '{pinned}' (요구: '{PINNED_BROWSER_VERSION}').\n{INSTALL_GUIDE}",
-        )
-
+    # config.json 의 channel/pinned 키는 검사하지 않는다: Camoufox 0.5.4 `fetch` 는
+    # 시작 시 INSTALL_DIR 을 통째로 지우고("Cleaning old data") config.json 을
+    # {"active_version": ...} 만으로 다시 쓴다 — 직전 `set` 이 기록한 channel/pinned
+    # 는 pinned fetch 후 남지 않는다(2026-07-27 실측). 버전 고정은 아래에서
+    # active_version 경로 prefix + version.json(version/build) 로 권위 있게 강제한다.
     expected_prefix = f"browsers/{PINNED_BROWSER_CHANNEL}/"
     if not active.startswith(expected_prefix):
         return PreflightResult(

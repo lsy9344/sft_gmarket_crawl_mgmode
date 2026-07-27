@@ -12,33 +12,26 @@ Windows 대상 배포 전 반드시 Windows 환경에서 별도로 빌드·실�
 거칠 것.
 """
 
-import importlib.util
 from pathlib import Path
 
-from PyInstaller.utils.hooks import copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 block_cipher = None
 project_root = Path(SPECPATH)
 
-# browserforge → apify_fingerprint_datapoints 데이터 파일 (network-definition.zip 등)
-_afd_spec = importlib.util.find_spec("apify_fingerprint_datapoints")
-_afd_dir = Path(_afd_spec.submodule_search_locations[0]) / "data"
-
-# camoufox package data (repos.yml, fingerprint JSON, fonts, webgl, gui assets 등)
-_camoufox_spec = importlib.util.find_spec("camoufox")
-_camoufox_dir = Path(_camoufox_spec.submodule_search_locations[0])
-_camoufox_datas = [
-    (str(_camoufox_dir / f), "camoufox/" + str(Path(f).parent))
-    for f in [
-        "repos.yml", "browserforge.yml", "fonts.json", "voices.json",
-        "warnings.yml", "territoryInfo.xml", "launchServer.js",
-        "fingerprint-presets.json", "fingerprint-presets-v150.json",
-        "webgl/webgl_data.db",
-        "gui/assets/SegUIVar.ttf", "gui/assets/icon.ico",
-        "gui/assets/segmdl2.ttf", "gui/qml/main.qml",
-    ]
-    if (_camoufox_dir / f).exists()
-]
+# camoufox / browserforge / geoip / scrapling 런타임 데이터 파일 일괄 수집.
+# 개별 파일을 손으로 나열하면 apify_fingerprint_datapoints·language_tags·tld 등
+# 하위 의존성 데이터가 누락돼 frozen 실행 시 FileNotFoundError 가 난다.
+# collect_data_files 로 패키지별 데이터를 통째 수집한다.
+_pkg_datas = (
+    collect_data_files("camoufox")
+    + collect_data_files("browserforge")
+    + collect_data_files("apify_fingerprint_datapoints")
+    + collect_data_files("language_tags")
+    + collect_data_files("tld")
+    + collect_data_files("scrapling")
+    + copy_metadata("camoufox")
+)
 
 a = Analysis(
     [str(project_root / "app" / "main.py")],
@@ -46,8 +39,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(project_root / "app" / "ui" / "styles" / "theme.qss"), "app/ui/styles"),
-        (str(_afd_dir), "apify_fingerprint_datapoints/data"),
-    ] + _camoufox_datas + copy_metadata("camoufox"),
+    ] + _pkg_datas,
     hiddenimports=[
         "PyQt6.QtCore",
         "PyQt6.QtGui",
@@ -104,7 +96,7 @@ setup_a = Analysis(
     [str(project_root / "scripts" / "setup_coupang_runtime.py")],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[] + _camoufox_datas + copy_metadata("camoufox"),
+    datas=list(_pkg_datas),
     hiddenimports=[
         "camoufox",
         "camoufox.__main__",
@@ -113,6 +105,10 @@ setup_a = Analysis(
         "camoufox.multiversion",
         "camoufox.addons",
         "camoufox.sync_api",
+        "apify_fingerprint_datapoints",
+        "browserforge",
+        "browserforge.headers",
+        "browserforge.fingerprint",
         "rich_click",
         "click",
     ],

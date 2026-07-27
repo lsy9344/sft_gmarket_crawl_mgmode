@@ -308,6 +308,27 @@ pyinstaller pyinstaller.spec
 배포 시 두 파일을 함께 제공한다. 사용자는 최초 1회 `CoupangRuntimeSetup.exe` 를
 실행하여 Camoufox 런타임을 설치한 뒤 `SellerCollector.exe` 를 사용한다.
 
+### 배포 시 유의사항 (2026-07-27 실측 검증)
+
+- **인터넷 필수**: `CoupangRuntimeSetup.exe` 는 GitHub(브라우저 ~492MB)와
+  jsdelivr(GeoIP ipv4/ipv6 ~45MB)에서 약 1.2GB 를 내려받는다. 사내망/방화벽이
+  `github.com`·`objects.githubusercontent.com`·`cdn.jsdelivr.net`·
+  `raw.githubusercontent.com`·`api.github.com` 중 하나라도 막으면 설치가 실패한다.
+- **SmartScreen**: 실행 파일은 코드서명이 없어 새 PC 첫 실행 시 SmartScreen 경고가
+  뜰 수 있다. `추가 정보 → 실행`으로 진행한다.
+- **동일 사용자로 실행**: 설치기와 앱은 `%LOCALAPPDATA%\camoufox` 캐시를 공유하므로
+  반드시 같은 Windows 사용자 계정으로 실행한다. 설치기만 "관리자 권한으로 실행"하면
+  경로가 달라져 앱이 브라우저를 찾지 못한다.
+- **GeoIP 30일 만료**: preflight 가 GeoIP DB 를 30일(`GEOIP_MAX_AGE_DAYS`) 이내로만
+  허용한다. 30일이 지나면 앱이 Coupang 탭을 거부하므로 `CoupangRuntimeSetup.exe` 를
+  다시 실행해 GeoIP 를 갱신해야 한다.
+
+> **주의(재빌드 필요)**: 위 실측 검증 중, 실제 `camoufox fetch` 가 `config.json` 을
+> `active_version` 만으로 다시 써서(channel/pinned 키 없음) 정상 설치인데도 preflight
+> 가 Coupang 런타임을 거부하는 블로킹 버그를 발견해 `app/core/coupang/preflight.py`
+> 를 수정했다. 이미 배포한 exe 에는 구버전 preflight 가 포함돼 있으므로, 이 수정을
+> 반영하려면 Windows 에서 `pyinstaller pyinstaller.spec` 로 두 exe 를 다시 빌드해야 한다.
+
 ## Coupang CLI 어댑터
 
 ```bash

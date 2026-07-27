@@ -293,7 +293,7 @@ class PreflightTest(unittest.TestCase):
     def _make_cache(self, tmp, browser=False, geoip=False, geoip_age_days=0,
                     browser_version=None, channel=None, config_json=True,
                     corrupt_version_json=False, no_executable=False):
-        """Create realistic camoufox cache structure."""
+        """Create realistic camoufox cache structure (실제 0.5.4 스키마: config.json 은 active_version 만)."""
         install_dir = Path(tmp)
         if browser:
             ver = browser_version or f"{PINNED_BROWSER_VERSION}-924f3109"
@@ -319,11 +319,7 @@ class PreflightTest(unittest.TestCase):
                 exe.write_text("#!/bin/sh\n")
                 exe.chmod(0o755)
             if config_json:
-                config = {
-                    "active_version": f"browsers/{ch}/{ver}",
-                    "channel": f"{ch}/stable",
-                    "pinned": PINNED_BROWSER_VERSION,
-                }
+                config = {"active_version": f"browsers/{ch}/{ver}"}
                 (install_dir / "config.json").write_text(json.dumps(config))
         if geoip:
             mmdb_dir = install_dir / "geoip" / "mmdb"
@@ -408,9 +404,37 @@ class PreflightTest(unittest.TestCase):
         self.assertEqual(result.status, PreflightStatus.BROWSER_VERSION_MISMATCH)
 
     def test_browser_ok(self):
-        """Correct channel + version → None (pass)."""
+        """Correct active_version + version → None (pass)."""
         with tempfile.TemporaryDirectory() as tmp:
             install_dir = self._make_cache(tmp, browser=True)
+            result = _check_browser(install_dir)
+        self.assertIsNone(result)
+
+    def test_browser_ok_real_camoufox_schema(self):
+        """Regression (2026-07-27 실측): 실제 camoufox 0.5.4 `fetch` 는 config.json 을
+        active_version 하나만으로 다시 쓴다(channel/pinned 없음, 버전 dir 에 sha8 접미사).
+        이 실제 스키마로도 preflight 가 통과해야 한다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            install_dir = Path(tmp)
+            ver = f"{PINNED_BROWSER_VERSION}-386fc2f4"
+            ver_dir = install_dir / "browsers" / "official" / ver
+            ver_dir.mkdir(parents=True)
+            (ver_dir / "version.json").write_text(
+                json.dumps({"version": "152.0.4", "build": "beta.28"})
+            )
+            import platform as _plat
+            _exe = {
+                "Windows": "camoufox.exe",
+                "Darwin": "Camoufox.app/Contents/MacOS/camoufox",
+                "Linux": "camoufox-bin",
+            }.get(_plat.system(), "camoufox-bin")
+            exe = ver_dir / _exe
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_text("#!/bin/sh\n")
+            exe.chmod(0o755)
+            (install_dir / "config.json").write_text(
+                json.dumps({"active_version": f"browsers/official/{ver}"})
+            )
             result = _check_browser(install_dir)
         self.assertIsNone(result)
 
@@ -611,8 +635,9 @@ class PreflightTest(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.status, PreflightStatus.BROWSER_VERSION_MISMATCH)
 
-    def test_wrong_pinned_in_config_rejected(self):
-        """HIGH-1 regression: config.json pinned != PINNED_BROWSER_VERSION must fail."""
+    def test_wrong_version_installed_rejected(self):
+        """Regression: 설치된 version.json 이 PINNED 과 다르면 거부해야 한다.
+        (config.json 에는 pinned 키가 없으므로 버전 고정은 version.json 으로 강제된다.)"""
         with tempfile.TemporaryDirectory() as tmp:
             install_dir = Path(tmp)
             ver_dir = install_dir / "browsers" / "official" / "999.0.0"
@@ -624,11 +649,7 @@ class PreflightTest(unittest.TestCase):
             exe.parent.mkdir(parents=True, exist_ok=True)
             exe.write_text("#!/bin/sh\n")
             exe.chmod(0o755)
-            config = {
-                "active_version": "browsers/official/999.0.0",
-                "channel": "official/stable",
-                "pinned": "999.0.0",
-            }
+            config = {"active_version": "browsers/official/999.0.0"}
             (install_dir / "config.json").write_text(json.dumps(config))
             result = _check_browser(install_dir)
         self.assertIsNotNone(result)
