@@ -163,12 +163,17 @@ def main() -> int:
     if not run_camoufox_cmd(["sync"], "sync"):
         return 1
 
-    print(f"\n[3/4] Pinned browser 설정: {PINNED_BROWSER}")
-    if not run_camoufox_cmd(["set", PINNED_BROWSER], "set"):
+    # 새 PC 첫 설치: camoufox 0.5.4 `fetch` 는 COMPAT_FLAG(.0.5_FLAG) 가 없으면
+    # 시작 시 INSTALL_DIR 을 통째로 지우므로, 직전 `set` 이 기록한 pin 은 살아남지
+    # 못하고 fetch 가 최신 stable 을 받아 버린다. 버전을 fetch 인자로 직접
+    # 명시해야 어떤 상태에서도 pinned 버전이 설치된다. `set` 은 설치 후에 실행해
+    # pin 을 config.json 에 남긴다(이후 GeoIP 갱신용 bare `camoufox fetch` 대비).
+    print(f"\n[3/4] Browser + GeoIP DB 다운로드: {PINNED_BROWSER}")
+    if not run_camoufox_cmd(["fetch", PINNED_BROWSER], "fetch"):
         return 1
 
-    print("\n[4/4] Browser + GeoIP DB 다운로드...")
-    if not run_camoufox_cmd(["fetch"], "fetch"):
+    print(f"\n[4/4] Pinned browser 설정: {PINNED_BROWSER}")
+    if not run_camoufox_cmd(["set", PINNED_BROWSER], "set"):
         return 1
 
     print("\n[검증] Postcondition 정밀 검증...")

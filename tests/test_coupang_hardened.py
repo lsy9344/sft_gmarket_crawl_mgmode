@@ -961,6 +961,27 @@ class SetupToolVerifyTest(unittest.TestCase):
                 result = verify_postcondition()
         self.assertFalse(result)
 
+    def test_main_fetches_pinned_version_explicitly(self):
+        """Regression: camoufox 0.5.4 `fetch` 는 새 PC(COMPAT_FLAG 없음)에서 시작 시
+        INSTALL_DIR 을 통째로 지워 직전 `set` 의 pin 도 삭제한다 → 인자 없는 fetch 는
+        pinned 가 아닌 최신 stable 을 설치한다. main() 은 반드시 fetch 에 pinned 버전을
+        명시해야 하고, pin 기록(`set`)은 fetch 이후여야 한다."""
+        import scripts.setup_coupang_runtime as sru
+        calls = []
+        with (
+            patch.object(sru, "_check_package_version", return_value=None),
+            patch.object(sru, "run_camoufox_cmd",
+                         side_effect=lambda args, desc: calls.append(list(args)) or True),
+            patch.object(sru, "verify_postcondition", return_value=True),
+            patch("importlib.metadata.version", return_value=PINNED_CAMOUFOX_VERSION),
+            patch.object(sys, "argv", ["setup_coupang_runtime.py"]),
+        ):
+            rc = sru.main()
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[0], ["sync"])
+        self.assertEqual(calls[1], ["fetch", sru.PINNED_BROWSER])
+        self.assertEqual(calls[2], ["set", sru.PINNED_BROWSER])
+
 
 class CsvFormulaInjectionTest(unittest.TestCase):
     """CSV formula injection defense."""
