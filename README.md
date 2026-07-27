@@ -11,17 +11,20 @@ Windows용 PyQt6 데스크톱 프로그램. 프로그램 시작 시 **사전 조
 
 ```bash
 pip install -r requirements.txt
-scrapling install      # Gmarket 리스팅용 Chromium 다운로드 (~300MB)
 
-# Coupang 탭 사용 시 추가:
+# 브라우저 런타임 (앱이 쓰는 두 브라우저 — 배포 exe 에서는 CoupangRuntimeSetup.exe 가 자동 설치):
+patchright install chromium                       # Gmarket: stealth Chromium (~150MB)
 python -m camoufox sync
 python -m camoufox set official/stable/152.0.4-beta.28
-python -m camoufox fetch   # Camoufox 브라우저 + GeoIP DB 다운로드
+python -m camoufox fetch                          # Coupang: Camoufox 브라우저 + GeoIP DB
 ```
 
-> `requirements.txt` 는 `scrapling[fetchers]` 와 `camoufox[geoip]==0.5.4` 를 설치한다.
-> Coupang 탭은 Camoufox 브라우저 설치 없이도 앱이 기동되며, 시작 시 preflight
-> 검사로 미설치 상태를 안내한다.
+> `requirements.txt` 는 base `scrapling` + StealthySession 런타임 의존(`patchright`,
+> `msgspec`, `anyio`, `protego`, `curl_cffi`)과 `camoufox[geoip]==0.5.4` 를 설치한다.
+> `scrapling[fetchers]` extra 는 `playwright==1.61` 을 강제해 camoufox(playwright<1.61)
+> 와 충돌하므로 쓰지 않는다 — StealthySession 은 playwright 비의존인 patchright 를
+> 쓰므로 playwright 1.60 으로 동작한다. 두 탭 모두 브라우저 미설치 상태에서도 앱은
+> 기동되며 preflight 로 안내한다.
 
 - Python 3.10+ (3.12 권장), Windows 10/11
 - 네트워크: 한국 가정용 IP 기준 (프록시 불필요)
@@ -303,31 +306,43 @@ pyinstaller pyinstaller.spec
 | 실행 파일 | 용도 | 콘솔 |
 |---|---|---|
 | `SellerCollector.exe` | 메인 2탭 UI 앱 | 없음 (windowed) |
-| `CoupangRuntimeSetup.exe` | Camoufox 브라우저/GeoIP 설치 도구 | 있음 (console) |
+| `CoupangRuntimeSetup.exe` | Gmarket+Coupang 브라우저 런타임 설치 도구 (Camoufox+GeoIP, patchright Chromium) | 있음 (console) |
 
 배포 시 두 파일을 함께 제공한다. 사용자는 최초 1회 `CoupangRuntimeSetup.exe` 를
-실행하여 Camoufox 런타임을 설치한 뒤 `SellerCollector.exe` 를 사용한다.
+실행하여 **두 브라우저 런타임(Coupang용 Camoufox+GeoIP, Gmarket용 patchright Chromium)**
+을 설치한 뒤 `SellerCollector.exe` 를 사용한다.
 
 ### 배포 시 유의사항 (2026-07-27 실측 검증)
 
-- **인터넷 필수**: `CoupangRuntimeSetup.exe` 는 GitHub(브라우저 ~492MB)와
-  jsdelivr(GeoIP ipv4/ipv6 ~45MB)에서 약 1.2GB 를 내려받는다. 사내망/방화벽이
-  `github.com`·`objects.githubusercontent.com`·`cdn.jsdelivr.net`·
-  `raw.githubusercontent.com`·`api.github.com` 중 하나라도 막으면 설치가 실패한다.
+- **인터넷 필수**: `CoupangRuntimeSetup.exe` 는 Coupang용 Camoufox(GitHub ~492MB) +
+  GeoIP(jsdelivr ~45MB) + Gmarket용 patchright Chromium(Playwright CDN ~150MB) 등
+  총 약 1.4GB 를 내려받는다. 사내망/방화벽이 `github.com`·`objects.githubusercontent.com`·
+  `cdn.jsdelivr.net`·`raw.githubusercontent.com`·`api.github.com`·`playwright.download.prss.microsoft.com`
+  (Playwright 브라우저 CDN) 중 하나라도 막으면 설치가 실패한다.
 - **SmartScreen**: 실행 파일은 코드서명이 없어 새 PC 첫 실행 시 SmartScreen 경고가
   뜰 수 있다. `추가 정보 → 실행`으로 진행한다.
-- **동일 사용자로 실행**: 설치기와 앱은 `%LOCALAPPDATA%\camoufox` 캐시를 공유하므로
-  반드시 같은 Windows 사용자 계정으로 실행한다. 설치기만 "관리자 권한으로 실행"하면
-  경로가 달라져 앱이 브라우저를 찾지 못한다.
+- **동일 사용자로 실행**: 설치기와 앱은 per-user 캐시(`%LOCALAPPDATA%\camoufox`,
+  `%LOCALAPPDATA%\ms-playwright`)를 공유하므로 반드시 같은 Windows 사용자 계정으로
+  실행한다. 설치기만 "관리자 권한으로 실행"하면 경로가 달라져 앱이 브라우저를 찾지 못한다.
+- **방화벽(Gmarket)**: Gmarket 첫 수집 시 patchright Chromium("Google Chrome for
+  Testing")에 대한 Windows 방화벽(인바운드) 팝업이 뜰 수 있다. 아웃바운드 수집은
+  허용 없이도 정상 동작하므로 팝업은 닫아도 된다.
 - **GeoIP 30일 만료**: preflight 가 GeoIP DB 를 30일(`GEOIP_MAX_AGE_DAYS`) 이내로만
   허용한다. 30일이 지나면 앱이 Coupang 탭을 거부하므로 `CoupangRuntimeSetup.exe` 를
   다시 실행해 GeoIP 를 갱신해야 한다.
 
-> **주의(재빌드 필요)**: 위 실측 검증 중, 실제 `camoufox fetch` 가 `config.json` 을
-> `active_version` 만으로 다시 써서(channel/pinned 키 없음) 정상 설치인데도 preflight
-> 가 Coupang 런타임을 거부하는 블로킹 버그를 발견해 `app/core/coupang/preflight.py`
-> 를 수정했다. 이미 배포한 exe 에는 구버전 preflight 가 포함돼 있으므로, 이 수정을
-> 반영하려면 Windows 에서 `pyinstaller pyinstaller.spec` 로 두 exe 를 다시 빌드해야 한다.
+> **VM 실측으로 발견·수정한 배포 블로킹 버그 (2026-07-27)** — 복원한 Windows 11 VM 에
+> 배포물을 설치해 두 플랫폼 실수집까지 검증하며 다음을 수정했다(현재 모두 수정·검증 완료):
+> 1. **Coupang preflight**: 실제 `camoufox fetch` 는 `config.json` 을 `active_version`
+>    만으로 다시 써서(channel/pinned 키 없음) 정상 설치인데도 런타임을 거부 →
+>    `app/core/coupang/preflight.py` 에서 channel/pinned 검사 제거(version.json 으로 고정 유지).
+> 2. **Gmarket 브라우저 런타임**: frozen 빌드에 `patchright` 모듈 미번들 +
+>    stealth Chromium 미설치로 사전조사 즉시 실패 → `pyinstaller.spec` 에 patchright 번들,
+>    `requirements.txt` 에 런타임 의존 고정, `CoupangRuntimeSetup.exe` 가 patchright
+>    Chromium 을 설치하도록 확장.
+>
+> 소스 수정 반영본으로 재빌드해야 배포 exe 에 적용된다: Windows 에서
+> `pyinstaller pyinstaller.spec`.
 
 ## Coupang CLI 어댑터
 

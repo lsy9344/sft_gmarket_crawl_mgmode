@@ -11,6 +11,7 @@ PyInstaller로 CoupangRuntimeSetup.exe로 빌드하여 배포물에 포함한다
   - 브라우저 채널 official, 버전 152.0.4-beta.28 설치
   - GeoIP .mmdb 존재 + 30일 이내 갱신
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,63 @@ from app.core.coupang.preflight import (
 )
 
 PINNED_BROWSER = f"{PINNED_BROWSER_CHANNEL}/stable/{PINNED_BROWSER_VERSION}"
+
+
+def _gmarket_browsers_dir() -> Path | None:
+    """Gmarket(patchright stealth-chrome)용 Chromium 설치 위치.
+
+    app/main.py 의 _set_browsers_path() 가 찾는 경로와 동일해야 한다
+    (%LOCALAPPDATA%\\ms-playwright). 여기 설치하면 앱이 PLAYWRIGHT_BROWSERS_PATH
+    를 이 경로로 설정해 patchright 가 브라우저를 찾는다.
+    """
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        return Path(local) / "ms-playwright"
+    return None
+
+
+def _gmarket_chromium_installed() -> bool:
+    """patchright Chromium 이 per-user 경로에 설치돼 있는지 확인."""
+    d = _gmarket_browsers_dir()
+    if d is None or not d.is_dir():
+        return False
+    for chrom in d.glob("chromium-*"):
+        if (chrom / "chrome-win64" / "chrome.exe").is_file():
+            return True
+        if (chrom / "chrome-linux" / "chrome").is_file():  # 개발(WSL) 검증용
+            return True
+    return False
+
+
+def install_gmarket_browser() -> bool:
+    """Gmarket 리스팅 수집(StealthySession=patchright)용 Chromium 을 설치한다.
+
+    patchright 번들 드라이버로 `install chromium` 을 실행한다. PLAYWRIGHT_BROWSERS_PATH
+    를 per-user ms-playwright 로 고정해 앱 런타임과 동일 위치를 공유한다.
+    """
+    d = _gmarket_browsers_dir()
+    if d is None:
+        print("  LOCALAPPDATA 를 찾을 수 없어 Gmarket 브라우저 설치를 건너뜁니다.")
+        return False
+    d.mkdir(parents=True, exist_ok=True)
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(d)
+    try:
+        from patchright._impl._driver import compute_driver_executable, get_driver_env
+    except Exception as e:  # noqa: BLE001 - patchright 미번들/로드 실패 경계
+        print(f"  patchright 로드 실패: {e}")
+        return False
+    try:
+        driver_executable, driver_cli = compute_driver_executable()
+    except Exception as e:  # noqa: BLE001 - 드라이버 경로 계산 실패 경계
+        print(f"  patchright 드라이버 경로 실패: {e}")
+        return False
+    print(f"  [gmarket] patchright chromium 설치 -> {d}")
+    result = subprocess.run(
+        [driver_executable, driver_cli, "install", "chromium"],
+        env=get_driver_env(),
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _is_frozen() -> bool:
@@ -136,10 +194,10 @@ def main() -> int:
     verify_only = "--verify-only" in sys.argv
 
     print("=" * 60)
-    print("Coupang Runtime Setup")
+    print("판매자 수집기 런타임 설치 (Gmarket + Coupang)")
     print("=" * 60)
 
-    print("\n[1/4] Camoufox 패키지 확인...")
+    print("\n[1/5] Camoufox 패키지 확인...")
     pkg_err = _check_package_version()
     if pkg_err is not None:
         print(f"  ERROR: {pkg_err.message.splitlines()[0]}")
@@ -153,13 +211,16 @@ def main() -> int:
 
     if verify_only:
         print("\n[검증] Postcondition 정밀 검증...")
-        if not verify_postcondition():
+        coupang_ok = verify_postcondition()
+        gmarket_ok = _gmarket_chromium_installed()
+        print(f"  [{'OK' if gmarket_ok else 'FAIL'}] Gmarket Chromium (patchright)")
+        if not (coupang_ok and gmarket_ok):
             print("\n[실패] 검증 실패 — 설치 계약을 만족하지 않습니다.")
             return 1
-        print("\n[완료] 검증 성공 — 설치 계약 만족.")
+        print("\n[완료] 검증 성공 — Gmarket + Coupang 런타임 준비 완료.")
         return 0
 
-    print("\n[2/4] Camoufox sync...")
+    print("\n[2/5] Camoufox sync...")
     if not run_camoufox_cmd(["sync"], "sync"):
         return 1
 
@@ -168,21 +229,29 @@ def main() -> int:
     # 못하고 fetch 가 최신 stable 을 받아 버린다. 버전을 fetch 인자로 직접
     # 명시해야 어떤 상태에서도 pinned 버전이 설치된다. `set` 은 설치 후에 실행해
     # pin 을 config.json 에 남긴다(이후 GeoIP 갱신용 bare `camoufox fetch` 대비).
-    print(f"\n[3/4] Browser + GeoIP DB 다운로드: {PINNED_BROWSER}")
+    print(f"\n[3/5] Coupang: Camoufox 브라우저 + GeoIP DB 다운로드: {PINNED_BROWSER}")
     if not run_camoufox_cmd(["fetch", PINNED_BROWSER], "fetch"):
         return 1
 
-    print(f"\n[4/4] Pinned browser 설정: {PINNED_BROWSER}")
+    print(f"\n[4/5] Coupang: Pinned browser 설정: {PINNED_BROWSER}")
     if not run_camoufox_cmd(["set", PINNED_BROWSER], "set"):
         return 1
 
+    print("\n[5/5] Gmarket: patchright Chromium 다운로드...")
+    if not install_gmarket_browser():
+        print("\n[실패] Gmarket 브라우저 설치 실패.")
+        return 1
+
     print("\n[검증] Postcondition 정밀 검증...")
-    if not verify_postcondition():
+    coupang_ok = verify_postcondition()
+    gmarket_ok = _gmarket_chromium_installed()
+    print(f"  [{'OK' if gmarket_ok else 'FAIL'}] Gmarket Chromium (patchright)")
+    if not (coupang_ok and gmarket_ok):
         print("\n[실패] 설치 후 검증 실패.")
         return 1
 
     print("\n" + "=" * 60)
-    print("[완료] Coupang 런타임 설치 성공.")
+    print("[완료] Gmarket + Coupang 런타임 설치 성공.")
     print("=" * 60)
     return 0
 

@@ -14,7 +14,12 @@ Windows 대상 배포 전 반드시 Windows 환경에서 별도로 빌드·실�
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_submodules,
+    copy_metadata,
+)
 
 block_cipher = None
 project_root = Path(SPECPATH)
@@ -33,13 +38,20 @@ _pkg_datas = (
     + copy_metadata("camoufox")
 )
 
+# scrapling.fetchers 는 모듈 로드 시점에 patchright 를 import 한다(StealthySession 의
+# stealth 백엔드는 이미 설치된 camoufox 를 쓰지만, fetchers 모듈 자체가 patchright 에
+# 의존). patchright 를 번들하지 않으면 Gmarket 사전조사가
+# `ModuleNotFoundError: No module named 'patchright'` 로 즉시 실패한다(2026-07-27 VM 실측).
+_patchright_datas, _patchright_bins, _patchright_hidden = collect_all("patchright")
+_scrapling_hidden = collect_submodules("scrapling")
+
 a = Analysis(
     [str(project_root / "app" / "main.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=list(_patchright_bins),
     datas=[
         (str(project_root / "app" / "ui" / "styles" / "theme.qss"), "app/ui/styles"),
-    ] + _pkg_datas,
+    ] + _pkg_datas + _patchright_datas,
     hiddenimports=[
         "PyQt6.QtCore",
         "PyQt6.QtGui",
@@ -56,7 +68,11 @@ a = Analysis(
         "camoufox.addons",
         "playwright",
         "playwright.sync_api",
-    ],
+        "scrapling",
+        "scrapling.fetchers",
+        "patchright",
+        "curl_cffi",
+    ] + _patchright_hidden + _scrapling_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -95,8 +111,8 @@ exe = EXE(
 setup_a = Analysis(
     [str(project_root / "scripts" / "setup_coupang_runtime.py")],
     pathex=[str(project_root)],
-    binaries=[],
-    datas=list(_pkg_datas),
+    binaries=list(_patchright_bins),
+    datas=list(_pkg_datas) + _patchright_datas,
     hiddenimports=[
         "camoufox",
         "camoufox.__main__",
@@ -111,7 +127,9 @@ setup_a = Analysis(
         "browserforge.fingerprint",
         "rich_click",
         "click",
-    ],
+        "patchright",
+        "patchright._impl._driver",
+    ] + _patchright_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

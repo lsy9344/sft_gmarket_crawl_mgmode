@@ -1,15 +1,23 @@
 # 판매자 정보 수집 시스템 v3.0 (Gmarket + Coupang) — 의존성
 requests>=2.28
 beautifulsoup4>=4.12
-# [fetchers] extra 필수: StealthySession 은 curl_cffi/playwright 등 fetcher 백엔드에
-# 의존한다. 기본 `scrapling` 만 설치하면 Phase 0 Pre-scan(StealthySession import)이
-# ModuleNotFoundError 로 실패한다.
-scrapling[fetchers]>=0.4.11
+# scrapling.fetchers(StealthySession)를 사용하지만 [fetchers] extra 는
+# playwright==1.61.0 을 강제해 camoufox 0.5.4(playwright<1.61) 와 충돌한다.
+# 따라서 base scrapling + StealthySession 런타임 의존을 개별 고정한다.
+# StealthySession 은 stealth-chrome 백엔드로 patchright(자체 드라이버, playwright
+# 비의존)를 써서 playwright 1.60 으로도 동작한다. 이 중 하나라도 빠지면 frozen
+# 빌드에서 Gmarket 사전조사가 ModuleNotFoundError 로 즉시 실패한다(2026-07-27 VM 실측).
+scrapling==0.4.11
+patchright==1.61.2
+msgspec>=0.18
+anyio>=4
+protego>=0.3
+curl_cffi>=0.7
+playwright==1.60.0  # camoufox 0.5.4(playwright<1.61) 호환 고정
 PyQt6>=6.5
 # Coupang 크롤러: Camoufox 브라우저 자동화 + GeoIP
 camoufox[geoip]==0.5.4
 
-# 설치 후 브라우저 다운로드 필요:
-#   scrapling install
-#   python -m camoufox sync
-#   python -m camoufox fetch
+# 설치 후 브라우저 런타임 다운로드 필요(CoupangRuntimeSetup.exe 가 자동 수행):
+#   python -m camoufox sync && python -m camoufox fetch   # Coupang: Camoufox + GeoIP
+#   patchright install chromium                            # Gmarket: stealth Chromium

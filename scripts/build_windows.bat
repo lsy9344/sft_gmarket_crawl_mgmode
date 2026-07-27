@@ -83,15 +83,18 @@ if exist "dist\CoupangRuntimeSetup.exe" (
 echo ============================================================
 echo.
 echo [다음 단계]
-echo   - Gmarket 탭만 쓸 경우: SellerCollector.exe 를 바로 실행하면 됩니다.
-echo   - Coupang 탭을 쓰려면 먼저 CoupangRuntimeSetup.exe 를 1회 실행해
-echo     Camoufox 브라우저 + GeoIP DB(약 1.2GB)를 내려받아 설치하세요.
+echo   - 먼저 CoupangRuntimeSetup.exe 를 1회 실행하세요. Gmarket용 patchright
+echo     Chromium + Coupang용 Camoufox 브라우저 + GeoIP DB(합계 약 1.4GB)를
+echo     내려받아 설치합니다. (Gmarket/Coupang 두 탭 모두 이 설치가 필요합니다.)
+echo   - 이후 SellerCollector.exe 를 실행해 두 탭을 사용하세요.
 echo.
 echo [배포 유의사항]
-echo   - 인터넷 필수: 설치기는 GitHub/jsdelivr 에서 약 1.2GB 를 내려받습니다.
+echo   - 인터넷 필수: 설치기는 GitHub/jsdelivr/Playwright CDN 에서 약 1.4GB 를 내려받습니다.
 echo   - 두 exe 는 같은 Windows 사용자 계정으로 실행하세요(설치기만 관리자 권한으로
 echo     실행하면 캐시 경로가 달라져 앱이 브라우저를 못 찾습니다).
 echo   - 서명이 없어 새 PC 첫 실행 시 SmartScreen 경고가 뜨면 [추가 정보]-[실행].
+echo   - Gmarket 첫 수집 시 Chromium("Google Chrome for Testing") 방화벽 팝업이 뜰 수
+echo     있습니다. 아웃바운드 수집은 정상 동작하므로 닫아도 됩니다.
 echo   - GeoIP DB 는 30일 후 만료됩니다. 만료 시 CoupangRuntimeSetup.exe 를 다시
 echo     실행해 갱신하세요.
 echo.
