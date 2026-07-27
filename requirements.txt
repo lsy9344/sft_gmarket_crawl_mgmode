@@ -1,4 +1,4 @@
-# Gmarket 판매자 수집 시스템 v2.0 (Fast Crawl) — 의존성 (WORK_ORDER §10)
+# 판매자 정보 수집 시스템 v3.0 (Gmarket + Coupang) — 의존성
 requests>=2.28
 beautifulsoup4>=4.12
 # [fetchers] extra 필수: StealthySession 은 curl_cffi/playwright 등 fetcher 백엔드에
@@ -6,6 +6,10 @@ beautifulsoup4>=4.12
 # ModuleNotFoundError 로 실패한다.
 scrapling[fetchers]>=0.4.11
 PyQt6>=6.5
+# Coupang 크롤러: Camoufox 브라우저 자동화 + GeoIP
+camoufox[geoip]==0.5.4
 
-# 설치 후 Chromium 브라우저 다운로드 필요(~300MB):
+# 설치 후 브라우저 다운로드 필요:
 #   scrapling install
+#   python -m camoufox sync
+#   python -m camoufox fetch
