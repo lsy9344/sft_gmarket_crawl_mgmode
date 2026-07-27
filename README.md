@@ -1,22 +1,27 @@
-# Gmarket 판매자 수집기 v2.0 (Fast Crawl)
+# 판매자 정보 수집기 v3.0 (Gmarket + Coupang)
 
 Gmarket 베스트 10 + 슈퍼딜 12 = **22개 카테고리**의 판매자 사업자정보를 수집하는
 Windows용 PyQt6 데스크톱 프로그램. 프로그램 시작 시 **사전 조사(Pre-scan)** 로
 카테고리별 상품 수·신규 대상 수를 먼저 파악한 뒤 사용자 확인을 거쳐 수집한다.
 
 > 상세 사양: [`WORK_ORDER.md`](WORK_ORDER.md) · [`TECH_SPEC.md`](TECH_SPEC.md)
-> **Coupang 수집 확장**: [`docs/coupang/`](docs/coupang/) 참조 — `/np/omp` '전체' 탭 + 스토어 API 3개로 필수 7항목 100% 확보(구현 완료). 지마켓/쿠팡 **2탭 UI 앱**으로 통합 예정.
+> **Coupang 수집**: [`docs/coupang/`](docs/coupang/) 참조 — `/np/omp` '전체' 탭 + 스토어 API 3개로 필수 7항목 100% 확보. Gmarket/Coupang **2탭 UI**로 통합 완료.
 
 ## 설치
 
 ```bash
 pip install -r requirements.txt
-scrapling install      # Phase 0/1 리스팅용 Chromium 다운로드 (~300MB)
+scrapling install      # Gmarket 리스팅용 Chromium 다운로드 (~300MB)
+
+# Coupang 탭 사용 시 추가:
+python -m camoufox sync
+python -m camoufox set official/stable/152.0.4-beta.28
+python -m camoufox fetch   # Camoufox 브라우저 + GeoIP DB 다운로드
 ```
 
-> `requirements.txt` 는 `scrapling[fetchers]` 를 설치한다. `scrapling` 만 단독
-> 설치하면 `StealthySession` import 가 `curl_cffi` 등 fetcher 백엔드 누락으로
-> 실패하므로 반드시 `[fetchers]` extra 를 포함해 설치해야 한다.
+> `requirements.txt` 는 `scrapling[fetchers]` 와 `camoufox[geoip]==0.5.4` 를 설치한다.
+> Coupang 탭은 Camoufox 브라우저 설치 없이도 앱이 기동되며, 시작 시 preflight
+> 검사로 미설치 상태를 안내한다.
 
 - Python 3.10+ (3.12 권장), Windows 10/11
 - 네트워크: 한국 가정용 IP 기준 (프록시 불필요)
@@ -293,9 +298,39 @@ pip install pyinstaller
 pyinstaller pyinstaller.spec
 ```
 
-`pyinstaller.spec` 은 최소 구성이며, 실행 파일 생성 후 Windows 환경에서 직접
-스모크 테스트가 필요하다(이 저장소 개발 환경에는 PyQt6/PyInstaller 가 없어
-빌드 자체를 검증하지 못했다).
+`pyinstaller.spec` 은 2개의 실행 파일을 생성한다:
+
+| 실행 파일 | 용도 | 콘솔 |
+|---|---|---|
+| `SellerCollector.exe` | 메인 2탭 UI 앱 | 없음 (windowed) |
+| `CoupangRuntimeSetup.exe` | Camoufox 브라우저/GeoIP 설치 도구 | 있음 (console) |
+
+배포 시 두 파일을 함께 제공한다. 사용자는 최초 1회 `CoupangRuntimeSetup.exe` 를
+실행하여 Camoufox 런타임을 설치한 뒤 `SellerCollector.exe` 를 사용한다.
+
+## Coupang CLI 어댑터
+
+```bash
+python coupang_crawl/coupang_omp_crawler.py [--max-scroll-pages N] [--output PREFIX]
+```
+
+### 종료 코드
+
+| 코드 | 의미 |
+|---|---|
+| 0 | 성공 (레코드 있음) |
+| 1 | 실행 오류 (API/세션/네트워크) |
+| 2 | 레코드 없음 (no_items, template_not_captured) |
+| 3 | 저장 실패 |
+| 130 | 사용자 취소 |
+
+우선순위: 저장실패(3) > 정리실패·cleanup_error(1) > 취소(130) > 레코드없음·no_items/template_not_captured(2) > 오류(1) > 레코드없음·빈 결과(2) > 성공(0)
+
+### 출력 파일
+
+- `{prefix}.json` / `{prefix}.csv` — 최종 결과 (UTF-8 / UTF-8-sig)
+- `{prefix}_partial.json` / `{prefix}_partial.csv` — 취소/오류 시 부분 결과
+- CSV는 수식 주입 방어(`=`,`+`,`-`,`@` 앞에 `'` 부착)
 
 ## 테스트
 
