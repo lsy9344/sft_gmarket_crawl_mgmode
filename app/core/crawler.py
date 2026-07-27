@@ -49,6 +49,7 @@ import hashlib
 import json
 import random
 import time
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -529,8 +530,9 @@ class SellerCrawler:
             # 취소되어도 지금까지의 records/stats 는 그대로 보존하여 반환한다.
             cancelled = True
         except Exception as e:  # noqa: BLE001 - 예상치 못한 오류도 부분 결과를 보존
-            error = str(e)
-            self.on_log(f"[{cat_plan.category_name}] 처리 중 예상치 못한 오류로 중단: {e}")
+            error = f"{type(e).__name__}: {e}"
+            self.on_log(f"[{cat_plan.category_name}] 처리 중 예상치 못한 오류로 중단: {type(e).__name__}: {e}")
+            self.on_log(traceback.format_exc())
             self.on_error(f"{cat_plan.category_name}: {e}")
         finally:
             # 항상 결과를 먼저 durable 저장한 뒤에만 ID 를 커밋한다.
@@ -760,8 +762,9 @@ class SellerCrawler:
             self.on_log("[수집] 사용자 취소 — 중간 저장 후 종료합니다.")
             self._safe_save_collected_ids(collected_ids)
         except Exception as e:  # noqa: BLE001 - 카테고리 경계 밖의 예상치 못한 오류
-            summary.error = str(e)
-            self.on_log(f"[수집] 예상치 못한 오류로 전체 수집을 중단합니다: {e}")
+            summary.error = f"{type(e).__name__}: {e}"
+            self.on_log(f"[수집] 예상치 못한 오류로 전체 수집을 중단합니다: {type(e).__name__}: {e}")
+            self.on_log(traceback.format_exc())
             self.on_error(str(e))
             self._safe_save_collected_ids(collected_ids)
 

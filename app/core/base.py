@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 
 class CancelledError(Exception):
@@ -55,3 +56,15 @@ class Control:
         self.wait_if_paused()
         if self._cancel.is_set():
             raise CancelledError()
+
+    def sleep(self, seconds: float, poll_interval: float = 0.1) -> None:
+        """중단 가능한 분할 대기. 취소 시 CancelledError, 일시정지 시 재개까지 대기."""
+        end = time.monotonic() + seconds
+        while True:
+            self.wait_if_paused(poll_interval)
+            if self._cancel.is_set():
+                raise CancelledError()
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(poll_interval, remaining))
