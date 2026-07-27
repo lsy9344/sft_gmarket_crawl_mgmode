@@ -44,14 +44,19 @@ _pkg_datas = (
 # `ModuleNotFoundError: No module named 'patchright'` 로 즉시 실패한다(2026-07-27 VM 실측).
 _patchright_datas, _patchright_bins, _patchright_hidden = collect_all("patchright")
 _scrapling_hidden = collect_submodules("scrapling")
+# playwright 드라이버(node.exe + package/cli.js)를 명시 번들한다. patchright 를 추가한
+# 뒤 PyInstaller 가 playwright 의 driver 를 빠뜨리고 patchright 것만 번들해, camoufox
+# (Coupang)가 playwright 노드 드라이버 실행 시 `FileNotFoundError [WinError 2]` 로
+# 실패했다(2026-07-27 클린 VM 재검증에서 발견). 두 드라이버를 모두 보장한다.
+_playwright_datas, _playwright_bins, _playwright_hidden = collect_all("playwright")
 
 a = Analysis(
     [str(project_root / "app" / "main.py")],
     pathex=[str(project_root)],
-    binaries=list(_patchright_bins),
+    binaries=list(_patchright_bins) + _playwright_bins,
     datas=[
         (str(project_root / "app" / "ui" / "styles" / "theme.qss"), "app/ui/styles"),
-    ] + _pkg_datas + _patchright_datas,
+    ] + _pkg_datas + _patchright_datas + _playwright_datas,
     hiddenimports=[
         "PyQt6.QtCore",
         "PyQt6.QtGui",
@@ -72,7 +77,7 @@ a = Analysis(
         "scrapling.fetchers",
         "patchright",
         "curl_cffi",
-    ] + _patchright_hidden + _scrapling_hidden,
+    ] + _patchright_hidden + _scrapling_hidden + _playwright_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
