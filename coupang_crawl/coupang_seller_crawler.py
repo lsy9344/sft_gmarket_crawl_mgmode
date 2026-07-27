@@ -14,13 +14,13 @@ Fields collected:
 Usage:
     xvfb-run -a python coupang_seller_crawler.py [--categories CAT_IDS] [--max-pages N] [--output FILE]
 """
-import time
-import json
-import random
-import os
-import re
-import csv
 import argparse
+import csv
+import json
+import os
+import random
+import re
+import time
 from datetime import datetime
 
 from camoufox.sync_api import Camoufox
@@ -90,7 +90,7 @@ def fetch_vendor_info(page, vendor_id):
                 data = json.loads(body)
                 return data
         return None
-    except Exception:
+    except Exception:  # noqa: BLE001 - 브라우저 응답 파싱 경계
         return None
 
 
@@ -123,7 +123,7 @@ def crawl_categories(page, category_ids, max_pages=3):
                 if not store_ids and page_num > 1:
                     break  # No more results
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - 페이지별 브라우저 호출 경계
                 print(f"      Error: {e}")
                 break
 
@@ -209,11 +209,11 @@ def main():
                         help="Max delay between API calls")
     args = parser.parse_args()
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     output_prefix = args.output or f"coupang_sellers_{ts}"
 
     print(f"{'='*60}")
-    print(f"Coupang Seller Business Info Crawler v1.0")
+    print("Coupang Seller Business Info Crawler v1.0")
     print(f"Time: {ts}")
     print(f"Categories: {args.categories}")
     print(f"Max pages/category: {args.max_pages}")
@@ -230,7 +230,7 @@ def main():
         print("  Done. Akamai _abck should be validated.")
 
         # Phase 2: Crawl categories
-        print(f"\n[Phase 2] Crawling categories for store IDs...")
+        print("\n[Phase 2] Crawling categories for store IDs...")
         store_ids, product_ids = crawl_categories(page, args.categories, args.max_pages)
         print(f"\n  Total unique stores: {len(store_ids)}")
         print(f"  Total unique products: {len(product_ids)}")
@@ -241,8 +241,8 @@ def main():
             return
 
         # Phase 3: Establish shop.coupang.com session
-        print(f"\n[Phase 3] Establishing shop.coupang.com session...")
-        first_store = sorted(store_ids)[0]
+        print("\n[Phase 3] Establishing shop.coupang.com session...")
+        first_store = min(store_ids)
         page.goto(f"https://shop.coupang.com/{first_store}", wait_until="domcontentloaded", timeout=30000)
         time.sleep(3)
         natural_interaction(page, duration=5)
@@ -253,12 +253,12 @@ def main():
         results = batch_fetch_vendor_info(page, store_ids, (args.delay_min, args.delay_max))
 
         # Phase 5: Save results
-        print(f"\n[Phase 5] Saving results...")
+        print("\n[Phase 5] Saving results...")
         json_path, csv_path = save_results(results, output_prefix)
 
         # Summary
         print(f"\n{'='*60}")
-        print(f"RESULTS SUMMARY")
+        print("RESULTS SUMMARY")
         print(f"{'='*60}")
         print(f"  Stores crawled: {len(store_ids)}")
         print(f"  With business info: {len(results)}")
@@ -267,11 +267,12 @@ def main():
         print(f"  CSV:  {csv_path}")
 
         if results:
-            print(f"\n  Sample records:")
+            print("\n  Sample records:")
             for r in results[:5]:
                 print(f"    {r['company_name']} | {r['ceo_name']} | {r['business_number']} | {r['phone']}")
 
-        print(f"\n[DONE] Crawl complete at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        completed_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n[DONE] Crawl complete at {completed_at}")
 
 
 if __name__ == "__main__":

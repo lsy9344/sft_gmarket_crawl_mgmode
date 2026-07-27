@@ -15,13 +15,12 @@ Fields: vendor_id, store_name, company_name, ceo_name, business_number,
 Usage:
     xvfb-run -a python coupang_seller_crawler_v2.py [--categories IDS] [--max-pages N]
 """
-import time
-import json
-import random
-import os
-import re
-import csv
 import argparse
+import csv
+import json
+import os
+import random
+import time
 from datetime import datetime
 
 from camoufox.sync_api import Camoufox
@@ -121,7 +120,7 @@ def get_vendors_for_items(page, vendor_item_ids, store_id=109671, vendor_id="A00
                             }
                     return vendors
         return {}
-    except Exception:
+    except Exception:  # noqa: BLE001 - 브라우저 응답 파싱 경계
         return {}
 
 
@@ -142,7 +141,7 @@ def fetch_vendor_business_info(page, vendor_id):
             if not body.strip().startswith("<!"):
                 return json.loads(body)
         return None
-    except Exception:
+    except Exception:  # noqa: BLE001 - 브라우저 응답 파싱 경계
         return None
 
 
@@ -176,7 +175,7 @@ def crawl_category_vendor_items(page, category_ids, max_pages=3):
                 if not items and page_num > 1:
                     break
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - 페이지별 브라우저 호출 경계
                 print(f"      Error: {e}")
                 break
 
@@ -197,12 +196,12 @@ def main():
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     output_prefix = args.output or f"coupang_sellers_{ts}"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print(f"{'='*60}")
-    print(f"Coupang Seller Business Info Crawler v2.0")
+    print("Coupang Seller Business Info Crawler v2.0")
     print(f"Time: {ts}")
     print(f"Categories: {args.categories}")
     print(f"Max pages/category: {args.max_pages}")
@@ -219,7 +218,7 @@ def main():
         print("  Akamai validated.")
 
         # Phase 2: Collect vendorItemIds from categories
-        print(f"\n[Phase 2] Collecting vendorItemIds from categories...")
+        print("\n[Phase 2] Collecting vendorItemIds from categories...")
         all_items = crawl_category_vendor_items(page, args.categories, args.max_pages)
         print(f"\n  Total vendorItemIds: {len(all_items)}")
 
@@ -228,7 +227,7 @@ def main():
             return
 
         # Phase 3: Establish shop session + map items to vendors
-        print(f"\n[Phase 3] Mapping products to vendors...")
+        print("\n[Phase 3] Mapping products to vendors...")
         page.goto("https://shop.coupang.com/A00067881", wait_until="domcontentloaded", timeout=30000)
         time.sleep(3)
         natural_interaction(page, duration=5)
@@ -286,7 +285,7 @@ def main():
             time.sleep(random.uniform(args.delay_min, args.delay_max))
 
         # Phase 5: Save results
-        print(f"\n[Phase 5] Saving results...")
+        print("\n[Phase 5] Saving results...")
         json_path = os.path.join(OUTPUT_DIR, f"{output_prefix}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
@@ -301,7 +300,7 @@ def main():
 
         # Summary
         print(f"\n{'='*60}")
-        print(f"RESULTS")
+        print("RESULTS")
         print(f"{'='*60}")
         print(f"  Categories crawled: {len(args.categories)}")
         print(f"  VendorItemIds found: {len(all_items)}")
@@ -312,11 +311,12 @@ def main():
         print(f"  CSV:  {csv_path}")
 
         if results:
-            print(f"\n  Sample:")
+            print("\n  Sample:")
             for r in results[:5]:
                 print(f"    {r['company_name']} | {r['ceo_name']} | {r['business_number']} | {r['phone']}")
 
-        print(f"\n[DONE] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        completed_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n[DONE] {completed_at}")
 
 
 if __name__ == "__main__":
