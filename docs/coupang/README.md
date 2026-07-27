@@ -16,6 +16,7 @@
 
 | File | Content | rev |
 |------|---------|-----|
+| **`WORK_ORDER.md`** | **Gmarket PyQt6 앱에 Coupang v3를 2탭으로 통합하기 위한 구현 작업지시서 — 문서 우선순위, 변경 파일, 스레드/종료/저장 계약, 테스트와 완료 기준** | **1.0** |
 | **`CRAWL_RESULTS.md`** | **★ 구현 실측 결과 보고서 — 수집 대상(/np/omp '전체' 탭), 동작하는 3-API 파이프라인, 필수항목 검증(7/7), '전체' 탭 피드 총량 조사(§4.3, 180개). 현재 기준(source of truth)** | **6** |
 | `COLLECTION_STRATEGY.md` | 수집 전략 — '전체' 탭 단일 대상, 스토어 API 3개 파이프라인, 프록시 불필요 | **6** |
 | `PAGE_STRUCTURE.md` | OMP URL/API 구조 — getPromotion 커서 페이지네이션, 상세페이지 403 | **6** |
