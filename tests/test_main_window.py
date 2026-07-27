@@ -50,6 +50,7 @@ class _MainWindowTestCase(unittest.TestCase):
         참조를 비우고 순수하게 위젯만 닫는다."""
         self.win.prescan_worker = None
         self.win.crawl_worker = None
+        self.win.coupang_worker = None
         self.win._closing = False
         self.win._close_prompt_active = False
         self.win.close()
@@ -236,6 +237,160 @@ class ResetCleanupFailureTest(_MainWindowTestCase):
 
         warning_mock.assert_called_once()
         self.assertIn("초기화 일부 실패", self.win.statusBar().currentMessage())
+
+
+class ResetDuringCoupangRunTest(_MainWindowTestCase):
+    """외부 리뷰 HIGH 회귀: Coupang 크롤링 중 Gmarket '초기화'가 실행되면
+    reset 말미의 _set_ui_state("idle") 이 coupang_panel.set_external_busy(False)
+    를 거쳐 실행 중인 패널을 idle 로 덮어써 일시정지/취소 버튼이 죽는다.
+    버튼 비활성화(UI 클릭 차단)와 on_reset() 자체 가드(직접 호출/이벤트 경쟁
+    차단)를 모두 검증한다."""
+
+    def _start_fake_coupang_run(self) -> None:
+        worker = MagicMock()
+        worker.isRunning.return_value = True
+        self.win.coupang_worker = worker
+        self.win._set_gmarket_busy(True)
+        self.win.coupang_panel.set_state("running")
+
+    def test_reset_button_disabled_while_coupang_running(self) -> None:
+        self._start_fake_coupang_run()
+        self.assertFalse(self.win.btn_reset.isEnabled())
+
+    def test_direct_on_reset_is_noop_and_preserves_coupang_controls(self) -> None:
+        """버튼이 아닌 경로로 on_reset() 이 호출돼도 dialog/storage 접근 없이
+        즉시 반환하고, Coupang 일시정지/취소는 계속 살아 있어야 한다."""
+        self._start_fake_coupang_run()
+
+        with patch.object(QMessageBox, "question") as question_mock, \
+             patch.object(self.win, "_make_storage") as make_storage:
+            self.win.on_reset()
+
+        question_mock.assert_not_called()
+        make_storage.assert_not_called()
+        self.assertEqual(self.win.coupang_panel._state, "running")
+        self.assertTrue(self.win.coupang_panel.btn_pause.isEnabled())
+        self.assertTrue(self.win.coupang_panel.btn_cancel.isEnabled())
+        self.assertFalse(self.win.coupang_panel.btn_start.isEnabled())
+
+    def test_on_reset_blocked_during_close_prompt(self) -> None:
+        self.win._close_prompt_active = True
+        with patch.object(QMessageBox, "question") as question_mock, \
+             patch.object(self.win, "_make_storage") as make_storage:
+            self.win.on_reset()
+        question_mock.assert_not_called()
+        make_storage.assert_not_called()
+
+
+class CoupangFinishTest(_MainWindowTestCase):
+    """LOW 회귀: Coupang 워커의 finished_crawl 시그널 슬롯
+    (_on_coupang_finished / _on_coupang_thread_done)을 직접 호출해, 저장 실패
+    시 QMessageBox.critical 이 뜨고 패널 상태가 'failed' 로, 정상 완료 시
+    다이얼로그 없이 'finished' 로 전이되는지 실제 UI 로 검증한다 — outcome
+    함수만 검사하던 기존 테스트가 놓친 UI adapter 경로다."""
+
+    def _worker_with_summary(self, summary):
+        worker = MagicMock()
+        worker.isRunning.return_value = False
+        worker.summary = summary
+        return worker
+
+    def test_save_error_summary_shows_critical_and_failed_state(self) -> None:
+        from app.models.coupang_records import CoupangRunSummary
+
+        summary = CoupangRunSummary()
+        summary.records = [{"vendor_id": "V1"}]
+        summary.json_path = "/tmp/coupang_x.json"
+        summary.csv_path = None
+        summary.save_error = "CSV 쓰기 실패 (JSON 저장됨: /tmp/coupang_x.json)"
+        summary.termination_reason = "token_exhausted"
+
+        self.win.coupang_worker = self._worker_with_summary(summary)
+
+        with patch.object(QMessageBox, "critical") as critical_mock:
+            self.win._on_coupang_finished(summary)
+            self.win._on_coupang_thread_done()
+
+        critical_mock.assert_called_once()
+        # 표시된 메시지에 저장 실패 원인이 담겨야 한다.
+        shown = " ".join(str(a) for a in critical_mock.call_args.args)
+        self.assertIn("CSV 쓰기 실패", shown)
+        self.assertEqual(self.win.coupang_panel._state, "failed")
+
+    def test_success_summary_no_dialog_and_finished_state(self) -> None:
+        from app.models.coupang_records import CoupangRunSummary
+
+        summary = CoupangRunSummary()
+        summary.records = [{"vendor_id": "V1"}]
+        summary.business_info_success = 1
+        summary.json_path = "/tmp/coupang_ok.json"
+        summary.csv_path = "/tmp/coupang_ok.csv"
+        summary.termination_reason = "token_exhausted"
+
+        self.win.coupang_worker = self._worker_with_summary(summary)
+
+        with patch.object(QMessageBox, "critical") as critical_mock:
+            self.win._on_coupang_finished(summary)
+            self.win._on_coupang_thread_done()
+
+        critical_mock.assert_not_called()
+        self.assertEqual(self.win.coupang_panel._state, "finished")
+        self.assertIn("Coupang 완료", self.win.statusBar().currentMessage())
+
+    def test_remaining_outcomes(self) -> None:
+        """AC-22: cleanup-error / cancelled / error / no-records outcome 전이를
+        table-driven 으로 검증해 UI adapter 계약을 완전히 잠근다."""
+        from app.models.coupang_records import CoupangRunSummary
+
+        def _cleanup_error() -> CoupangRunSummary:
+            s = CoupangRunSummary()
+            s.records = [{"vendor_id": "V1"}]
+            s.business_info_success = 1
+            s.json_path = "/tmp/coupang_c.json"
+            s.cleanup_error = "브라우저 잔류 프로세스"
+            s.termination_reason = "token_exhausted"
+            return s
+
+        def _cancelled() -> CoupangRunSummary:
+            s = CoupangRunSummary()
+            s.records = [{"vendor_id": "V1"}]
+            s.json_path = "/tmp/coupang_p.json"
+            s.cancelled = True
+            s.termination_reason = "cancelled"
+            return s
+
+        def _error() -> CoupangRunSummary:
+            s = CoupangRunSummary()
+            s.error = "getPromotion API 실패"
+            s.termination_reason = "error"
+            return s
+
+        def _no_records() -> CoupangRunSummary:
+            s = CoupangRunSummary()
+            s.termination_reason = "no_items"
+            return s
+
+        # (name, factory, expect_critical, expect_state, status_substr)
+        cases = [
+            ("cleanup_error", _cleanup_error, True, "failed", "cleanup 실패"),
+            ("cancelled", _cancelled, False, "finished", "취소"),
+            ("error", _error, False, "failed", "Coupang 실패"),
+            ("no_records", _no_records, False, "failed", "수집된 상품 없음"),
+        ]
+
+        for name, factory, expect_critical, expect_state, status_substr in cases:
+            with self.subTest(name):
+                summary = factory()
+                self.win.coupang_worker = self._worker_with_summary(summary)
+                with patch.object(QMessageBox, "critical") as critical_mock:
+                    self.win._on_coupang_finished(summary)
+                    self.win._on_coupang_thread_done()
+                if expect_critical:
+                    critical_mock.assert_called_once()
+                else:
+                    critical_mock.assert_not_called()
+                self.assertEqual(self.win.coupang_panel._state, expect_state)
+                self.assertIn(status_substr, self.win.statusBar().currentMessage())
 
 
 if __name__ == "__main__":
