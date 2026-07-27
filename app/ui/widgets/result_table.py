@@ -37,12 +37,16 @@ class ResultTable(QWidget):
 
         self._table = QTableWidget(0, len(_COLUMNS))
         self._table.setHorizontalHeaderLabels(_COLUMNS)
-        self._table.verticalHeader().setVisible(False)
+        vertical_header = self._table.verticalHeader()
+        assert vertical_header is not None
+        vertical_header.setVisible(False)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
-        self._table.horizontalHeader().setSectionResizeMode(
+        horizontal_header = self._table.horizontalHeader()
+        assert horizontal_header is not None
+        horizontal_header.setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
         group_layout.addWidget(self._table)

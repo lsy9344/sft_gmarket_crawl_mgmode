@@ -15,6 +15,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.core.applog import log_line
+
 # 로그 최대 보관 줄 수 (오래된 줄부터 자동 폐기)
 _MAX_BLOCKS = 2000
 
@@ -44,10 +46,12 @@ class LogPanel(QWidget):
     # ── 공개 API ─────────────────────────────────────────────────────
     def append_log(self, msg: str) -> None:
         """[HH:MM:SS] 타임스탬프를 붙여 한 줄 추가하고 맨 아래로 스크롤."""
+        log_line(f"[Gmarket] {msg}")
         timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
         self._text.appendPlainText(f"[{timestamp}] {msg}")
         scrollbar = self._text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
 
     def clear_log(self) -> None:
         self._text.clear()

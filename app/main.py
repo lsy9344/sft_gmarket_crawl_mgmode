@@ -1,4 +1,4 @@
-"""프로그램 엔트리포인트: Gmarket 판매자 수집기 v2.0 (WORK_ORDER §7).
+"""프로그램 엔트리포인트: 판매자 정보 수집기 v3.0 (Gmarket + Coupang).
 
 실행:
     python -m app.main
@@ -45,22 +45,76 @@ def load_stylesheet() -> str:
         return ""
 
 
+def _install_crash_hooks() -> None:
+    """처리되지 않은 예외를 파일 로그에 남긴다 — windowed 빌드(console=False)에서는
+    이 훅이 없으면 앱이 아무 흔적 없이 종료된다."""
+    import threading
+    import traceback
+
+    from app.core.applog import get_logger
+
+    logger = get_logger()
+
+    def _show_crash_dialog(text: str) -> None:
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+
+            if QApplication.instance() is not None:
+                QMessageBox.critical(
+                    None, "예기치 않은 오류",
+                    "프로그램에서 처리되지 않은 오류가 발생했습니다.\n"
+                    "아래 내용이 진단 로그 파일에도 기록되었습니다.\n\n"
+                    + text[-2000:],
+                )
+        except Exception:
+            # 크래시 처리 중 UI 가 이미 깨져 있을 수 있다 — 로그 기록이 우선.
+            pass
+
+    def _excepthook(exc_type, exc, tb) -> None:
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        logger.error("처리되지 않은 예외:\n%s", text)
+        sys.__excepthook__(exc_type, exc, tb)
+        _show_crash_dialog(text)
+
+    sys.excepthook = _excepthook
+
+    def _thread_excepthook(args) -> None:
+        text = "".join(
+            traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
+        )
+        name = args.thread.name if args.thread else "?"
+        logger.error("스레드(%s) 처리되지 않은 예외:\n%s", name, text)
+        threading.__excepthook__(args)
+
+    threading.excepthook = _thread_excepthook
+
+
 def main() -> int:
     _set_browsers_path()
     _ensure_project_root_on_path()
+
+    from app.core.applog import log_line, setup_file_logging
+
+    log_path = setup_file_logging()
+    _install_crash_hooks()
+    log_line("=== 판매자 정보 수집기 시작 ===")
 
     from PyQt6.QtWidgets import QApplication
 
     from app.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Gmarket 판매자 수집기")
+    app.setApplicationName("판매자 정보 수집기")
     qss = load_stylesheet()
     if qss:
         app.setStyleSheet(qss)
 
     window = MainWindow()
     window.show()
+    if log_path is not None:
+        window.log.append_log(f"진단 로그 파일: {log_path}")
+    else:
+        window.log.append_log("진단 로그 파일을 생성하지 못했습니다 — 파일 로그 없이 실행합니다.")
     return app.exec()
 
 
