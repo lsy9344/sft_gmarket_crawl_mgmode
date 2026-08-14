@@ -973,6 +973,10 @@ class SetupToolVerifyTest(unittest.TestCase):
             patch.object(sru, "run_camoufox_cmd",
                          side_effect=lambda args, desc: calls.append(list(args)) or True),
             patch.object(sru, "verify_postcondition", return_value=True),
+            # Gmarket 런타임 설치는 Windows의 LOCALAPPDATA를 사용하므로,
+            # 이 테스트는 Camoufox 명령 순서만 검증하도록 설치 결과를 격리한다.
+            patch.object(sru, "install_gmarket_browser", return_value=True),
+            patch.object(sru, "_gmarket_chromium_installed", return_value=True),
             patch("importlib.metadata.version", return_value=PINNED_CAMOUFOX_VERSION),
             patch.object(sys, "argv", ["setup_coupang_runtime.py"]),
         ):

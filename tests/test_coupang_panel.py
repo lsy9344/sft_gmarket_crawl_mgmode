@@ -91,12 +91,13 @@ class MainWindowTabTest(unittest.TestCase):
     def tearDown(self):
         self.win.close()
 
-    def test_has_two_tabs(self):
-        """AC-02: QTabWidget with exactly Gmarket and Coupang tabs."""
+    def test_has_three_tabs(self):
+        """AC-02: QTabWidget with Gmarket, Coupang, Coupang 검색 tabs."""
         self.assertIsInstance(self.win.tab_widget, QTabWidget)
-        self.assertEqual(self.win.tab_widget.count(), 2)
+        self.assertEqual(self.win.tab_widget.count(), 3)
         self.assertEqual(self.win.tab_widget.tabText(0), "Gmarket")
         self.assertEqual(self.win.tab_widget.tabText(1), "Coupang")
+        self.assertEqual(self.win.tab_widget.tabText(2), "Coupang 검색")
 
     def test_window_title_platform_neutral(self):
         """AC-02: platform-neutral title."""

@@ -92,3 +92,39 @@ itemId/vendorItemId/vendorId/로켓여부/가격/리뷰까지 전부 나오고,
 
 - poc7: `coupang_search_poc7.py` — 뷰티 종합 검증
 - 산출물: `output/poc7_*_t1.html` (뷰티 SSR 전체 — 파싱 개발용 기준 데이터)
+
+---
+
+# rev.4 — 구현 완료 기록 (2026-08-14)
+
+## 구현 산출물 (워크트리 `coupang-search`)
+
+| 파일 | 역할 |
+|------|------|
+| `app/core/coupang/search_parser.py` | 차단 감지 + DOM 추출 JS + href/가격 파싱 (순수 함수, 테스트 가능) |
+| `app/core/coupang/search_crawler.py` | `SearchCrawler` 엔진 — CoupangCrawler 서브클래스, 스토어 API 단계 재사용 |
+| `app/workers/search_worker.py` | Qt QThread 브리지 |
+| `app/ui/search_panel.py` | "Coupang 검색" 탭 UI (키워드/로켓제외/딜레이 설정, 로그, 결과 테이블) |
+| `app/ui/main_window.py` | 세 번째 탭 연결, 시작/일시정지/재개/취소/차단 경고 핸들러 |
+| `coupang_crawl/coupang_search_crawler.py` | CLI 어댑터 (헤드리스 실행용) |
+| `tests/test_coupang_search.py` | 단위 테스트 9건 — fake page 기반 (네트워크 불필요) |
+
+## rev.3 대비 설계 변경 사항
+
+- **파싱 방식**: 내장 JSON 파싱은 위젯(특가 모듈) 상품만 포함하고 메인 목록은
+  DOM 카드로만 렌더링됨을 확인 → **DOM 카드 추출 방식으로 변경**
+  (href 에 itemId/vendorItemId 전부 포함, 로켓 배지 img src 로 판별)
+- 로켓 판별: 카드 내 `img[src*="rds/logo"]` — SSR 에 항상 렌더링되어 신뢰 가능
+
+## 검증 상태
+
+- 단위 테스트 9건 통과 (정렬 순회·로켓 제외·중복 제거·차단 감지·백오프·파서·설정 검증)
+- 전체 스위트 227건 통과
+- **실기(end-to-end) 검증은 미실시** — 다음 세션 규율(일일 ≤5) 소진으로 익일 진행
+
+## 익일 실기 검증 계획
+
+1. CLI 로 `--keyword 뷰티` 1회 실행 (정렬 4종)
+2. 확인 항목: 정렬별 수집 수, 로켓 제외 수, 고유 vendorId 수,
+   사업자정보 수집 성공률, 출력 파일 스키마(기존 CoupangRecord 와 일치)
+3. 통과 시 탭 배포 준비 완료

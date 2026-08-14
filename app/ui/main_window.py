@@ -21,12 +21,14 @@ from app.core.plan import build_crawl_plan
 from app.core.storage import LoadStatus, Storage
 from app.models.records import PrescanResult
 from app.ui.coupang_panel import CoupangPanel
+from app.ui.search_panel import SearchPanel
 from app.ui.widgets.log_panel import LogPanel
 from app.ui.widgets.prescan_table import PrescanTable
 from app.ui.widgets.progress_panel import ProgressPanel
 from app.ui.widgets.result_table import ResultTable
 from app.ui.widgets.settings_panel import SettingsPanel
 from app.workers.coupang_worker import CoupangWorker
+from app.workers.search_worker import SearchWorker
 from app.workers.crawl_worker import CrawlWorker
 from app.workers.prescan_worker import PrescanWorker
 
@@ -52,6 +54,10 @@ class MainWindow(QMainWindow):
         # Coupang 상태
         self.coupang_control: Control | None = None
         self.coupang_worker: CoupangWorker | None = None
+
+        # Coupang 검색 상태
+        self.search_control: Control | None = None
+        self.search_worker: SearchWorker | None = None
 
         self._build_ui()
         self._set_ui_state("idle")
@@ -122,6 +128,16 @@ class MainWindow(QMainWindow):
         self.coupang_panel.btn_cancel.clicked.connect(self.on_coupang_cancel)
         self.coupang_panel.btn_open_result.clicked.connect(self._on_coupang_open_result)
 
+        # Coupang 검색 탭
+        self.search_panel = SearchPanel()
+        self.tab_widget.addTab(self.search_panel, "Coupang 검색")
+
+        self.search_panel.btn_start.clicked.connect(self.on_search_start)
+        self.search_panel.btn_pause.clicked.connect(self.on_search_pause)
+        self.search_panel.btn_resume.clicked.connect(self.on_search_resume)
+        self.search_panel.btn_cancel.clicked.connect(self.on_search_cancel)
+        self.search_panel.btn_open_result.clicked.connect(self._on_search_open_result)
+
         self.setCentralWidget(self.tab_widget)
         self._show_status("준비됨")
 
@@ -152,10 +168,11 @@ class MainWindow(QMainWindow):
         # Cross-tab: Gmarket 실행 중이면 Coupang 차단
         gmarket_busy = state in ("prescanning", "crawling")
         self.coupang_panel.set_external_busy(gmarket_busy)
+        self.search_panel.set_external_busy(gmarket_busy)
 
     # ── 전역 단일 워커 ─────────────────────────────────────────────
     def _active_worker(self):
-        for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker):
+        for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker, self.search_worker):
             if worker is not None and worker.isRunning():
                 return worker
         return None
@@ -163,6 +180,8 @@ class MainWindow(QMainWindow):
     def _active_control(self) -> Control | None:
         if self.coupang_worker is not None and self.coupang_worker.isRunning():
             return self.coupang_control
+        if self.search_worker is not None and self.search_worker.isRunning():
+            return self.search_control
         return self.control
 
     # ── Gmarket: 사전 조사 ─────────────────────────────────────────
@@ -685,6 +704,175 @@ class MainWindow(QMainWindow):
     def _maybe_close_after_worker(self) -> None:
         if self._closing:
             self.close()
+
+    # ── Coupang 검색 탭 ──────────────────────────────────────────
+
+    def on_search_start(self) -> None:
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            return
+
+        config = self.search_panel.build_config()
+        if config is None:
+            QMessageBox.warning(
+                self, "설정 오류",
+                "출력 폴더와 검색어를 입력하고 설정 값을 확인하세요.",
+            )
+            return
+
+        try:
+            config.output_dir.mkdir(parents=True, exist_ok=True)
+            import tempfile as _tf
+
+            fd, tmp_path = _tf.mkstemp(dir=str(config.output_dir), prefix=".preflight_")
+            os.close(fd)
+            os.unlink(tmp_path)
+        except OSError as e:
+            QMessageBox.critical(
+                self, "출력 경로 오류",
+                f"출력 폴더에 쓸 수 없습니다:\n{config.output_dir}\n\n{e}",
+            )
+            return
+
+        from app.core.coupang.preflight import PreflightStatus, check_runtime
+
+        try:
+            pf = check_runtime()
+        except Exception as e:  # noqa: BLE001 - preflight 경계 격리
+            QMessageBox.critical(
+                self, "Coupang 런타임 확인 실패",
+                f"런타임 준비 상태를 확인하는 중 예기치 못한 오류가 발생했습니다:\n{e}",
+            )
+            return
+        if pf.status != PreflightStatus.OK:
+            QMessageBox.critical(self, "Coupang 런타임 미준비", pf.message)
+            return
+
+        self.search_control = Control()
+        self.search_panel.clear_results()
+
+        worker = SearchWorker(config, self.search_control)
+        worker.phase_changed.connect(self.search_panel.set_phase)
+        worker.progress_changed.connect(self._on_search_progress)
+        worker.log_message.connect(self.search_panel.append_log)
+        worker.item_collected.connect(self.search_panel.add_record)
+        worker.stats_changed.connect(self._on_search_stats)
+        worker.error_occurred.connect(self._on_search_error)
+        worker.finished_crawl.connect(self._on_search_finished)
+        worker.finished.connect(self._on_search_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.search_worker = worker
+
+        self.search_panel.set_state("running")
+        self._show_status("Coupang 검색 수집 진행 중...")
+        worker.start()
+
+    def on_search_pause(self) -> None:
+        if self.search_control and not self.search_control.is_paused():
+            self.search_control.pause()
+            self.search_panel.set_state("paused")
+            self.search_panel.append_log("[제어] 일시정지 (현재 요청 완료 후 대기)")
+            self._show_status("Coupang 검색 일시정지됨")
+
+    def on_search_resume(self) -> None:
+        if self.search_control and self.search_control.is_paused():
+            self.search_control.resume()
+            self.search_panel.set_state("running")
+            self.search_panel.append_log("[제어] 재개")
+            self._show_status("Coupang 검색 수집 진행 중...")
+
+    def on_search_cancel(self) -> None:
+        if self.search_control:
+            self.search_control.request_cancel()
+            self.search_panel.set_state("cancelling")
+            self.search_panel.append_log("[제어] 취소 요청 — 현재 요청 완료 후 중지합니다.")
+            self._show_status("Coupang 검색 취소 중...")
+
+    def _on_search_progress(self, kind: str, current: int, total: int) -> None:
+        self.search_panel.set_progress_text(f"{kind}: {current}/{total}")
+
+    def _on_search_stats(self, summary) -> None:
+        stats = (
+            f"상품 {summary.products_seen} | 판매자 {summary.unique_vendors} | "
+            f"사업자 {summary.business_info_success} | 오류 {summary.request_errors}"
+        )
+        self.search_panel.set_stats_text(stats)
+
+    def _on_search_open_result(self) -> None:
+        summary = self.search_worker.summary if self.search_worker else None
+        path = summary.json_path if summary else None
+        if path:
+            import subprocess
+            import sys
+
+            if sys.platform == "win32":
+                os.startfile(os.path.dirname(path))
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        else:
+            self.search_panel.append_log("[결과 열기] 저장된 결과가 없습니다.")
+
+    def _on_search_error(self, msg: str) -> None:
+        self.search_panel.append_log(f"[오류] {msg}")
+
+    def _on_search_finished(self, summary) -> None:
+        from app.core.coupang.outcome import RunOutcome, determine_outcome
+
+        stats = (
+            f"상품 {summary.products_seen} | 판매자 {summary.unique_vendors} | "
+            f"사업자정보 {summary.business_info_success} | 오류 {summary.request_errors}"
+        )
+        self.search_panel.set_stats_text(stats)
+        outcome = determine_outcome(summary)
+
+        if outcome == RunOutcome.SAVE_ERROR:
+            msg = summary.save_error or summary.error or "결과 저장 실패"
+            self.search_panel.append_log(f"[실패] {msg}")
+            self._show_status("Coupang 검색 저장 실패")
+            QMessageBox.critical(self, "Coupang 검색 저장 실패", msg)
+        elif outcome == RunOutcome.CLEANUP_ERROR:
+            msg = f"브라우저 종료 실패 — 잔류 프로세스 확인 필요: {summary.cleanup_error}"
+            self.search_panel.append_log(f"[실패] {msg}")
+            self._show_status("Coupang 검색 cleanup 실패")
+            QMessageBox.critical(self, "Coupang 검색 브라우저 종료 실패", msg)
+        elif outcome == RunOutcome.CANCELLED:
+            if summary.records and summary.json_path:
+                self.search_panel.append_log("[취소] 부분 결과 저장 완료")
+            else:
+                self.search_panel.append_log("[취소] 수집된 결과 없음")
+            self._show_status("Coupang 검색 취소됨")
+        elif outcome == RunOutcome.ERROR:
+            msg = summary.error or "오류"
+            self.search_panel.append_log(f"[실패] {msg}")
+            self._show_status(f"Coupang 검색 실패: {msg}")
+            if summary.termination_reason == "blocked":
+                QMessageBox.warning(
+                    self, "쿠팡 차단 감지",
+                    "쿠팡이 접근을 차단했습니다.\n수집을 중단하고 충분한 쿨다운(수 시간) 후 재시도하세요.",
+                )
+        elif outcome == RunOutcome.NO_RECORDS:
+            reason_msg = {
+                "no_items": "수집된 상품 없음",
+            }.get(summary.termination_reason, summary.termination_reason)
+            self.search_panel.append_log(f"[실패] {reason_msg}")
+            self._show_status(f"Coupang 검색 실패: {reason_msg}")
+        else:
+            self.search_panel.append_log(f"[완료] {stats}")
+            self._show_status(f"Coupang 검색 완료 ({summary.business_info_success}명)")
+
+    def _on_search_thread_done(self) -> None:
+        from app.core.coupang.outcome import RunOutcome, determine_outcome
+
+        summary = self.search_worker.summary if self.search_worker else None
+        if summary is None:
+            self.search_panel.set_state("failed")
+            return
+        outcome = determine_outcome(summary)
+        if outcome in (RunOutcome.SAVE_ERROR, RunOutcome.CLEANUP_ERROR, RunOutcome.ERROR, RunOutcome.NO_RECORDS):
+            self.search_panel.set_state("failed")
+        else:
+            self.search_panel.set_state("finished")
 
     def closeEvent(self, event) -> None:
         if self._closing:
