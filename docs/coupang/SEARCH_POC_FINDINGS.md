@@ -741,3 +741,49 @@ p10 37 · p11 32 · p12 25 · p13 7 · p14 1 · p15~17 0
    — 하루 5세션 = 5개 카테고리, 3일이면 뷰티 트리 전체 커버
 2. 하위 카테고리 자동 발견·순회 기능 (엔진)
 3. 윈도우 배포 빌드
+
+---
+
+# rev.18 — SRP page≥2 재조사 착수 (2026-08-17 밤, 오프라인 분석 + poc15 준비)
+
+## 배경 (사용자 지시)
+
+"page≥2 는 빈 셸" 결론을 최종으로 받아들이지 말고 다른 방면을 더 조사하라.
+(rev.11 에서 PLP ?page=N 이 열린 것처럼, SRP 게이트에도 조건이 남아있을 수 있다.)
+
+## 오프라인 재분석 결과 (저장 HTML, 세션 미사용)
+
+1. SRP page1 RSC 페이로드: `srp_result` 컴포넌트에 **`"page":1,
+   "disableFixedPagination":true`** props 내장 — 서버가 세션별로 페이지네이션
+   렌더를 결정. PLP 페이로드에는 이 플래그 자체가 없음.
+2. 페이로드에 서버 발급 **`searchId`** (예: 847313b42690225) 20회 내장 —
+   page2 서빙 조건 후보. 기존 실패는 traceId 재현만 시도, searchId 는 미시도.
+3. 페이로드 props 에 **`"listSize":36`** — 기본 60과 다른 값. listSize
+   36/72 + page=2 조합 미시도 (120 은 무시됐지만 36/72 는 다를 수 있음).
+4. 공식 URL 스키마(PAGE_STRUCTURE.md §2): `/np/search?component=&q=..&page=N
+   &listSize=72` — `component=` 파라미터 포함 변형 미시도.
+5. page2 빈 셸(128KB)은 Next.js 앱 셸(RSC flight 84KB) — 클라이언트
+   하이드레이션용. **RSC fetch 프로토콜(헤더 RSC:1) 직접 호출 미시도** —
+   SSR 게이트와 다른 경로일 수 있음.
+6. PLP page2 HTML 에서 확인: 페이지 번호 링크는 표준 `?page=N` SSR —
+   SRP 게이트가 "클릭 경로"와 무관함을 재확인.
+7. CDN JS 청크(curl)는 Akamai 403 — 청크 분석은 브라우저 세션 안에서만 가능.
+
+## poc15 준비 (내일 세션 1/5 에서 실행)
+
+`coupang_search_poc15.py` — 로드 8회, 딜레이 15~20초, 차단 즉시 중단:
+
+| 테스트 | URL/방법 |
+|--------|----------|
+| base | page1 기준 + searchId·flag 추출 |
+| T1 | `&page=2&searchId={sid}` |
+| T2 | `&component=&page=2&listSize=72` |
+| T3 | `&listSize=36&page=2&searchId` |
+| T4 | `&sorter=scoreDesc&page=2&searchId` |
+| T5 | in-page RSC flight fetch (RSC:1 헤더) |
+| T6 | `&channel=user&component=&page=2&searchId` |
+| T7 | PLP page=2 대조 (세션 정상성 확인) |
+
+부가 측정: 페이지1 pager 요소 존재 여부·disableFixedPagination 값 기록,
+전 로드 네트워크 캡처(내부 API/RSC 엔드포인트 존재 판별).
+추출기(searchId/flag/card 카운트)는 저장 HTML 로 오프라인 검증 완료.
