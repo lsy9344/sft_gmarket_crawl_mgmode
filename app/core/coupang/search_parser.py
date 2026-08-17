@@ -34,6 +34,7 @@ _PRICE_NUM_RE = re.compile(r"(\d{1,3}(?:,\d{3})+|\d{4,})")
 
 # 브라우저에서 실행되는 추출 스크립트 — 왕복 최소화 위해 1회 evaluate 로 전량 수집.
 # 클래스명이 해시되어 있으므로 부분 매칭(*=) 사용.
+# 로켓 판별: rds 로고(로켓배송) + falcon rocket 배지(로켓그로스/판매자로켓) — PLP 실측 근거
 DOM_EXTRACTION_JS = """
 () => {
   const out = [];
@@ -43,7 +44,10 @@ DOM_EXTRACTION_JS = """
     if (!a) continue;
     const titleEl = li.querySelector('[class*="productName"]');
     const priceArea = li.querySelector('[class*="PriceArea"]');
-    const rocket = !!li.querySelector('img[src*="rds/logo"], img[src*="rds/delivery_badge"]');
+    const rocket = !!li.querySelector(
+      'img[src*="rds/logo"], img[src*="rds/delivery_badge"], '
+      + 'img[src*="badges/falcon"][src*="rocket"]'
+    );
     const sponsored = !!li.querySelector('[aria-label="Ad information"]');
     out.push({
       href: a.getAttribute('href') || '',
@@ -56,6 +60,10 @@ DOM_EXTRACTION_JS = """
   return out;
 }
 """
+
+# 쿠팡이 검색 페이지 RSC 페이로드에 내장하는 공식 가격 밴드 정의
+_PRICE_BAND_RE = re.compile(
+    r'\{"id":"[\d-]+","text":"[^"]+","minPrice":(\d+),"maxPrice":(\d+)\}')
 
 
 @dataclass
@@ -111,6 +119,23 @@ def parse_price(text: str) -> int:
         return int(m.group(1).replace(",", ""))
     except ValueError:
         return 0
+
+
+def parse_price_bands(html: str) -> list[tuple[int, int]]:
+    """검색 페이지 HTML 에서 공식 가격 밴드 (min, max) 목록 추출.
+
+    실측 근거(rev.11): 쿠팡은 키워드마다 가격 밴드 정의를 RSC 페이로드에 내장하며
+    밴드 목록은 키워드/가격 분포에 따라 달라진다. 중복 제거 후 순서 보존.
+    """
+    bands: list[tuple[int, int]] = []
+    for m in _PRICE_BAND_RE.finditer(html):
+        try:
+            lo, hi = int(m.group(1)), int(m.group(2))
+        except ValueError:
+            continue
+        if (lo, hi) not in bands:
+            bands.append((lo, hi))
+    return bands
 
 
 def parse_extracted(rows: list[dict]) -> list[SearchProduct]:

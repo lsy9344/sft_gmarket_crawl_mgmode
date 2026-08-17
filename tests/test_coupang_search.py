@@ -18,6 +18,7 @@ from app.core.coupang.search_parser import (
     is_blocked,
     parse_extracted,
     parse_href,
+    parse_price_bands,
     parse_price,
 )
 
@@ -129,13 +130,16 @@ class FastSearchCrawler(SearchCrawler):
 
 
 def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocket=True,
-         content_html=_OK_HTML):
+         content_html=_OK_HTML, include_price_bands=False, category_id="", max_pages=3):
     config = SearchRunConfig(
         output_dir=Path(tmp_dir),
         output_prefix="search_test",
         keyword="뷰티",
         sorters=sorters,
         exclude_rocket=exclude_rocket,
+        include_price_bands=include_price_bands,
+        category_id=category_id,
+        max_pages=max_pages,
         warmup_time=0,
         page_delay_min=0,
         page_delay_max=0,
@@ -198,6 +202,56 @@ class SearchPipelineTest(unittest.TestCase):
         self.assertEqual(sum(1 for u in page.goto_urls if "/np/search" in u), 4)
 
 
+    def test_full_three_layer_pipeline(self):
+        """층1 정렬 + 층2 가격 밴드 + 층3 PLP 순회 통합 파이프라인."""
+        # 정렬 1종 + 밴드 2종 + PLP 2페이지 = DOM 추출 5회
+        rows_seq = [
+            [_row("11"), _row("22")],            # 층1 정렬
+            [_row("33")],                          # 층2 밴드 1
+            [_row("44"), _row("11")],              # 층2 밴드 2 (중복 포함)
+            [_row("55"), _row("66", rocket=True)],  # 층3 PLP p1
+            [_row("77")],                          # 층3 PLP p2
+        ]
+        bands_html = (
+            "<html><body>" + "검색결과 콘텐츠 " * 400 +
+            '{"id":"0-6000","text":"6천원 이하","minPrice":0,"maxPrice":6000}'
+            '{"id":"6000-12000","text":"6천~1만2","minPrice":6000,"maxPrice":12000}'
+            "</body></html>"
+        )
+        page = FakeSearchPage(sorter_rows=rows_seq, content_html=bands_html,
+                              viids=["11", "22", "33", "44", "55", "77"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, sorters=("saleCountDesc",),
+                           include_price_bands=True, category_id="176522", max_pages=2)
+            self.assertIsNone(summary.error)
+            # 로켓 1건 제외: 7건 중 6건
+            self.assertEqual(summary.products_seen, 6)
+            self.assertEqual(len(summary.records), 6)
+            # PLP URL 확인
+            plp_urls = [u for u in page.goto_urls if "/np/categories/176522" in u]
+            self.assertEqual(len(plp_urls), 2)
+            self.assertIn("page=1", plp_urls[0])
+            self.assertIn("page=2", plp_urls[1])
+            # 밴드 URL 확인
+            band_urls = [u for u in page.goto_urls if "isPriceRange=true" in u]
+            self.assertEqual(len(band_urls), 2)
+
+    def test_plp_stops_on_empty_pages(self):
+        """PLP 빈 페이지 연속 시 상한 도달로 정상 종료."""
+        rows_seq = [
+            [_row("11")],  # 층1 정렬
+            [],            # PLP p1 빈 결과
+            [],            # PLP p2 빈 결과 → 연속 2회로 종료
+        ]
+        page = FakeSearchPage(sorter_rows=rows_seq, viids=["11"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, sorters=("saleCountDesc",),
+                           category_id="176522", max_pages=10)
+            self.assertIsNone(summary.error)
+            plp_urls = [u for u in page.goto_urls if "/np/categories/176522" in u]
+            self.assertEqual(len(plp_urls), 2)  # 10페이지 안 가고 빈 페이지 2회에 종료
+
+
 class SearchParserTest(unittest.TestCase):
     def test_parse_href(self):
         legacy, iid, viid = parse_href(
@@ -215,6 +269,18 @@ class SearchParserTest(unittest.TestCase):
         self.assertEqual(is_blocked(big + "Access Denied")[0], True)
         self.assertEqual(is_blocked(big + "정상 페이지")[0], False)
         self.assertEqual(is_blocked("짧은응답")[0], True)  # 소프트 블록
+
+    def test_parse_price_bands(self):
+        html = (
+            'x' * 2000 +
+            '{"id":"all","text":"가격 전체","minPrice":null,"maxPrice":null}'
+            '{"id":"0-6000","text":"6천원 이하","minPrice":0,"maxPrice":6000}'
+            '{"id":"6000-12000","text":"6천~1만2","minPrice":6000,"maxPrice":12000}'
+            '{"id":"24000-2147483647","text":"2만4 이상","minPrice":24000,"maxPrice":2147483647}'
+        )
+        bands = parse_price_bands(html)
+        self.assertEqual(bands, [(0, 6000), (6000, 12000), (24000, 2147483647)])
+        self.assertEqual(parse_price_bands("밴드 없음"), [])
 
     def test_parse_extracted_dedup(self):
         rows = [_row("11"), _row("11"), _row("22", rocket=True)]
@@ -234,6 +300,12 @@ class SearchConfigTest(unittest.TestCase):
                 SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", sorters=("bogus",))
             with self.assertRaises(ValueError):
                 SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", sorters=())
+            with self.assertRaises(ValueError):
+                SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", category_id="abc")
+            with self.assertRaises(ValueError):
+                SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", max_pages=0)
+            with self.assertRaises(ValueError):
+                SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", max_pages=51)
 
 
 if __name__ == "__main__":

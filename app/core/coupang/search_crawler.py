@@ -1,38 +1,49 @@
 """Coupang 키워드 검색 수집 엔진 — Qt 비의존 코어.
 
-기존 OMP 엔진(CoupangCrawler)의 검증된 구성요소를 재사용한다:
+수집 아키텍처 rev.12 (3층 구조, 전부 실측 근거):
+
+  층1  SRP 검색 — 정렬 4종 × 60개 (랭킹순 제외, 로켓 제외)
+  층2  가격대 필터 — 쿠팡 공식 가격 밴드 순회 × 60개 (rev.11 실측)
+  층3  카테고리 PLP — /np/categories/{id}?page=1..N 순회 (rev.12~13 실측,
+        비로그인 SSR 확인, 상한 ~17페이지)
+
+기존 OMP 엔진(CoupangCrawler) 재사용 요소:
 - Camoufox 브라우저 생성/정리, 웜업, 자연스러운 행동 시뮬레이션
 - 스토어 API 파이프라인(individualInfo → getStoreReview) 과 저장 단계
 
-차이점(검색 전용):
-- 수집 소스가 /np/omp 피드가 아니라 /np/search 결과 페이지
-- 페이지네이션이 없으므로(실측) 정렬(sorter) 순회로 상품 셋 확장
-- 상품 목록은 DOM 카드에서 추출, 로켓 상품은 설정에 따라 제외
-
-실측 근거: docs/coupang/SEARCH_POC_FINDINGS.md rev.3
-외부 기준점: docs/coupang/EXTERNAL_RESEARCH.md (딜레이/백오프/세션 규율)
+운영 규율(EXTERNAL_RESEARCH): 페이지 간 15~20초 랜덤 딜레이,
+백오프 30/60/90초(3회), 차단 감지 시 즉시 중단.
 """
 
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import quote
 
 from app.core.base import CancelledError  # noqa: F401 - 호출 측 예외 계약 재노출
-from app.core.coupang.crawler import CoupangCrawler, _RunError
+from app.core.coupang.crawler import CoupangCrawler, _RunError, _safe_callback
 from app.core.coupang.search_parser import (
     DOM_EXTRACTION_JS,
     SearchProduct,
     is_blocked,
     parse_extracted,
+    parse_price_bands,
 )
-from app.core.coupang.crawler import SHOP_SESSION_URL  # noqa: F401 - 문서화용 재사용 상수
 from app.models.coupang_records import CoupangRunConfig, CoupangRunSummary
 
-SEARCH_PHASES = ("warmup", "search_collect", "vendor_mapping", "business_info", "save")
+SEARCH_PHASES = (
+    "warmup",
+    "search_collect",
+    "price_bands",
+    "category_collect",
+    "vendor_mapping",
+    "business_info",
+    "save",
+)
 
 SEARCH_URL = "https://www.coupang.com/np/search?q={q}"
+CATEGORY_URL = "https://www.coupang.com/np/categories/{cid}?page={page}"
 DEFAULT_SORTERS = ("saleCountDesc", "salePriceAsc", "salePriceDesc", "latestAsc")
 SORTER_NAMES = {
     "scoreDesc": "쿠팡 랭킹순",
@@ -43,18 +54,24 @@ SORTER_NAMES = {
 }
 # 실패 백오프 — EXTERNAL_RESEARCH §4 확정 파라미터 (30/60/90, 3회 후 중단)
 BACKOFF_SECONDS = (30, 60, 90)
-
+# PLP 빈 페이지 연속 허용 한도 (일시 렌더 실패 대비, 상한 도달 시 종료용)
+PLP_EMPTY_TOLERANCE = 2
+# PLP 최대 페이지 (실측 상한 ~17, rev.13)
+PLP_MAX_PAGES_LIMIT = 50
 
 
 @dataclass
 class SearchRunConfig(CoupangRunConfig):
-    """키워드 검색 수집 실행 설정."""
+    """키워드 검색 수집 실행 설정 (3층 구조)."""
 
     keyword: str = ""
     sorters: tuple[str, ...] = DEFAULT_SORTERS
     exclude_rocket: bool = True
     page_delay_min: float = 15.0
     page_delay_max: float = 20.0
+    include_price_bands: bool = True
+    category_id: str = ""
+    max_pages: int = 17
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -67,16 +84,22 @@ class SearchRunConfig(CoupangRunConfig):
             raise ValueError(f"unknown sorters: {unknown}")
         if self.page_delay_min < 0 or self.page_delay_max < self.page_delay_min:
             raise ValueError("invalid page delay range")
+        if self.category_id and not self.category_id.strip().isdigit():
+            raise ValueError("category_id must be numeric")
+        if not 1 <= self.max_pages <= PLP_MAX_PAGES_LIMIT:
+            raise ValueError(f"max_pages must be 1..{PLP_MAX_PAGES_LIMIT}")
 
 
 class SearchCrawler(CoupangCrawler):
-    """키워드 검색 수집 엔진.
+    """키워드 검색 수집 엔진 (3층 구조).
 
-    Phase 1  홈 웜업 (기존 방식)
-    Phase 2  정렬별 검색 페이지 수집 — DOM 카드 추출 + 로켓 제외
-    Phase 3  vendor 매핑 (individualInfo API, 기존 Phase 4 재사용)
-    Phase 4  사업자정보 수집 (getStoreReview API, 기존 Phase 5 재사용)
-    Phase 5  저장 (기존 CoupangRecord 스키마)
+    Phase 1  홈 웜업
+    Phase 2  층1 — SRP 정렬별 수집
+    Phase 3  층2 — 가격 밴드별 수집
+    Phase 4  층3 — 카테고리 PLP 페이지 순회
+    Phase 5  vendor 매핑 (individualInfo API)
+    Phase 6  사업자정보 수집 (getStoreReview API)
+    Phase 7  저장 (CoupangRecord 스키마)
     """
 
     # 테스트에서 오버라이드 가능
@@ -84,8 +107,9 @@ class SearchCrawler(CoupangCrawler):
 
     def _phase(self, name: str) -> None:
         idx = SEARCH_PHASES.index(name) + 1
-        from app.core.coupang.crawler import _safe_callback
         _safe_callback(self._on_phase, "on_phase", self._on_log, name, idx, len(SEARCH_PHASES))
+
+    # ── 파이프라인 ─────────────────────────────────────────────────────────
 
     def _run_pipeline(self, page, summary: CoupangRunSummary) -> None:
         config: SearchRunConfig = self.config
@@ -100,13 +124,14 @@ class SearchCrawler(CoupangCrawler):
         self.control.checkpoint()
         self._log("  Akamai 검증 완료.")
 
-        # Phase 2: 정렬별 검색 수집
-        self._phase("search_collect")
-        self._log(f"Phase 2: 검색 수집 — '{config.keyword}' "
-                  f"({len(config.sorters)}개 정렬, 로켓 {'제외' if config.exclude_rocket else '포함'})")
         products: dict[str, SearchProduct] = {}
         rocket_removed = 0
+        page1_html = ""
 
+        # Phase 2: 층1 — SRP 정렬별 수집
+        self._phase("search_collect")
+        self._log(f"Phase 2: SRP 수집 — '{config.keyword}' "
+                  f"({len(config.sorters)}개 정렬, 로켓 {'제외' if config.exclude_rocket else '포함'})")
         for idx, sorter in enumerate(config.sorters):
             self.control.checkpoint()
             url = SEARCH_URL.format(q=quote(config.keyword))
@@ -115,38 +140,82 @@ class SearchCrawler(CoupangCrawler):
             name = SORTER_NAMES[sorter]
             self._log(f"  [{idx + 1}/{len(config.sorters)}] {name} 로드...")
 
-            items = self._load_search_page(page, url, sorter, name)
+            items, html = self._load_listing_page(page, url, name)
+            if idx == 0:
+                page1_html = html
             kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
             rocket_removed += len(items) - len(kept)
-            fresh = 0
-            for p in kept:
-                if p.dedup_key not in products:
-                    products[p.dedup_key] = p
-                    fresh += 1
+            fresh = self._merge(products, kept)
             self._log(f"    {name}: {len(items)}개 중 로켓 {len(items) - len(kept)}개 제외, "
                       f"신규 {fresh}개 (누적 {len(products)})")
             self._progress("search_collect", idx + 1, len(config.sorters))
+            self._delay_between_pages(is_last=(idx == len(config.sorters) - 1))
 
-            if idx < len(config.sorters) - 1:
-                delay = random.uniform(config.page_delay_min, config.page_delay_max)
-                self._log(f"    딜레이 {delay:.0f}초...")
-                self.control.sleep(delay)
+        # Phase 3: 층2 — 가격 밴드 수집
+        self._phase("price_bands")
+        if config.include_price_bands:
+            bands = parse_price_bands(page1_html)
+            self._log(f"Phase 3: 가격 밴드 수집 — {len(bands)}개 밴드 감지")
+            for idx, (lo, hi) in enumerate(bands):
+                self.control.checkpoint()
+                url = (SEARCH_URL.format(q=quote(config.keyword))
+                       + f"&isPriceRange=true&minPrice={lo}&maxPrice={hi}")
+                label = f"가격 {lo}~{hi}원"
+                self._log(f"  [{idx + 1}/{len(bands)}] {label} 로드...")
+                items, _ = self._load_listing_page(page, url, label)
+                kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
+                rocket_removed += len(items) - len(kept)
+                fresh = self._merge(products, kept)
+                self._log(f"    {label}: 신규 {fresh}개 (누적 {len(products)})")
+                self._progress("price_bands", idx + 1, len(bands))
+                self._delay_between_pages(is_last=(idx == len(bands) - 1))
+            if not bands:
+                self._log("  가격 밴드 미감지 — 건너뜀")
+        else:
+            self._log("Phase 3: 가격 밴드 수집 — 비활성화, 건너뜀")
 
+        # Phase 4: 층3 — 카테고리 PLP 순회
+        self._phase("category_collect")
+        if config.category_id:
+            self._log(f"Phase 4: 카테고리 {config.category_id} PLP 수집 "
+                      f"(최대 {config.max_pages}페이지)")
+            empty_streak = 0
+            for pno in range(1, config.max_pages + 1):
+                self.control.checkpoint()
+                url = CATEGORY_URL.format(cid=config.category_id.strip(), page=pno)
+                self._log(f"  [page {pno}] 로드...")
+                items, _ = self._load_listing_page(page, url, f"PLP p{pno}", retry_empty=False)
+                kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
+                rocket_removed += len(items) - len(kept)
+                fresh = self._merge(products, kept)
+                self._log(f"  [page {pno}] 신규 {fresh}개 (누적 {len(products)})")
+                self._progress("category_collect", pno, config.max_pages)
+                if not items:
+                    empty_streak += 1
+                    if empty_streak >= PLP_EMPTY_TOLERANCE:
+                        self._log(f"  빈 페이지 {empty_streak}회 연속 — PLP 종료")
+                        break
+                else:
+                    empty_streak = 0
+                self._delay_between_pages(is_last=(pno == config.max_pages))
+        else:
+            self._log("Phase 4: 카테고리 수집 — 미지정, 건너뜀")
+
+        # 수집 완료 집계
         summary.products_seen = len(products)
         self._emit_stats(summary)
-        self._log(f"  수집 완료: 고유 상품 {len(products)}개 "
-                  f"(로켓 제외 {rocket_removed}개)")
+        self._log(f"수집 완료: 고유 상품 {len(products)}개 (로켓 제외 {rocket_removed}개)")
         if not products:
             raise _RunError("수집된 상품이 없습니다.", reason="no_items")
 
         viids = [p.vendor_item_id for p in products.values() if p.vendor_item_id]
         if not viids:
             raise _RunError("vendorItemId 를 확보하지 못했습니다.", reason="no_items")
-        self._log(f"  vendorItemId {len(viids)}개 → 스토어 매핑 준비")
+        self._log(f"vendorItemId {len(viids)}개 → 스토어 매핑 준비")
 
-        # Phase 3~5: 기존 스토어 API 파이프라인 재사용
+        # Phase 5~7: 기존 스토어 API 파이프라인 재사용
         self._phase("vendor_mapping")
-        self._log("Phase 3: vendor 매핑...")
+        self._log("Phase 5: vendor 매핑...")
         all_vendors = self._map_vendors(page, viids, summary)
         self.control.checkpoint()
         unique_vendor_ids = sorted(all_vendors.keys())
@@ -155,16 +224,39 @@ class SearchCrawler(CoupangCrawler):
         self._log(f"  고유 판매자: {len(unique_vendor_ids)}명")
 
         self._phase("business_info")
-        self._log(f"Phase 4: 사업자정보 수집 ({len(unique_vendor_ids)}명)...")
+        self._log(f"Phase 6: 사업자정보 수집 ({len(unique_vendor_ids)}명)...")
         self._fetch_business_info(page, unique_vendor_ids, all_vendors, summary)
         self.control.checkpoint()
 
         self._phase("save")
-        self._log("Phase 5: 결과 저장...")
+        self._log("Phase 7: 결과 저장...")
         self._save_results(summary, partial=bool(summary.error))
 
-    def _load_search_page(self, page, url: str, sorter: str, name: str) -> list[SearchProduct]:
-        """검색 페이지 로드 + DOM 추출. 실패 시 30/60/90초 백오프(3회) 후 중단."""
+    # ── 수집 헬퍼 ──────────────────────────────────────────────────────────
+
+    def _merge(self, products: dict[str, SearchProduct], items: list[SearchProduct]) -> int:
+        fresh = 0
+        for p in items:
+            if p.dedup_key not in products:
+                products[p.dedup_key] = p
+                fresh += 1
+        return fresh
+
+    def _delay_between_pages(self, is_last: bool) -> None:
+        config: SearchRunConfig = self.config
+        if is_last:
+            return
+        delay = random.uniform(config.page_delay_min, config.page_delay_max)
+        self._log(f"    딜레이 {delay:.0f}초...")
+        self.control.sleep(delay)
+
+    def _load_listing_page(self, page, url: str, name: str,
+                             retry_empty: bool = True) -> tuple[list[SearchProduct], str]:
+        """목록 페이지 로드 + DOM 추출. 백오프 30/60/90초(3회) 후 중단.
+
+        retry_empty=False 면 빈 페이지를 재시도하지 않고 그대로 반환
+        (PLP 상한 도달은 빈 페이지가 정상 신호 — rev.13 실측).
+        """
         last_error = ""
         for attempt in range(len(self._backoff_seconds) + 1):
             self.control.checkpoint()
@@ -182,7 +274,7 @@ class SearchCrawler(CoupangCrawler):
                     self.control.sleep(wait)
                     continue
                 raise _RunError(
-                    f"검색 페이지 로드 실패 ({name}): {last_error}", reason="error"
+                    f"목록 페이지 로드 실패 ({name}): {last_error}", reason="error"
                 ) from e
 
             blocked, reason = is_blocked(html)
@@ -203,15 +295,20 @@ class SearchCrawler(CoupangCrawler):
 
             items = parse_extracted(rows)
             if items:
-                return items
+                return items, html
+
+            if not retry_empty:
+                return [], html
 
             if attempt < len(self._backoff_seconds):
                 wait = self._backoff_seconds[attempt]
                 self._log(f"    상품 0건 — 백오프 {wait}초 후 재시도 ({attempt + 1}/3)...")
                 self.control.sleep(wait)
                 continue
+            # 재시도 소진: 빈 페이지 자체는 차단이 아님 (PLP 상한 도달의 정상 신호)
+            return [], html
 
         raise _RunError(
-            f"검색 결과를 가져오지 못했습니다 ({name}). {last_error}",
+            f"목록 페이지를 가져오지 못했습니다 ({name}). {last_error}",
             reason="no_items",
         )

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -84,7 +85,21 @@ class SearchPanel(QWidget):
 
         self.chk_exclude_rocket = QCheckBox("로켓배송 상품 제외")
         self.chk_exclude_rocket.setChecked(True)
-        form.addRow("필터:", self.chk_exclude_rocket)
+        self.chk_price_bands = QCheckBox("가격 밴드 수집 (층2)")
+        self.chk_price_bands.setChecked(True)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(self.chk_exclude_rocket)
+        filter_row.addWidget(self.chk_price_bands)
+        form.addRow("필터:", filter_row)
+
+        self.category_edit = QLineEdit()
+        self.category_edit.setPlaceholderText("선택 — 카테고리 ID 입력 시 페이지 순회 수집 (예: 뷰티=176522)")
+        form.addRow("카테고리 ID:", self.category_edit)
+
+        self.spin_max_pages = QSpinBox()
+        self.spin_max_pages.setRange(1, 50)
+        self.spin_max_pages.setValue(17)
+        form.addRow("카테고리 최대 페이지:", self.spin_max_pages)
 
         delay_row = QHBoxLayout()
         self.spin_delay_min = QDoubleSpinBox()
@@ -149,6 +164,7 @@ class SearchPanel(QWidget):
         self.btn_open_result.setEnabled(s in ("idle", "finished", "failed"))
         settings_enabled = s in ("idle", "finished", "failed")
         for w in (self.output_dir_edit, self.keyword_edit, self.chk_exclude_rocket,
+                  self.chk_price_bands, self.category_edit, self.spin_max_pages,
                   self.spin_delay_min, self.spin_delay_max):
             w.setEnabled(settings_enabled)
         self.btn_browse.setEnabled(settings_enabled)
@@ -158,6 +174,7 @@ class SearchPanel(QWidget):
             for b in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_cancel):
                 b.setEnabled(False)
             for w in (self.output_dir_edit, self.keyword_edit, self.chk_exclude_rocket,
+                      self.chk_price_bands, self.category_edit, self.spin_max_pages,
                       self.spin_delay_min, self.spin_delay_max):
                 w.setEnabled(False)
             self.btn_browse.setEnabled(False)
@@ -173,11 +190,15 @@ class SearchPanel(QWidget):
             return None
         delay_min = self.spin_delay_min.value()
         delay_max = max(delay_min, self.spin_delay_max.value())
+        category_id = self.category_edit.text().strip()
         try:
             return SearchRunConfig(
                 output_dir=Path(output_dir),
                 keyword=keyword,
                 exclude_rocket=self.chk_exclude_rocket.isChecked(),
+                include_price_bands=self.chk_price_bands.isChecked(),
+                category_id=category_id,
+                max_pages=self.spin_max_pages.value(),
                 page_delay_min=delay_min,
                 page_delay_max=delay_max,
             )

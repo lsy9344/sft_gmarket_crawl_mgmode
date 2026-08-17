@@ -62,6 +62,12 @@ def main() -> int:
                         help="로켓배송 상품 포함")
     parser.add_argument("--page-delay-min", type=float, default=15.0)
     parser.add_argument("--page-delay-max", type=float, default=20.0)
+    parser.add_argument("--no-price-bands", action="store_true",
+                        help="층2 가격 밴드 수집 비활성화")
+    parser.add_argument("--category-id", default="",
+                        help="층3 카테고리 PLP 수집 (예: 뷰티=176522)")
+    parser.add_argument("--max-pages", type=int, default=17,
+                        help="층3 PLP 최대 페이지 (기본 17, 실측 상한)")
     parser.add_argument("--warmup-time", type=float, default=20.0)
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--output", default=None)
@@ -78,6 +84,9 @@ def main() -> int:
         exclude_rocket=args.exclude_rocket,
         page_delay_min=args.page_delay_min,
         page_delay_max=args.page_delay_max,
+        include_price_bands=not args.no_price_bands,
+        category_id=args.category_id,
+        max_pages=args.max_pages,
         warmup_time=args.warmup_time,
         batch_size=args.batch_size,
     )
@@ -88,6 +97,8 @@ def main() -> int:
     print(f"Keyword: {args.keyword}")
     print(f"Sorters: {', '.join(config.sorters)} (랭킹순 제외)")
     print(f"Rocket: {'제외' if config.exclude_rocket else '포함'}")
+    print(f"Price bands: {'활성' if config.include_price_bands else '비활성'}")
+    print(f"Category: {config.category_id or '(없음 — SRP+밴드만)'} max_pages={config.max_pages}")
     print(f"Delay: {args.page_delay_min}~{args.page_delay_max}s")
     print(f"{'=' * 60}")
 
