@@ -126,15 +126,19 @@ def parse_price_bands(html: str) -> list[tuple[int, int]]:
 
     실측 근거(rev.11): 쿠팡은 키워드마다 가격 밴드 정의를 RSC 페이로드에 내장하며
     밴드 목록은 키워드/가격 분포에 따라 달라진다. 중복 제거 후 순서 보존.
+
+    실측(rev.16): 페이지 원본 HTML 에서 밴드 JSON 은 따옴표가 이스케이프된
+    형태(\\")로 들어 있다. 이스케이프 해제 버전을 함께 매칭한다.
     """
     bands: list[tuple[int, int]] = []
-    for m in _PRICE_BAND_RE.finditer(html):
-        try:
-            lo, hi = int(m.group(1)), int(m.group(2))
-        except ValueError:
-            continue
-        if (lo, hi) not in bands:
-            bands.append((lo, hi))
+    for hay in (html, html.replace('\\"', '"')):
+        for m in _PRICE_BAND_RE.finditer(hay):
+            try:
+                lo, hi = int(m.group(1)), int(m.group(2))
+            except ValueError:
+                continue
+            if (lo, hi) not in bands:
+                bands.append((lo, hi))
     return bands
 
 

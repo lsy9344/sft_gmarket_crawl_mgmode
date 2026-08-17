@@ -282,6 +282,18 @@ class SearchParserTest(unittest.TestCase):
         self.assertEqual(bands, [(0, 6000), (6000, 12000), (24000, 2147483647)])
         self.assertEqual(parse_price_bands("밴드 없음"), [])
 
+    def test_parse_price_bands_escaped_quotes(self):
+        html = (
+            '[{\\"id\\":\\"all\\",\\"text\\":\\"가격 전체\\",'
+            '\\"minPrice\\":null,\\"maxPrice\\":null},'
+            '{\\"id\\":\\"0-6000\\",\\"text\\":\\"6천원 이하\\",'
+            '\\"minPrice\\":0,\\"maxPrice\\":6000},'
+            '{\\"id\\":\\"6000-12000\\",\\"text\\":\\"6천원~1만 2천원\\",'
+            '\\"minPrice\\":6000,\\"maxPrice\\":12000}]'
+        )
+        bands = parse_price_bands(html)
+        self.assertEqual(bands, [(0, 6000), (6000, 12000)])
+
     def test_parse_extracted_dedup(self):
         rows = [_row("11"), _row("11"), _row("22", rocket=True)]
         items = parse_extracted(rows)

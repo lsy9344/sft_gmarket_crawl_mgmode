@@ -231,6 +231,7 @@ class SearchCrawler(CoupangCrawler):
         self._phase("save")
         self._log("Phase 7: 결과 저장...")
         self._save_results(summary, partial=bool(summary.error))
+        summary.termination_reason = summary.termination_reason or "success"
 
     # ── 수집 헬퍼 ──────────────────────────────────────────────────────────
 
