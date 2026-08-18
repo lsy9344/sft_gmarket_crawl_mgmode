@@ -787,3 +787,35 @@ p10 37 · p11 32 · p12 25 · p13 7 · p14 1 · p15~17 0
 부가 측정: 페이지1 pager 요소 존재 여부·disableFixedPagination 값 기록,
 전 로드 네트워크 캡처(내부 API/RSC 엔드포인트 존재 판별).
 추출기(searchId/flag/card 카운트)는 저장 HTML 로 오프라인 검증 완료.
+
+---
+
+# rev.19 — poc15 실측: SRP page≥2 URL 파라미터 경로 전부 기각 (2026-08-18, 세션 1/5)
+
+## 실측 결과
+
+| 테스트 | 카드 | 판정 |
+|--------|------|------|
+| base page1 | 59개 (flag=true, pager 없음) | 기준 |
+| T1 `&page=2&searchId` | 0 | ❌ |
+| T2 `&component=&page=2&listSize=72` | 0 | ❌ |
+| T3 `&listSize=36&page=2&searchId` | 0 | ❌ |
+| T4 `&sorter=scoreDesc&page=2&searchId` | 0 | ❌ |
+| T5 RSC flight fetch | 200 OK, 73KB — **레이아웃만, 상품 없음** | ❌ RSC 경로도 게이트 |
+| T6 `&channel=user&component=&page=2&searchId` | 0 | ❌ |
+| T7 PLP page=2 대조 | 60개, pager 있음 | ✅ 세션 정상 |
+
+## 판독
+
+1. SRP page≥2 는 **URL/RSC 파라미터로는 열 수 없음** — 서버가 세션별로
+   `srp_result` 컴포넌트 SSR 여부를 결정 (disableFixedPagination=true 고정 관찰).
+2. 네트워크 캡처: 검색 결과용 별도 API 없음 (SSR 전용). 부차 호출은
+   `n-api/abtest/options`(AB 배정), homeunit/추천 위젯뿐.
+3. 남은 미시도 경로: ① 세션 신뢰도 개선(프로필 영속화로 쿠키 축적,
+   지문 변형) ② m.coupang.com 모바일 ③ AB 옵션 응답 판독(페이지네이션
+   관련 플래그 존재 확인). → poc16 후보 (수집 병행 여력 시).
+
+## 오늘 잔여 계획 (세션 2~5/5)
+
+- 하위 카테고리 순회 수집 계속: 클렌징/필링(486551)·메이크업(176573)·
+  향수(176598)·헤어(176602) 등 — 세션당 1개 카테고리.
