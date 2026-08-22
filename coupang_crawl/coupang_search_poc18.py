@@ -35,7 +35,10 @@ BLOCK_MARKER = OUTPUT_DIR / "last_block_ts.txt"
 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 DISABLE_RE = re.compile(r'disableFixedPagination\\?":(true|false)')
-BLOCK_MARKERS = ("사용권한", "bazadebezolkohpepadr", "access denied")
+# 주의: "bazadebezolkohpepadr" 는 차단 마커가 아님 — 모든 정상 페이지에
+# 포함되는 Akamai 센서 부트스트랩 (rev.23 스모크 오탐 교훈).
+BLOCK_MARKERS = ("사용권한이 없습니다", "Access Denied", "access denied",
+                 'id="error403"')
 report: dict = {"started_at": ts, "keyword": KEYWORD, "loads": []}
 
 
