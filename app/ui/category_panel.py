@@ -288,7 +288,9 @@ class CategoryPanel(QWidget):
             return None
 
     def append_log(self, msg: str) -> None:
-        self.log_view.appendPlainText(log_line(msg))
+        log_line(f"[카테고리] {msg}")
+        timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+        self.log_view.appendPlainText(f"[{timestamp}] {msg}")
 
     def set_phase(self, name: str, current: int, total: int) -> None:
         self.phase_label.setText(f"단계 {current}/{total}: {name}")
