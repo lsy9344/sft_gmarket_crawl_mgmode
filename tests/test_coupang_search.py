@@ -130,11 +130,13 @@ class FastSearchCrawler(SearchCrawler):
 
 
 def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocket=True,
-         content_html=_OK_HTML, include_price_bands=False, category_id="", max_pages=3):
+         content_html=_OK_HTML, include_price_bands=False, category_id="", max_pages=3,
+         keyword="뷰티", category_name=""):
     config = SearchRunConfig(
         output_dir=Path(tmp_dir),
         output_prefix="search_test",
-        keyword="뷰티",
+        keyword=keyword,
+        category_name=category_name,
         sorters=sorters,
         exclude_rocket=exclude_rocket,
         include_price_bands=include_price_bands,
@@ -251,6 +253,29 @@ class SearchPipelineTest(unittest.TestCase):
             plp_urls = [u for u in page.goto_urls if "/np/categories/176522" in u]
             self.assertEqual(len(plp_urls), 2)  # 10페이지 안 가고 빈 페이지 2회에 종료
 
+    def test_category_only_mode_skips_srp_layers(self):
+        """카테고리 전용 모드: 층1/층2 건너뛰고 PLP만 순회 (컨셉 전환 기본 경로)."""
+        rows_seq = [
+            [_row("11"), _row("22", rocket=True)],  # PLP p1
+            [_row("33"), _row("11")],                # PLP p2 (중복 포함)
+        ]
+        page = FakeSearchPage(sorter_rows=rows_seq, viids=["11", "33"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, keyword="", category_id="221934",
+                           category_name="출산/유아동", max_pages=5)
+            self.assertIsNone(summary.error)
+            # SRP/밴드 URL 없음 — 카테고리 PLP 만 방문.
+            # 2 페이지 수집 + 상한 확인용 빈 페이지 2회(연속 시 종료) = 4회 로드
+            self.assertFalse(any("/np/search" in u for u in page.goto_urls))
+            plp_urls = [u for u in page.goto_urls if "/np/categories/221934" in u]
+            self.assertEqual(len(plp_urls), 4)
+            self.assertIn("page=1", plp_urls[0])
+            self.assertIn("page=2", plp_urls[1])
+            # 로켓 1건 제외 + 중복 1건 제거 = 2건
+            self.assertEqual(summary.products_seen, 2)
+            self.assertEqual(summary.business_info_success, 2)
+            self.assertEqual(summary.termination_reason, "success")
+
 
 class SearchParserTest(unittest.TestCase):
     def test_parse_href(self):
@@ -306,8 +331,15 @@ class SearchParserTest(unittest.TestCase):
 class SearchConfigTest(unittest.TestCase):
     def test_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
+            # 키워드도 카테고리도 없으면 불가
             with self.assertRaises(ValueError):
                 SearchRunConfig(output_dir=Path(tmp), keyword="")
+            # 카테고리 전용 모드는 허용 (컨셉 전환 기본 경로)
+            cfg = SearchRunConfig(output_dir=Path(tmp), keyword="",
+                                  category_id="221934", category_name="출산/유아동")
+            self.assertTrue(cfg.category_only)
+            self.assertFalse(SearchRunConfig(output_dir=Path(tmp),
+                                             keyword="뷰티").category_only)
             with self.assertRaises(ValueError):
                 SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", sorters=("bogus",))
             with self.assertRaises(ValueError):

@@ -1,11 +1,11 @@
-"""Coupang 키워드 검색 수집 엔진 — Qt 비의존 코어.
+"""Coupang 수집 엔진 — Qt 비의존 코어.
 
-수집 아키텍처 rev.12 (3층 구조, 전부 실측 근거):
+수집 모드 (2026-08-24 컨셉 전환 이후 카테고리 선택이 기본):
 
-  층1  SRP 검색 — 정렬 4종 × 60개 (랭킹순 제외, 로켓 제외)
-  층2  가격대 필터 — 쿠팡 공식 가격 밴드 순회 × 60개 (rev.11 실측)
-  층3  카테고리 PLP — /np/categories/{id}?page=1..N 순회 (rev.12~13 실측,
-        비로그인 SSR 확인, 상한 ~17페이지)
+  카테고리 모드  — 카테고리 선택 → /np/categories/{id}?page=1..N 순회 수집
+                   (비로그인 SSR, 실측 상한 ~17페이지, rev.11~24)
+  키워드 모드    — 층1 SRP 정렬 4종 + 층2 가격 밴드 (기존 3층 구조 잔존,
+                   CLI 등에서만 사용. 페이지네이션은 비로그인 미제공 — rev.24)
 
 기존 OMP 엔진(CoupangCrawler) 재사용 요소:
 - Camoufox 브라우저 생성/정리, 웜업, 자연스러운 행동 시뮬레이션
@@ -62,9 +62,10 @@ PLP_MAX_PAGES_LIMIT = 50
 
 @dataclass
 class SearchRunConfig(CoupangRunConfig):
-    """키워드 검색 수집 실행 설정 (3층 구조)."""
+    """수집 실행 설정 — 카테고리 전용(기본) 또는 키워드(층1/2 포함) 모드."""
 
     keyword: str = ""
+    category_name: str = ""
     sorters: tuple[str, ...] = DEFAULT_SORTERS
     exclude_rocket: bool = True
     page_delay_min: float = 15.0
@@ -75,8 +76,8 @@ class SearchRunConfig(CoupangRunConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if not self.keyword.strip():
-            raise ValueError("keyword must not be empty")
+        if not self.keyword.strip() and not self.category_id.strip():
+            raise ValueError("keyword or category_id is required")
         if not self.sorters:
             raise ValueError("sorters must not be empty")
         unknown = [s for s in self.sorters if s not in SORTER_NAMES]
@@ -89,17 +90,17 @@ class SearchRunConfig(CoupangRunConfig):
         if not 1 <= self.max_pages <= PLP_MAX_PAGES_LIMIT:
             raise ValueError(f"max_pages must be 1..{PLP_MAX_PAGES_LIMIT}")
 
+    @property
+    def category_only(self) -> bool:
+        """키워드 없이 카테고리 PLP 만 수집하는 모드."""
+        return not self.keyword.strip()
+
 
 class SearchCrawler(CoupangCrawler):
-    """키워드 검색 수집 엔진 (3층 구조).
+    """수집 엔진.
 
-    Phase 1  홈 웜업
-    Phase 2  층1 — SRP 정렬별 수집
-    Phase 3  층2 — 가격 밴드별 수집
-    Phase 4  층3 — 카테고리 PLP 페이지 순회
-    Phase 5  vendor 매핑 (individualInfo API)
-    Phase 6  사업자정보 수집 (getStoreReview API)
-    Phase 7  저장 (CoupangRecord 스키마)
+    카테고리 모드: Phase 1 웜업 → Phase 4 카테고리 PLP 순회 → Phase 5~7
+    키워드 모드:   Phase 1~7 전체 (층1 SRP 정렬 + 층2 가격 밴드 + 층3 PLP)
     """
 
     # 테스트에서 오버라이드 가능
@@ -128,32 +129,37 @@ class SearchCrawler(CoupangCrawler):
         rocket_removed = 0
         page1_html = ""
 
-        # Phase 2: 층1 — SRP 정렬별 수집
+        # Phase 2: 층1 — SRP 정렬별 수집 (키워드 모드만)
         self._phase("search_collect")
-        self._log(f"Phase 2: SRP 수집 — '{config.keyword}' "
-                  f"({len(config.sorters)}개 정렬, 로켓 {'제외' if config.exclude_rocket else '포함'})")
-        for idx, sorter in enumerate(config.sorters):
-            self.control.checkpoint()
-            url = SEARCH_URL.format(q=quote(config.keyword))
-            if sorter != "scoreDesc":
-                url += f"&sorter={sorter}"
-            name = SORTER_NAMES[sorter]
-            self._log(f"  [{idx + 1}/{len(config.sorters)}] {name} 로드...")
+        if config.category_only:
+            self._log("Phase 2: SRP 수집 — 카테고리 전용 모드, 건너뜀")
+        else:
+            self._log(f"Phase 2: SRP 수집 — '{config.keyword}' "
+                      f"({len(config.sorters)}개 정렬, 로켓 {'제외' if config.exclude_rocket else '포함'})")
+            for idx, sorter in enumerate(config.sorters):
+                self.control.checkpoint()
+                url = SEARCH_URL.format(q=quote(config.keyword))
+                if sorter != "scoreDesc":
+                    url += f"&sorter={sorter}"
+                name = SORTER_NAMES[sorter]
+                self._log(f"  [{idx + 1}/{len(config.sorters)}] {name} 로드...")
 
-            items, html = self._load_listing_page(page, url, name)
-            if idx == 0:
-                page1_html = html
-            kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
-            rocket_removed += len(items) - len(kept)
-            fresh = self._merge(products, kept)
-            self._log(f"    {name}: {len(items)}개 중 로켓 {len(items) - len(kept)}개 제외, "
-                      f"신규 {fresh}개 (누적 {len(products)})")
-            self._progress("search_collect", idx + 1, len(config.sorters))
-            self._delay_between_pages(is_last=(idx == len(config.sorters) - 1))
+                items, html = self._load_listing_page(page, url, name)
+                if idx == 0:
+                    page1_html = html
+                kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
+                rocket_removed += len(items) - len(kept)
+                fresh = self._merge(products, kept)
+                self._log(f"    {name}: {len(items)}개 중 로켓 {len(items) - len(kept)}개 제외, "
+                          f"신규 {fresh}개 (누적 {len(products)})")
+                self._progress("search_collect", idx + 1, len(config.sorters))
+                self._delay_between_pages(is_last=(idx == len(config.sorters) - 1))
 
-        # Phase 3: 층2 — 가격 밴드 수집
+        # Phase 3: 층2 — 가격 밴드 수집 (키워드 모드만)
         self._phase("price_bands")
-        if config.include_price_bands:
+        if config.category_only:
+            self._log("Phase 3: 가격 밴드 수집 — 카테고리 전용 모드, 건너뜀")
+        elif config.include_price_bands:
             bands = parse_price_bands(page1_html)
             self._log(f"Phase 3: 가격 밴드 수집 — {len(bands)}개 밴드 감지")
             for idx, (lo, hi) in enumerate(bands):
@@ -174,10 +180,11 @@ class SearchCrawler(CoupangCrawler):
         else:
             self._log("Phase 3: 가격 밴드 수집 — 비활성화, 건너뜀")
 
-        # Phase 4: 층3 — 카테고리 PLP 순회
+        # Phase 4: 층3 — 카테고리 PLP 순회 (카테고리 모드의 본체)
         self._phase("category_collect")
         if config.category_id:
-            self._log(f"Phase 4: 카테고리 {config.category_id} PLP 수집 "
+            label = config.category_name.strip() or config.category_id
+            self._log(f"Phase 4: 카테고리 '{label}' ({config.category_id}) PLP 수집 "
                       f"(최대 {config.max_pages}페이지)")
             empty_streak = 0
             for pno in range(1, config.max_pages + 1):
