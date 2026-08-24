@@ -99,8 +99,16 @@ def main() -> int:
             find_node,
             flatten_descendants,
         )
-        cache = CategoryTreeCache(OUTPUT_DIR / "coupang_category_tree.json")
-        cached = cache.load()
+        cache_candidates = [
+            BASE_DIR.parent / "output" / "coupang_category_tree.json",  # 앱(DEFAULT_OUTPUT_DIR)
+            OUTPUT_DIR / "coupang_category_tree.json",                   # CLI 기본 출력 폴더
+        ]
+        cached = None
+        for p in cache_candidates:
+            c = CategoryTreeCache(p)
+            cached = c.load()
+            if cached is not None:
+                break
         if cached is None:
             parser.error("--with-subcategories 는 카테고리 트리 캐시가 필요합니다 "
                          "(앱에서 '카테고리 목록 새로고침' 1회 실행)")
