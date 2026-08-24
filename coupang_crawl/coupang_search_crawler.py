@@ -77,6 +77,8 @@ def main() -> int:
                         help="층2 가격 밴드 수집 비활성화 (키워드 모드 전용)")
     parser.add_argument("--max-pages", type=int, default=17,
                         help="카테고리 PLP 최대 페이지 (기본 17, 실측 상한)")
+    parser.add_argument("--with-subcategories", action="store_true",
+                        help="선택 카테고리의 하위 전체 포함 (캐시된 카테고리 트리 필요)")
     parser.add_argument("--warmup-time", type=float, default=20.0)
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--output", default=None)
@@ -88,6 +90,26 @@ def main() -> int:
 
     ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     category_only = not args.keyword.strip()
+
+    # 하위 카테고리 포함 — 캐시된 트리에서 평탄화 (네트워크 요청 없음)
+    subcategories: tuple = ()
+    if args.with_subcategories and args.category_id.strip():
+        from app.core.coupang.categories import (
+            CategoryTreeCache,
+            find_node,
+            flatten_descendants,
+        )
+        cache = CategoryTreeCache(OUTPUT_DIR / "coupang_category_tree.json")
+        cached = cache.load()
+        if cached is None:
+            parser.error("--with-subcategories 는 카테고리 트리 캐시가 필요합니다 "
+                         "(앱에서 '카테고리 목록 새로고침' 1회 실행)")
+        node = find_node(cached[0], args.category_id.strip())
+        if node is None:
+            parser.error(f"카테고리 {args.category_id} 를 트리에서 찾을 수 없습니다")
+        subcategories = tuple((c.id, c.name) for c in flatten_descendants(node))
+        print(f"하위 카테고리 포함: 총 {1 + len(subcategories)}개 순회")
+
     if args.output:
         output_prefix = args.output
     elif category_only:
@@ -104,6 +126,7 @@ def main() -> int:
         keyword=args.keyword,
         category_id=args.category_id,
         category_name=args.category_name,
+        subcategories=subcategories,
         sorters=DEFAULT_SORTERS,
         exclude_rocket=args.exclude_rocket,
         page_delay_min=args.page_delay_min,

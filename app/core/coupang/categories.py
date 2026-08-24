@@ -174,6 +174,22 @@ def find_node(groups: list[tuple[str, list[CategoryNode]]],
     return None
 
 
+def flatten_descendants(node: CategoryNode) -> list[CategoryNode]:
+    """자신 제외 모든 후손 노드 — 깊이 우선 순서 (중복 id 제거)."""
+    out: list[CategoryNode] = []
+    seen: set[str] = set()
+
+    def walk(n: CategoryNode) -> None:
+        for c in n.children:
+            if c.id and c.id not in seen:
+                seen.add(c.id)
+                out.append(c)
+            walk(c)
+
+    walk(node)
+    return out
+
+
 # ── 캐시 ────────────────────────────────────────────────────────────────
 
 

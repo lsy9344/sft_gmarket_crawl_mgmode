@@ -19,6 +19,7 @@ from app.core.coupang.categories import (
     CategoryTreeFetcher,
     count_nodes,
     find_node,
+    flatten_descendants,
     parse_category_groups,
     parse_category_node,
 )
@@ -97,6 +98,14 @@ class ParseTest(unittest.TestCase):
         self.assertIsNotNone(node)
         self.assertEqual(node.name, "출산/유아동")
         self.assertIsNone(find_node(groups, "999999"))
+
+    def test_flatten_descendants(self):
+        groups = parse_category_groups(_payload())
+        fashion = find_node(groups, "200")
+        subs = flatten_descendants(fashion)
+        self.assertEqual([n.id for n in subs], ["201", "202", "203"])
+        leaf = find_node(groups, "202")
+        self.assertEqual(flatten_descendants(leaf), [])
 
     def test_parse_node_non_category_without_children_dropped(self):
         node = parse_category_node({"name": "x", "linkUri": "/np/campaigns/1",

@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.core.applog import log_line
-from app.core.coupang.categories import CategoryNode
+from app.core.coupang.categories import CategoryNode, flatten_descendants
 from app.core.coupang.search_crawler import SearchRunConfig
 
 DISPLAY_COLUMNS = (
@@ -68,6 +68,7 @@ class CategoryPanel(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._state = "idle"
+        self._groups: list[tuple[str, list[CategoryNode]]] = []
         self._build_ui()
         self._apply_state()
 
@@ -117,6 +118,10 @@ class CategoryPanel(QWidget):
         self.chk_exclude_rocket = QCheckBox("로켓배송 상품 제외")
         self.chk_exclude_rocket.setChecked(True)
         form.addRow("필터:", self.chk_exclude_rocket)
+
+        self.chk_include_subs = QCheckBox("하위 카테고리 포함 수집")
+        self.chk_include_subs.setChecked(True)
+        form.addRow("하위 카테고리:", self.chk_include_subs)
 
         self.spin_max_pages = QSpinBox()
         self.spin_max_pages.setRange(1, 50)
@@ -180,6 +185,7 @@ class CategoryPanel(QWidget):
 
     def set_category_groups(self, groups: list[tuple[str, list[CategoryNode]]],
                             fetched_at: str = "", total: int = 0) -> None:
+        self._groups = groups
         self.category_tree.clear()
         for label, roots in groups:
             group_item = QTreeWidgetItem([f"▣ {label}", ""])
@@ -203,9 +209,36 @@ class CategoryPanel(QWidget):
         cid = current.data(0, ROLE_ID) if current else ""
         name = current.data(0, ROLE_NAME) if current else ""
         if cid:
-            self.selected_label.setText(f"선택: {name} ({cid})")
+            subs = self._descendant_count(str(cid))
+            extra = f" — 하위 {subs}개 포함 가능" if subs else " — 하위 없음"
+            self.selected_label.setText(f"선택: {name} ({cid}){extra}")
         else:
             self.selected_label.setText("선택: 없음 (세부 카테고리를 선택하세요)")
+
+    def _find_selected_node(self, category_id: str) -> CategoryNode | None:
+        stack = [n for _, roots in self._groups for n in roots]
+        while stack:
+            node = stack.pop()
+            if node.id == category_id:
+                return node
+            stack.extend(node.children)
+        return None
+
+    def _descendant_count(self, category_id: str) -> int:
+        node = self._find_selected_node(category_id)
+        return len(flatten_descendants(node)) if node else 0
+
+    def selected_subcategories(self) -> list[tuple[str, str]]:
+        """선택 카테고리의 하위 전부 (id, 이름) — 체크박스 해제 시 []."""
+        if not self.chk_include_subs.isChecked():
+            return []
+        selected = self.selected_category()
+        if not selected:
+            return []
+        node = self._find_selected_node(selected[0])
+        if node is None:
+            return []
+        return [(c.id, c.name) for c in flatten_descendants(node)]
 
     def selected_category(self) -> tuple[str, str] | None:
         """(category_id, name) — 그룹 헤더 등 비카테고리 선택 시 None."""
@@ -234,7 +267,7 @@ class CategoryPanel(QWidget):
         self.btn_cancel.setEnabled(s in ("running", "paused"))
         self.btn_open_result.setEnabled(s in ("idle", "finished", "failed"))
         settings_enabled = s in ("idle", "finished", "failed")
-        for w in (self.output_dir_edit, self.chk_exclude_rocket,
+        for w in (self.output_dir_edit, self.chk_exclude_rocket, self.chk_include_subs,
                   self.spin_max_pages, self.spin_delay_min, self.spin_delay_max):
             w.setEnabled(settings_enabled)
         self.btn_browse.setEnabled(settings_enabled)
@@ -252,7 +285,7 @@ class CategoryPanel(QWidget):
             for b in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_cancel,
                       self.btn_refresh_categories):
                 b.setEnabled(False)
-            for w in (self.output_dir_edit, self.chk_exclude_rocket,
+            for w in (self.output_dir_edit, self.chk_exclude_rocket, self.chk_include_subs,
                       self.spin_max_pages, self.spin_delay_min, self.spin_delay_max):
                 w.setEnabled(False)
             self.btn_browse.setEnabled(False)
@@ -272,6 +305,7 @@ class CategoryPanel(QWidget):
         delay_max = max(delay_min, self.spin_delay_max.value())
         ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
         safe_name = re.sub(r"[^\w가-힣]+", "_", name)[:30].strip("_") or cid
+        subs = self.selected_subcategories()
         try:
             return SearchRunConfig(
                 output_dir=Path(output_dir),
@@ -283,6 +317,7 @@ class CategoryPanel(QWidget):
                 max_pages=self.spin_max_pages.value(),
                 page_delay_min=delay_min,
                 page_delay_max=delay_max,
+                subcategories=tuple(subs),
             )
         except ValueError:
             return None

@@ -769,6 +769,25 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # 하위 포함 시 규모·예상 시간 안내 (빈 페이지 조기 종료로 실제는 더 짧음)
+        total_cats = 1 + len(config.subcategories)
+        if total_cats > 1:
+            per_page = (config.page_delay_min + config.page_delay_max) / 2 + 10
+            cooldown = (config.category_cooldown_min + config.category_cooldown_max) / 2
+            est_min = int(total_cats * (config.max_pages * per_page + cooldown) / 60)
+            est_txt = (f"{est_min // 60}시간 {est_min % 60}분" if est_min >= 60
+                       else f"{est_min}분")
+            reply = QMessageBox.question(
+                self, "하위 카테고리 포함 수집",
+                f"선택 카테고리 + 하위 총 {total_cats}개를 수집합니다.\n"
+                f"최대 예상 시간: 약 {est_txt} 이상\n"
+                f"(빈 페이지가 일찍 나오면 실제로는 더 짧게 끝납니다)\n\n"
+                f"오래 걸려도 진행할까요? 중간에 취소해도 모은 결과는 저장됩니다.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
         try:
             config.output_dir.mkdir(parents=True, exist_ok=True)
             import tempfile as _tf

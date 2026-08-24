@@ -73,6 +73,10 @@ class SearchRunConfig(CoupangRunConfig):
     include_price_bands: bool = True
     category_id: str = ""
     max_pages: int = 17
+    # 하위 카테고리 포함 수집 — (카테고리ID, 이름) 순서 쌍 (부모 다음 순회)
+    subcategories: tuple[tuple[str, str], ...] = ()
+    category_cooldown_min: float = 30.0
+    category_cooldown_max: float = 60.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -89,6 +93,11 @@ class SearchRunConfig(CoupangRunConfig):
             raise ValueError("category_id must be numeric")
         if not 1 <= self.max_pages <= PLP_MAX_PAGES_LIMIT:
             raise ValueError(f"max_pages must be 1..{PLP_MAX_PAGES_LIMIT}")
+        for cid, _name in self.subcategories:
+            if not str(cid).strip().isdigit():
+                raise ValueError(f"subcategory id must be numeric: {cid}")
+        if self.category_cooldown_min < 0 or self.category_cooldown_max < self.category_cooldown_min:
+            raise ValueError("invalid category cooldown range")
 
     @property
     def category_only(self) -> bool:
@@ -181,30 +190,43 @@ class SearchCrawler(CoupangCrawler):
             self._log("Phase 3: 가격 밴드 수집 — 비활성화, 건너뜀")
 
         # Phase 4: 층3 — 카테고리 PLP 순회 (카테고리 모드의 본체)
+        # 선택 카테고리 + 하위 카테고리 큐 순회 (중복 상품은 자동 제거)
         self._phase("category_collect")
+        queue: list[tuple[str, str]] = []
         if config.category_id:
-            label = config.category_name.strip() or config.category_id
-            self._log(f"Phase 4: 카테고리 '{label}' ({config.category_id}) PLP 수집 "
-                      f"(최대 {config.max_pages}페이지)")
-            empty_streak = 0
-            for pno in range(1, config.max_pages + 1):
-                self.control.checkpoint()
-                url = CATEGORY_URL.format(cid=config.category_id.strip(), page=pno)
-                self._log(f"  [page {pno}] 로드...")
-                items, _ = self._load_listing_page(page, url, f"PLP p{pno}", retry_empty=False)
-                kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
-                rocket_removed += len(items) - len(kept)
-                fresh = self._merge(products, kept)
-                self._log(f"  [page {pno}] 신규 {fresh}개 (누적 {len(products)})")
-                self._progress("category_collect", pno, config.max_pages)
-                if not items:
-                    empty_streak += 1
-                    if empty_streak >= PLP_EMPTY_TOLERANCE:
-                        self._log(f"  빈 페이지 {empty_streak}회 연속 — PLP 종료")
-                        break
-                else:
-                    empty_streak = 0
-                self._delay_between_pages(is_last=(pno == config.max_pages))
+            label0 = config.category_name.strip() or config.category_id
+            queue.append((config.category_id.strip(), label0))
+        queue.extend((str(cid).strip(), str(name)) for cid, name in config.subcategories)
+        if queue:
+            self._log(f"Phase 4: 카테고리 PLP 수집 — {queue[0][1]} 외 {len(queue) - 1}개 "
+                      f"(카테고리당 최대 {config.max_pages}페이지)")
+            for cidx, (cid, cname) in enumerate(queue):
+                self._log(f"  [{cidx + 1}/{len(queue)}] 카테고리 '{cname}' ({cid}) 시작")
+                empty_streak = 0
+                for pno in range(1, config.max_pages + 1):
+                    self.control.checkpoint()
+                    url = CATEGORY_URL.format(cid=cid, page=pno)
+                    self._log(f"    [page {pno}] 로드...")
+                    items, _ = self._load_listing_page(page, url, f"{cname} p{pno}",
+                                                       retry_empty=False)
+                    kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
+                    rocket_removed += len(items) - len(kept)
+                    fresh = self._merge(products, kept)
+                    self._log(f"    [page {pno}] 신규 {fresh}개 (누적 {len(products)})")
+                    self._progress("category_collect", pno, config.max_pages)
+                    if not items:
+                        empty_streak += 1
+                        if empty_streak >= PLP_EMPTY_TOLERANCE:
+                            self._log(f"    빈 페이지 {empty_streak}회 연속 — '{cname}' 종료")
+                            break
+                    else:
+                        empty_streak = 0
+                    self._delay_between_pages(is_last=(pno == config.max_pages))
+                if cidx < len(queue) - 1:
+                    cooldown = random.uniform(config.category_cooldown_min,
+                                              config.category_cooldown_max)
+                    self._log(f"  카테고리 전환 쿨다운 {cooldown:.0f}초...")
+                    self.control.sleep(cooldown)
         else:
             self._log("Phase 4: 카테고리 수집 — 미지정, 건너뜀")
 

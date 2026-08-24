@@ -131,7 +131,7 @@ class FastSearchCrawler(SearchCrawler):
 
 def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocket=True,
          content_html=_OK_HTML, include_price_bands=False, category_id="", max_pages=3,
-         keyword="뷰티", category_name=""):
+         keyword="뷰티", category_name="", subcategories=()):
     config = SearchRunConfig(
         output_dir=Path(tmp_dir),
         output_prefix="search_test",
@@ -141,6 +141,9 @@ def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocke
         exclude_rocket=exclude_rocket,
         include_price_bands=include_price_bands,
         category_id=category_id,
+        subcategories=subcategories,
+        category_cooldown_min=0,
+        category_cooldown_max=0,
         max_pages=max_pages,
         warmup_time=0,
         page_delay_min=0,
@@ -262,7 +265,9 @@ class SearchPipelineTest(unittest.TestCase):
         page = FakeSearchPage(sorter_rows=rows_seq, viids=["11", "33"])
         with tempfile.TemporaryDirectory() as tmp:
             summary = _run(tmp, page, keyword="", category_id="221934",
-                           category_name="출산/유아동", max_pages=5)
+                           category_name="출산/유아동", max_pages=5,
+                           subcategories=(("310632", "비타민/미네랄"),
+                                          ("310655", "건강식품")))
             self.assertIsNone(summary.error)
             # SRP/밴드 URL 없음 — 카테고리 PLP 만 방문.
             # 2 페이지 수집 + 상한 확인용 빈 페이지 2회(연속 시 종료) = 4회 로드
@@ -326,6 +331,39 @@ class SearchParserTest(unittest.TestCase):
         self.assertEqual(items[0].price, 9920)
         self.assertTrue(items[1].rocket)
         self.assertIn("vendorItemId=11", items[0].url)
+
+
+class SearchSubcategoryTest(unittest.TestCase):
+    def test_subcategory_queue_traversal(self):
+        """부모 + 하위 2개 큐 순회 — 순서·중복 제거·전체 합산."""
+        rows_seq = [
+            [_row("11")],              # 부모 p1
+            [], [],                    # 부모 빈 페이지 2회 → 부모 종료
+            [_row("22"), _row("11")],  # 하위1 p1 (중복 포함)
+            [], [],                    # 하위1 종료
+            [_row("33")],              # 하위2 p1
+            [], [],                    # 하위2 종료
+        ]
+        page = FakeSearchPage(sorter_rows=rows_seq, viids=["11", "22", "33"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, keyword="", category_id="305798",
+                           category_name="헬스/건강식품", max_pages=5,
+                           subcategories=(("310632", "비타민/미네랄"),
+                                          ("310655", "건강식품")))
+            self.assertIsNone(summary.error)
+            cat_urls = [u for u in page.goto_urls if "/np/categories/" in u]
+            self.assertEqual(len([u for u in cat_urls if "305798" in u]), 3)
+            self.assertTrue(any("310632" in u for u in cat_urls))
+            self.assertTrue(any("310655" in u for u in cat_urls))
+            self.assertEqual(summary.products_seen, 3)  # 중복 1건 제거
+            self.assertEqual(summary.business_info_success, 3)
+            self.assertEqual(summary.termination_reason, "success")
+
+    def test_subcategory_id_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                SearchRunConfig(output_dir=Path(tmp), category_id="305798",
+                                subcategories=(("abc", "잘못"),))
 
 
 class SearchConfigTest(unittest.TestCase):
