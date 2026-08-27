@@ -52,6 +52,11 @@ CATEGORY_GROUPS = (
 CATEGORY_URI_PREFIX = "/np/categories/"
 # 캐시 기본 수명 — 카테고리 트리 변경 주기는 느림 (7일)
 CACHE_TTL_HOURS = 24 * 7
+# 단일 EXE에 포함되는 검증 완료 기본 목록. 실시간 요청이 차단돼도 카테고리
+# 선택 기능을 사용할 수 있도록 하며, 네트워크 캐시와 달리 만료시키지 않는다.
+DEFAULT_SEED_CACHE_PATH = (
+    Path(__file__).resolve().parents[2] / "resources" / "coupang_category_tree.json"
+)
 
 
 @dataclass
@@ -195,31 +200,85 @@ def flatten_descendants(node: CategoryNode) -> list[CategoryNode]:
 
 @dataclass
 class CategoryTreeCache:
-    """카테고리 트리 로컬 캐시 (네트워크 재요청 최소화 — 차단 예방)."""
+    """카테고리 트리 캐시.
+
+    ``path``의 최신 네트워크 캐시를 우선 사용한다. 캐시가 없거나 만료·손상됐으면
+    ``seed_path``의 검증 완료 기본 목록을 사용한다. 기본 목록은 쿠팡 차단 상황의
+    오프라인 안전망이므로 만료시키지 않는다.
+    """
 
     path: Path
     ttl_hours: float = CACHE_TTL_HOURS
+    seed_path: Path | None = None
 
-    def load(self) -> tuple[list[tuple[str, list[CategoryNode]]], str] | None:
-        """유효 캐시 → (그룹, 시각 문자열). 없거나 만료면 None."""
+    @staticmethod
+    def _valid_cached_node(node: CategoryNode, depth: int = 0) -> bool:
+        """캐시가 만든 정상 CategoryNode 구조인지 제한된 깊이로 검증한다."""
+        if depth > 10:
+            return False
+        if not node.name.strip():
+            return False
+        if node.id:
+            if not node.id.isdigit() or not node.uri.startswith(CATEGORY_URI_PREFIX):
+                return False
+        elif node.uri or not node.children:
+            # 비카테고리 구조 부모는 자식이 있을 때만 허용한다.
+            return False
+        return all(
+            CategoryTreeCache._valid_cached_node(child, depth + 1)
+            for child in node.children
+        )
+
+    def _load_path(
+        self, path: Path, *, enforce_ttl: bool
+    ) -> tuple[list[tuple[str, list[CategoryNode]]], str] | None:
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
             return None
-        fetched_at = raw.get("fetched_at", "")
-        try:
-            age_h = (datetime.now().timestamp() - float(raw.get("fetched_ts", 0))) / 3600
-        except (TypeError, ValueError):
+        if not isinstance(raw, dict):
             return None
-        if age_h > self.ttl_hours:
-            return None
+        fetched_at = str(raw.get("fetched_at", ""))
+        if enforce_ttl:
+            try:
+                fetched_ts = float(raw.get("fetched_ts", 0))
+                now_ts = datetime.now().timestamp()
+                age_h = (now_ts - fetched_ts) / 3600
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if fetched_ts <= 0 or fetched_ts > now_ts + 300 or age_h > self.ttl_hours:
+                return None
         groups_raw = raw.get("groups", [])
+        if not isinstance(groups_raw, list):
+            return None
         groups: list[tuple[str, list[CategoryNode]]] = []
-        for label, nodes_raw in groups_raw:
-            groups.append((label, [CategoryNode.from_dict(n) for n in nodes_raw]))
-        if not groups:
+        try:
+            for item in groups_raw:
+                if not isinstance(item, list) or len(item) != 2:
+                    return None
+                label, nodes_raw = item
+                if not isinstance(label, str) or not label.strip():
+                    return None
+                if not isinstance(nodes_raw, list) or not nodes_raw:
+                    return None
+                nodes = [CategoryNode.from_dict(n) for n in nodes_raw]
+                if not all(self._valid_cached_node(node) for node in nodes):
+                    return None
+                groups.append((label, nodes))
+            if not groups or count_nodes(groups) <= 0:
+                return None
+        except (AttributeError, TypeError, ValueError, RecursionError):
             return None
         return groups, fetched_at
+
+    def load(self) -> tuple[list[tuple[str, list[CategoryNode]]], str] | None:
+        """최신 로컬 캐시, 없으면 만료 없는 기본 목록을 반환한다."""
+        cached = self._load_path(self.path, enforce_ttl=True)
+        if cached is not None:
+            return cached
+        if self.seed_path is None or self.seed_path == self.path:
+            return None
+        return self._load_path(self.seed_path, enforce_ttl=False)
 
     def save(self, groups: list[tuple[str, list[CategoryNode]]]) -> str:
         now = datetime.now()

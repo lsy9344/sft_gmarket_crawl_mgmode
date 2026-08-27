@@ -17,7 +17,11 @@ from PyQt6.QtWidgets import (
 
 from app.core.base import Control
 from app.core.config import DEFAULT_OUTPUT_DIR
-from app.core.coupang.categories import CategoryTreeCache, count_nodes
+from app.core.coupang.categories import (
+    DEFAULT_SEED_CACHE_PATH,
+    CategoryTreeCache,
+    count_nodes,
+)
 from app.core.crawler import reconcile_leftover_checkpoints
 from app.core.plan import build_crawl_plan
 from app.core.storage import LoadStatus, Storage
@@ -63,7 +67,10 @@ class MainWindow(QMainWindow):
         self.category_worker: SearchWorker | None = None
         self.categories_control: Control | None = None
         self.categories_worker: CategoryWorker | None = None
-        self.category_cache = CategoryTreeCache(DEFAULT_OUTPUT_DIR / "coupang_category_tree.json")
+        self.category_cache = CategoryTreeCache(
+            DEFAULT_OUTPUT_DIR / "coupang_category_tree.json",
+            seed_path=DEFAULT_SEED_CACHE_PATH,
+        )
 
         self._build_ui()
         self._set_ui_state("idle")
@@ -749,7 +756,22 @@ class MainWindow(QMainWindow):
 
     def _on_categories_error(self, msg: str) -> None:
         self.category_panel.append_log(f"[카테고리 오류] {msg}")
-        self.category_panel.set_cache_label("카테고리 로드 실패 — 캐시가 있으면 재시도하세요")
+        cached = self.category_cache.load()
+        if cached is not None:
+            groups, fetched_at = cached
+            total = count_nodes(groups)
+            self.category_panel.set_category_groups(groups, fetched_at, total)
+            self.category_panel.append_log(
+                f"[로컬 목록] 새로고침 대신 검증된 카테고리 {total}개를 사용합니다."
+            )
+            self._show_status(f"로컬 카테고리 목록 사용 중 ({total}개)")
+            QMessageBox.warning(
+                self,
+                "카테고리 새로고침 실패",
+                f"{msg}\n\n검증된 로컬 카테고리 {total}개를 대신 사용합니다.",
+            )
+            return
+        self.category_panel.set_cache_label("카테고리 로드 실패 — 사용 가능한 로컬 목록 없음")
         QMessageBox.warning(self, "카테고리 로드 실패", msg)
 
     def _on_categories_thread_done(self) -> None:

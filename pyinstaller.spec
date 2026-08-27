@@ -56,6 +56,8 @@ a = Analysis(
     binaries=list(_patchright_bins) + _playwright_bins,
     datas=[
         (str(project_root / "app" / "ui" / "styles" / "theme.qss"), "app/ui/styles"),
+        (str(project_root / "app" / "resources" / "coupang_category_tree.json"),
+         "app/resources"),
     ] + _pkg_datas + _patchright_datas + _playwright_datas,
     hiddenimports=[
         "PyQt6.QtCore",

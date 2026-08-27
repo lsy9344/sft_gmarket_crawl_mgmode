@@ -155,6 +155,70 @@ class CacheTest(unittest.TestCase):
             cache.path.write_text("{broken", encoding="utf-8")
             self.assertIsNone(cache.load())
 
+    def test_seed_fallback_ignores_expiry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = CategoryTreeCache(root / "seed.json")
+            seed.save(parse_category_groups(_payload()))
+            raw = json.loads(seed.path.read_text(encoding="utf-8"))
+            raw["fetched_ts"] = time.time() - 365 * 24 * 3600
+            seed.path.write_text(json.dumps(raw), encoding="utf-8")
+
+            cache = CategoryTreeCache(root / "missing.json", seed_path=seed.path)
+            loaded = cache.load()
+            self.assertIsNotNone(loaded)
+            self.assertEqual(count_nodes(loaded[0]), 7)
+
+    def test_fresh_primary_cache_wins_over_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = CategoryTreeCache(root / "seed.json")
+            seed.save(parse_category_groups(_payload()))
+            primary = CategoryTreeCache(root / "primary.json")
+            primary.save([("로컬", [CategoryNode("999", "로컬", "/np/categories/999")])])
+
+            cache = CategoryTreeCache(primary.path, seed_path=seed.path)
+            loaded = cache.load()
+            self.assertEqual(loaded[0][0][0], "로컬")
+            self.assertEqual(count_nodes(loaded[0]), 1)
+
+    def test_malformed_primary_falls_back_to_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = CategoryTreeCache(root / "seed.json")
+            seed.save(parse_category_groups(_payload()))
+            primary = root / "primary.json"
+            primary.write_text(json.dumps({
+                "fetched_ts": time.time(),
+                "groups": [["손상", ["not-a-node"]]],
+            }), encoding="utf-8")
+
+            loaded = CategoryTreeCache(primary, seed_path=seed.path).load()
+            self.assertIsNotNone(loaded)
+            self.assertEqual(count_nodes(loaded[0]), 7)
+
+    def test_empty_or_future_primary_falls_back_to_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = CategoryTreeCache(root / "seed.json")
+            seed.save(parse_category_groups(_payload()))
+            primary = root / "primary.json"
+            cache = CategoryTreeCache(primary, seed_path=seed.path)
+
+            primary.write_text(json.dumps({
+                "fetched_ts": time.time(),
+                "groups": [["빈 그룹", []]],
+            }), encoding="utf-8")
+            self.assertEqual(count_nodes(cache.load()[0]), 7)
+
+            primary.write_text(json.dumps({
+                "fetched_ts": time.time() + 86400,
+                "groups": [["미래", [CategoryNode(
+                    "999", "미래", "/np/categories/999"
+                ).to_dict()]]],
+            }), encoding="utf-8")
+            self.assertEqual(count_nodes(cache.load()[0]), 7)
+
 
 class FakePage:
     def __init__(self, content_html="<html>ok</html>" + "x" * 3000, evaluate_result=None):

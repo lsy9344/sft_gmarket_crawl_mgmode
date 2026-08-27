@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -122,6 +123,23 @@ class MainWindowTabTest(unittest.TestCase):
     def test_coupang_panel_exists(self):
         """AC-04: Coupang panel exists and app starts without Camoufox."""
         self.assertIsInstance(self.win.coupang_panel, CoupangPanel)
+
+    def test_offline_seed_categories_loaded(self):
+        """네트워크 없이도 EXE 내 기본 카테고리 목록이 즉시 보여야 한다."""
+        self.assertGreater(self.win.category_panel.category_tree.topLevelItemCount(), 0)
+        total = sum(
+            node.count()
+            for _, roots in self.win.category_panel._groups
+            for node in roots
+        )
+        self.assertEqual(total, 3167)
+
+    @patch("app.ui.main_window.QMessageBox.warning")
+    def test_refresh_block_falls_back_to_local_categories(self, warning):
+        self.win._on_categories_error("쿠팡 차단 감지: 소프트 블록 (452자)")
+        self.assertGreater(self.win.category_panel.category_tree.topLevelItemCount(), 0)
+        self.assertIn("검증된 카테고리 3167개", self.win.category_panel.log_view.toPlainText())
+        warning.assert_called_once()
 
     def test_cross_tab_busy_blocks_coupang(self):
         """AC-15: Gmarket running blocks Coupang start."""
