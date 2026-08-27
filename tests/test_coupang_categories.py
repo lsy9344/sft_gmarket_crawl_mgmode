@@ -211,13 +211,35 @@ class CacheTest(unittest.TestCase):
             }), encoding="utf-8")
             self.assertEqual(count_nodes(cache.load()[0]), 7)
 
+            for bad_ts in (time.time() + 1, float("nan")):
+                primary.write_text(json.dumps({
+                    "fetched_ts": bad_ts,
+                    "groups": [["미래", [CategoryNode(
+                        "999", "미래", "/np/categories/999"
+                    ).to_dict()]]],
+                }), encoding="utf-8")
+                self.assertEqual(count_nodes(cache.load()[0]), 7)
+
+    def test_coercible_wrong_node_types_fall_back_to_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = CategoryTreeCache(root / "seed.json")
+            seed.save(parse_category_groups(_payload()))
+            primary = root / "primary.json"
             primary.write_text(json.dumps({
-                "fetched_ts": time.time() + 86400,
-                "groups": [["미래", [CategoryNode(
-                    "999", "미래", "/np/categories/999"
-                ).to_dict()]]],
+                "fetched_at": "now",
+                "fetched_ts": time.time(),
+                "groups": [["손상", [{
+                    "id": 999,
+                    "name": ["목록 이름"],
+                    "uri": "/np/categories/999",
+                    "children": [],
+                }]]],
             }), encoding="utf-8")
-            self.assertEqual(count_nodes(cache.load()[0]), 7)
+
+            loaded = CategoryTreeCache(primary, seed_path=seed.path).load()
+            self.assertIsNotNone(loaded)
+            self.assertEqual(count_nodes(loaded[0]), 7)
 
 
 class FakePage:

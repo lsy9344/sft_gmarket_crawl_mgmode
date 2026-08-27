@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -212,21 +213,27 @@ class CategoryTreeCache:
     seed_path: Path | None = None
 
     @staticmethod
-    def _valid_cached_node(node: CategoryNode, depth: int = 0) -> bool:
-        """캐시가 만든 정상 CategoryNode 구조인지 제한된 깊이로 검증한다."""
-        if depth > 10:
+    def _valid_raw_cached_node(raw: object, depth: int = 0) -> bool:
+        """자동 형변환 전에 JSON 노드의 자료형·깊이·필수 값을 검증한다."""
+        if depth > 10 or not isinstance(raw, dict):
             return False
-        if not node.name.strip():
+        cid = raw.get("id")
+        name = raw.get("name")
+        uri = raw.get("uri")
+        children = raw.get("children")
+        if not all(isinstance(value, str) for value in (cid, name, uri)):
             return False
-        if node.id:
-            if not node.id.isdigit() or not node.uri.startswith(CATEGORY_URI_PREFIX):
+        if not isinstance(children, list) or not name.strip():
+            return False
+        if cid:
+            if not cid.isdigit() or not uri.startswith(CATEGORY_URI_PREFIX):
                 return False
-        elif node.uri or not node.children:
+        elif uri or not children:
             # 비카테고리 구조 부모는 자식이 있을 때만 허용한다.
             return False
         return all(
-            CategoryTreeCache._valid_cached_node(child, depth + 1)
-            for child in node.children
+            CategoryTreeCache._valid_raw_cached_node(child, depth + 1)
+            for child in children
         )
 
     def _load_path(
@@ -238,15 +245,20 @@ class CategoryTreeCache:
             return None
         if not isinstance(raw, dict):
             return None
-        fetched_at = str(raw.get("fetched_at", ""))
+        fetched_at_raw = raw.get("fetched_at", "")
+        if not isinstance(fetched_at_raw, str):
+            return None
+        fetched_at = fetched_at_raw
         if enforce_ttl:
-            try:
-                fetched_ts = float(raw.get("fetched_ts", 0))
-                now_ts = datetime.now().timestamp()
-                age_h = (now_ts - fetched_ts) / 3600
-            except (TypeError, ValueError, OverflowError):
+            fetched_ts_raw = raw.get("fetched_ts", 0)
+            if isinstance(fetched_ts_raw, bool) or not isinstance(fetched_ts_raw, (int, float)):
                 return None
-            if fetched_ts <= 0 or fetched_ts > now_ts + 300 or age_h > self.ttl_hours:
+            fetched_ts = float(fetched_ts_raw)
+            now_ts = datetime.now().timestamp()
+            if not math.isfinite(fetched_ts):
+                return None
+            age_h = (now_ts - fetched_ts) / 3600
+            if fetched_ts <= 0 or fetched_ts > now_ts or age_h > self.ttl_hours:
                 return None
         groups_raw = raw.get("groups", [])
         if not isinstance(groups_raw, list):
@@ -261,10 +273,9 @@ class CategoryTreeCache:
                     return None
                 if not isinstance(nodes_raw, list) or not nodes_raw:
                     return None
-                nodes = [CategoryNode.from_dict(n) for n in nodes_raw]
-                if not all(self._valid_cached_node(node) for node in nodes):
+                if not all(self._valid_raw_cached_node(node) for node in nodes_raw):
                     return None
-                groups.append((label, nodes))
+                groups.append((label, [CategoryNode.from_dict(n) for n in nodes_raw]))
             if not groups or count_nodes(groups) <= 0:
                 return None
         except (AttributeError, TypeError, ValueError, RecursionError):
