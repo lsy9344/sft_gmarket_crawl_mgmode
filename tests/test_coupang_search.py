@@ -24,6 +24,7 @@ from app.core.coupang.search_parser import (
 
 _OK_HTML = "<html><body>" + ("검색결과 콘텐츠 " * 400) + "</body></html>"
 _BLOCKED_HTML = "<html><body>요청하신 페이지의 사용권한이 없습니다.</body></html>" + "x" * 2000
+_AKAMAI_HTML = "<html><body>Access Denied<br>Reference #18.4a2b1c3.1234</body></html>" + "x" * 2000
 
 
 def _row(viid: str, rocket: bool = False, title: str = "상품") -> dict:
@@ -70,14 +71,17 @@ class FakeMouse:
 class FakeSearchPage:
     """정렬별 DOM 추출 결과·개별 API 응답을 스크립팅하는 fake page."""
 
-    def __init__(self, sorter_rows=None, content_html=_OK_HTML, viids=None):
+    def __init__(self, sorter_rows=None, content_html=_OK_HTML, viids=None,
+                 menu_has_link=False):
         self.mouse = FakeMouse()
         self.url = "about:blank"
         self._sorter_rows = list(sorter_rows or [])
         self._dom_call = 0
         self._content_html = content_html
         self._viids = viids or []
+        self.menu_has_link = menu_has_link
         self.goto_urls = []
+        self.waited_url_patterns = []
         self.backoff_sleeps = []
 
     def goto(self, url, **kwargs):
@@ -86,6 +90,9 @@ class FakeSearchPage:
 
     def wait_for_load_state(self, *a, **k):
         pass
+
+    def wait_for_url(self, url, timeout=None):
+        self.waited_url_patterns.append(str(url))
 
     def content(self):
         return self._content_html
@@ -103,6 +110,14 @@ class FakeSearchPage:
                 self._dom_call += 1
                 return rows
             return []
+        if "'/np/categories/' + cid" in script:
+            # 메뉴 클릭 진입 JS — menu_has_link 에 따라 성공/실패를 시뮬레이션.
+            # 성공 시 실제 클릭처럼 페이지 URL 을 목표 PLP 로 전환한다.
+            cid = args[0] if args else ""
+            if self.menu_has_link:
+                self.url = f"https://www.coupang.com/np/categories/{cid}"
+                return True
+            return False
         if "individualInfo" in script:
             return _individual_response(self._viids)
         if "getStoreReview" in script:
@@ -127,6 +142,15 @@ class FakeBrowser:
 
 class FastSearchCrawler(SearchCrawler):
     _backoff_seconds = (0, 0, 0)
+
+
+class ClickJsErrorPage(FakeSearchPage):
+    """메뉴 클릭 JS 평가 자체가 실패하는 페이지 — goto 폴백 경로 검증용."""
+
+    def evaluate(self, script, *args):
+        if "'/np/categories/' + cid" in script:
+            raise RuntimeError("click js boom")
+        return super().evaluate(script, *args)
 
 
 def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocket=True,
@@ -193,6 +217,10 @@ class SearchPipelineTest(unittest.TestCase):
         page = FakeSearchPage(sorter_rows=[[_row("11")]], content_html=_BLOCKED_HTML)
         with tempfile.TemporaryDirectory() as tmp:
             summary = _run(tmp, page)
+            dumps = list(Path(tmp).glob("blocked_*.html"))
+            # 차단 응답 원본이 진단용으로 저장됐는지
+            self.assertEqual(len(dumps), 1)
+            self.assertIn("사용권한", dumps[0].read_text(encoding="utf-8"))
         self.assertEqual(summary.termination_reason, "blocked")
         self.assertIn("차단", summary.error)
         # 첫 정렬에서 중단 — 두 번째 정렬 시도 없음
@@ -280,6 +308,56 @@ class SearchPipelineTest(unittest.TestCase):
             self.assertEqual(summary.products_seen, 2)
             self.assertEqual(summary.business_info_success, 2)
             self.assertEqual(summary.termination_reason, "success")
+
+    def test_first_category_page_enters_via_menu_click(self):
+        """첫 카테고리 page 1 은 홈 메뉴 클릭으로 진입 (딥링크 goto 회피)."""
+        rows_seq = [
+            [_row("11"), _row("22")],   # PLP p1 — 클릭 진입 (goto 없음)
+            [_row("33"), _row("11")],   # PLP p2 (중복 포함)
+            [], [],                     # 빈 페이지 2회 → 종료
+        ]
+        page = FakeSearchPage(sorter_rows=rows_seq, viids=["11", "22", "33"],
+                              menu_has_link=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, keyword="", category_id="221934",
+                           category_name="출산/유아동", max_pages=5)
+            self.assertIsNone(summary.error)
+            # page=1 직접 goto 없음 — 클릭 진입, p2 부터 goto
+            plp_urls = [u for u in page.goto_urls if "/np/categories/221934" in u]
+            self.assertEqual(len(plp_urls), 3)  # p2 + 빈 2회
+            self.assertFalse(any("page=1" in u for u in plp_urls))
+            self.assertTrue(any("page=2" in u for u in plp_urls))
+            # 클릭 후 목표 URL 대기 1회
+            self.assertEqual(len(page.waited_url_patterns), 1)
+            self.assertIn("/np/categories/221934", page.waited_url_patterns[0])
+            self.assertEqual(summary.products_seen, 3)  # 중복 1건 제거
+            self.assertEqual(summary.termination_reason, "success")
+
+    def test_menu_click_failure_falls_back_to_goto(self):
+        """클릭 JS 평가가 예외를 던져도 goto 경로로 폴백 — 수집은 정상 완료."""
+        rows_seq = [
+            [_row("11")],   # PLP p1 — goto 진입
+            [], [],
+        ]
+        page = ClickJsErrorPage(sorter_rows=rows_seq, viids=["11"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, keyword="", category_id="221934",
+                           category_name="출산/유아동", max_pages=5)
+            self.assertIsNone(summary.error)
+            plp_urls = [u for u in page.goto_urls if "/np/categories/221934" in u]
+            self.assertTrue(any("page=1" in u for u in plp_urls))
+            self.assertEqual(summary.termination_reason, "success")
+
+    def test_blocked_akamai_page_is_classified(self):
+        """Akamai 거부 응답은 분류 메시지와 스냅샷으로 진단된다."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], content_html=_AKAMAI_HTML)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page)
+            dumps = list(Path(tmp).glob("blocked_*.html"))
+            self.assertEqual(len(dumps), 1)
+            self.assertIn("Access Denied", dumps[0].read_text(encoding="utf-8"))
+        self.assertEqual(summary.termination_reason, "blocked")
+        self.assertIn("Akamai", summary.error)
 
 
 class SearchParserTest(unittest.TestCase):

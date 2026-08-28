@@ -18,7 +18,10 @@
 from __future__ import annotations
 
 import random
+import re
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import quote
 
 from app.core.base import CancelledError  # noqa: F401 - 호출 측 예외 계약 재노출
@@ -58,6 +61,44 @@ BACKOFF_SECONDS = (30, 60, 90)
 PLP_EMPTY_TOLERANCE = 2
 # PLP 최대 페이지 (실측 상한 ~17, rev.13)
 PLP_MAX_PAGES_LIMIT = 50
+
+# 홈 메가메뉴의 카테고리 앵커 클릭 JS — 첫 카테고리 진입을 딥링크 goto 대신
+# 자연 내비게이션으로 수행하기 위한 것. href 를 path 기준 정확 일치로 비교해
+# 접두사 충돌(예: 19428 vs 194282)을 방지한다.
+CATEGORY_LINK_CLICK_JS = """
+(cid) => {
+    const wanted = '/np/categories/' + cid;
+    for (const a of document.querySelectorAll('a[href*="/np/categories/"]')) {
+        const href = a.getAttribute('href') || '';
+        if (href.split('?')[0] === wanted) { a.click(); return true; }
+    }
+    return false;
+}
+"""
+
+# 차단 응답 분류 힌트 — 스냅샷 진단 로그/오류 메시지용 (순서 = 판정 우선순위).
+# 실측(2026-08-28 타 PC 차단 사례): 465자 짜리 짧은 응답이 소프트 블록으로
+# 감지됐고, 원인 분류가 로그에 없어 IP 차단 여부 판단이 어려웠다.
+BLOCKED_DIAGNOSES = (
+    ("access denied", "Akamai 접근 거부 — IP 평판 차단으로 추정"),
+    ("reference #", "Akamai 접근 거부 — IP 평판 차단으로 추정"),
+    ("자동화된 테스트", "자동화 감지 챌린지 페이지"),
+    ("보안 절차", "자동화 감지 챌린지 페이지"),
+    ("captcha", "캡차 챌린지 페이지"),
+    ("사용권한", "접근 권한 오류 페이지"),
+)
+
+
+def classify_blocked_html(html: str) -> str:
+    """차단 응답 HTML 을 키워드로 분류한다 (진단 메시지용).
+
+    판정에 실패하면 빈 문자열 — 호출자는 분류 없는 메시지를 그대로 쓴다.
+    """
+    low = (html or "").lower()
+    for keyword, diagnosis in BLOCKED_DIAGNOSES:
+        if keyword.lower() in low:
+            return diagnosis
+    return ""
 
 
 @dataclass
@@ -202,13 +243,19 @@ class SearchCrawler(CoupangCrawler):
                       f"(카테고리당 최대 {config.max_pages}페이지)")
             for cidx, (cid, cname) in enumerate(queue):
                 self._log(f"  [{cidx + 1}/{len(queue)}] 카테고리 '{cname}' ({cid}) 시작")
+                # 세션 내 첫 PLP 진입만 홈 메뉴 클릭으로 시도 (딥링크 회피).
+                # 이후 카테고리/페이지는 이미 신뢰가 형성된 세션에서 이동한다.
+                click_entry = (self._click_entry_first_page(page, cid)
+                               if cidx == 0 else False)
                 empty_streak = 0
                 for pno in range(1, config.max_pages + 1):
                     self.control.checkpoint()
                     url = CATEGORY_URL.format(cid=cid, page=pno)
                     self._log(f"    [page {pno}] 로드...")
-                    items, _ = self._load_listing_page(page, url, f"{cname} p{pno}",
-                                                       retry_empty=False)
+                    items, _ = self._load_listing_page(
+                        page, url, f"{cname} p{pno}",
+                        retry_empty=False,
+                        skip_goto=(pno == 1 and click_entry))
                     kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
                     rocket_removed += len(items) - len(kept)
                     fresh = self._merge(products, kept)
@@ -280,38 +327,88 @@ class SearchCrawler(CoupangCrawler):
         self._log(f"    딜레이 {delay:.0f}초...")
         self.control.sleep(delay)
 
+    def _dump_blocked_page(self, page, name: str, html: str) -> str:
+        """차단 응답 원본을 output_dir 에 저장하고 분류 결과를 반환한다 (진단용).
+
+        차단된 HTML 은 지금까지 버려졌는데, Akamai 챌린지 껍데기인지
+        리다이렉트/오류 페이지인지 원인이 그 내용에 그대로 드러난다.
+        저장 실패는 수집 흐름을 막지 않는다(best-effort). 반환값은 사람이
+        읽는 분류 문자열이며, 분류에 실패하면 빈 문자열.
+        """
+        out_dir = Path(getattr(self.config, "output_dir", "") or ".")
+        safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        path = out_dir / f"blocked_{safe_name}_{ts}.html"
+        diagnosis = classify_blocked_html(html)
+        try:
+            path.write_text(html, encoding="utf-8")
+        except OSError as e:
+            self._log(f"    [차단 진단] 응답 저장 실패: {e}")
+            return diagnosis
+        self._log(f"    [차단 진단] 차단 응답 저장: {path} ({diagnosis}) "
+                  f"(최종 URL: {getattr(page, 'url', '?')})")
+        return diagnosis
+
+    def _click_entry_first_page(self, page, cid: str) -> bool:
+        """첫 카테고리 page 1 을 홈 내부 링크 클릭으로 진입 시도 (딥링크 회피).
+
+        세션 시작 직후의 첫 동작이 카테고리 URL 직접 이동(goto)이면 Akamai
+        점수에 불리하다(2026-08-28 타 PC 첫 PLP 즉시 차단 사례). 홈 웜업 직후
+        메가메뉴 앵커를 클릭해 referrer 체인을 만든다. 어떤 이유로든 실패하면
+        False 를 반환하고 호출자가 기존 goto 경로로 진행하므로 회귀가 없다.
+        """
+        try:
+            clicked = bool(page.evaluate(CATEGORY_LINK_CLICK_JS, str(cid)))
+            if not clicked:
+                self._log("    [진입] 홈에 카테고리 링크 없음 — 직접 접속으로 진행")
+                return False
+            page.wait_for_url(f"**/np/categories/{cid}*", timeout=20000)
+            self._log("    [진입] 홈 메뉴 클릭으로 PLP 진입")
+            return True
+        except Exception as e:  # noqa: BLE001 - 클릭 진입은 최선 노력 (goto 폴백 있음)
+            self._log(f"    [진입] 메뉴 클릭 실패({type(e).__name__}) — 직접 접속으로 진행")
+            return False
+
     def _load_listing_page(self, page, url: str, name: str,
-                             retry_empty: bool = True) -> tuple[list[SearchProduct], str]:
+                             retry_empty: bool = True,
+                             skip_goto: bool = False) -> tuple[list[SearchProduct], str]:
         """목록 페이지 로드 + DOM 추출. 백오프 30/60/90초(3회) 후 중단.
 
         retry_empty=False 면 빈 페이지를 재시도하지 않고 그대로 반환
         (PLP 상한 도달은 빈 페이지가 정상 신호 — rev.13 실측).
+        skip_goto=True 면 첫 시도에서 goto 를 건너뛴다 — 메뉴 클릭 진입처럼
+        페이지가 이미 목표 URL 에 있을 때 사용하며, 재시도 시에는 goto 로 복귀한다.
         """
         last_error = ""
         for attempt in range(len(self._backoff_seconds) + 1):
             self.control.checkpoint()
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                self.control.sleep(random.uniform(2.5, 4.0) * self._wait_scale)
-                self._natural_interaction(page, random.uniform(4.0, 7.0) * self._wait_scale)
-                html = page.content()
-            except Exception as e:  # noqa: BLE001 - 브라우저 경계 오류 구조화
-                last_error = f"{type(e).__name__}: {e}"
-                self._log(f"    [{name}] 로드 실패: {last_error}")
-                if attempt < len(self._backoff_seconds):
-                    wait = self._backoff_seconds[attempt]
-                    self._log(f"    백오프 {wait}초 후 재시도 ({attempt + 1}/3)...")
-                    self.control.sleep(wait)
-                    continue
-                raise _RunError(
-                    f"목록 페이지 로드 실패 ({name}): {last_error}", reason="error"
-                ) from e
+            if skip_goto:
+                skip_goto = False
+            else:
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                except Exception as e:  # noqa: BLE001 - 브라우저 경계 오류 구조화
+                    last_error = f"{type(e).__name__}: {e}"
+                    self._log(f"    [{name}] 로드 실패: {last_error}")
+                    if attempt < len(self._backoff_seconds):
+                        wait = self._backoff_seconds[attempt]
+                        self._log(f"    백오프 {wait}초 후 재시도 ({attempt + 1}/3)...")
+                        self.control.sleep(wait)
+                        continue
+                    raise _RunError(
+                        f"목록 페이지 로드 실패 ({name}): {last_error}", reason="error"
+                    ) from e
+            self.control.sleep(random.uniform(2.5, 4.0) * self._wait_scale)
+            self._natural_interaction(page, random.uniform(4.0, 7.0) * self._wait_scale)
+            html = page.content()
 
             blocked, reason = is_blocked(html)
             if blocked:
                 # 밀어붙이지 않는다 — 즉시 중단 (EXTERNAL_RESEARCH 차단 규율)
+                diagnosis = self._dump_blocked_page(page, name, html)
+                hint = f" — {diagnosis}" if diagnosis else ""
                 raise _RunError(
-                    f"쿠팡 차단 감지 ({name}): {reason}. "
+                    f"쿠팡 차단 감지 ({name}): {reason}{hint}. "
                     "수집을 중단하고 충분한 쿨다운 후 재시도하세요.",
                     reason="blocked",
                 )
