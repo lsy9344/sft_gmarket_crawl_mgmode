@@ -78,7 +78,16 @@ a = Analysis(
         "scrapling",
         "scrapling.fetchers",
         "patchright",
+        "patchright._impl._driver",
         "curl_cffi",
+        # SellerCollector.exe --setup-runtime / --verify-runtime 모드가
+        # scripts.setup_coupang_runtime 을 런타임에 import 한다(2026-08-28 이식).
+        # `python -m camoufox fetch` 하위 프로세스용 camoufox.__main__ 과
+        # rich_click/click 도 함께 필요하다.
+        "camoufox.__main__",
+        "click",
+        "rich_click",
+        "scripts.setup_coupang_runtime",
     ] + _patchright_hidden + _scrapling_hidden + _playwright_hidden,
     hookspath=[],
     hooksconfig={},
@@ -106,7 +115,10 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    # 설치 모드(--setup-runtime/--verify-runtime)는 콘솔 진행 로그가 필요하다.
+    # 일반 GUI 모드는 app.main 이 시작 직후 이 콘솔을 숨기므로 사용자에게는
+    # 기존 windowed 앱처럼 보인다.
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

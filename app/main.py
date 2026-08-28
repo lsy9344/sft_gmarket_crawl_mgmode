@@ -11,6 +11,56 @@ import os
 import sys
 from pathlib import Path
 
+RUNTIME_SETUP_FLAG = "--setup-runtime"
+RUNTIME_VERIFY_FLAG = "--verify-runtime"
+
+
+def _run_runtime_mode(argv: list[str] | None = None) -> int | None:
+    """단일 EXE의 런타임 설치/검증 모드를 실행한다.
+
+    반환값이 ``None``이면 일반 GUI 모드다. 설치 스크립트는 ``sys.argv``를 직접
+    읽으므로, 외부 인자를 내부 계약인 ``--verify-only``로 정규화한 뒤 원래 객체를
+    반드시 복원한다.
+    """
+    args = list(sys.argv if argv is None else argv)
+    setup_requested = RUNTIME_SETUP_FLAG in args
+    verify_requested = RUNTIME_VERIFY_FLAG in args
+    if not setup_requested and not verify_requested:
+        return None
+    if setup_requested and verify_requested:
+        print(
+            f"{RUNTIME_SETUP_FLAG}와 {RUNTIME_VERIFY_FLAG}는 동시에 사용할 수 없습니다.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from scripts.setup_coupang_runtime import main as setup_main
+
+    original_argv = sys.argv
+    executable = args[0] if args else "SellerCollector.exe"
+    sys.argv = [executable] + (["--verify-only"] if verify_requested else [])
+    try:
+        return setup_main()
+    finally:
+        sys.argv = original_argv
+
+
+def _hide_console_window() -> None:
+    """Windows frozen GUI 모드에서 설치용 콘솔 창을 숨긴다."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    try:
+        import ctypes
+
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            return
+        console = windll.kernel32.GetConsoleWindow()
+        if console:
+            windll.user32.ShowWindow(console, 0)
+    except (AttributeError, OSError):
+        pass
+
 
 def _set_browsers_path() -> None:
     """PyInstaller 번들 환경에서 patchright가 시스템 브라우저를 찾도록 경로 설정."""
@@ -90,6 +140,11 @@ def _install_crash_hooks() -> None:
 
 
 def main() -> int:
+    runtime_result = _run_runtime_mode()
+    if runtime_result is not None:
+        return runtime_result
+
+    _hide_console_window()
     _set_browsers_path()
     _ensure_project_root_on_path()
 
