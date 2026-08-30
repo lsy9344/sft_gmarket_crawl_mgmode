@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -93,12 +94,13 @@ class MainWindowTabTest(unittest.TestCase):
         self.win.close()
 
     def test_has_three_tabs(self):
-        """AC-02: QTabWidget with Gmarket, Coupang and Foodspring tabs."""
+        """AC-02: QTabWidget with Gmarket, Coupang, Foodspring and Coupang 카테고리 tabs."""
         self.assertIsInstance(self.win.tab_widget, QTabWidget)
-        self.assertEqual(self.win.tab_widget.count(), 3)
+        self.assertEqual(self.win.tab_widget.count(), 4)
         self.assertEqual(self.win.tab_widget.tabText(0), "Gmarket")
         self.assertEqual(self.win.tab_widget.tabText(1), "Coupang")
         self.assertEqual(self.win.tab_widget.tabText(2), "Foodspring")
+        self.assertEqual(self.win.tab_widget.tabText(3), "Coupang 카테고리")
 
     def test_window_title_platform_neutral(self):
         """AC-02: platform-neutral title."""
@@ -127,6 +129,23 @@ class MainWindowTabTest(unittest.TestCase):
     def test_foodspring_panel_exists(self):
         """Foodspring panel exists as a third tab."""
         self.assertIsInstance(self.win.foodspring_panel, FoodSpringPanel)
+
+    def test_offline_seed_categories_loaded(self):
+        """네트워크 없이도 EXE 내 기본 카테고리 목록이 즉시 보여야 한다."""
+        self.assertGreater(self.win.category_panel.category_tree.topLevelItemCount(), 0)
+        total = sum(
+            node.count()
+            for _, roots in self.win.category_panel._groups
+            for node in roots
+        )
+        self.assertEqual(total, 3167)
+
+    @patch("app.ui.main_window.QMessageBox.warning")
+    def test_refresh_block_falls_back_to_local_categories(self, warning):
+        self.win._on_categories_error("쿠팡 차단 감지: 소프트 블록 (452자)")
+        self.assertGreater(self.win.category_panel.category_tree.topLevelItemCount(), 0)
+        self.assertIn("검증된 카테고리 3167개", self.win.category_panel.log_view.toPlainText())
+        warning.assert_called_once()
 
     def test_cross_tab_busy_blocks_coupang(self):
         """AC-15: Gmarket running blocks Coupang start."""

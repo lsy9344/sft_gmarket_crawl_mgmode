@@ -56,11 +56,13 @@ INSTALL_GUIDE = (
     "설치 방법:\n"
     "  배포 exe: SellerCollector.exe --setup-runtime\n"
     "  설치 확인: SellerCollector.exe --verify-runtime\n"
+    "  배포 패키지: 같은 폴더의 CoupangRuntimeSetup.exe 를 1회 실행 (Windows)\n"
     "  소스 실행: python scripts/setup_coupang_runtime.py\n"
     "  수동 설치: python -m camoufox sync\n"
     f"             python -m camoufox fetch official/stable/{PINNED_BROWSER_VERSION}\n"
     f"             python -m camoufox set official/stable/{PINNED_BROWSER_VERSION}\n"
-    "             patchright install chromium"
+    "             patchright install chromium\n"
+    "  다른 PC 로 런타임 캐시를 복사해도 되지만 GeoIP DB 가 30일 이내여야 합니다."
 )
 
 
@@ -500,8 +502,9 @@ def _check_geoip(install_dir: Path) -> PreflightResult | None:
             return PreflightResult(
                 PreflightStatus.GEOIP_STALE,
                 f"GeoIP DB가 {int(age_days)}일 전 것입니다 "
-                f"(허용: {GEOIP_MAX_AGE_DAYS}일 이내). "
-                "갱신: SellerCollector.exe --setup-runtime 재실행\n"
+                f"(허용: {GEOIP_MAX_AGE_DAYS}일 이내). 갱신: "
+                "SellerCollector.exe --setup-runtime 재실행 "
+                "또는 CoupangRuntimeSetup.exe 재실행 / python -m camoufox fetch\n"
                 f"파일: {db_file}",
             )
 
