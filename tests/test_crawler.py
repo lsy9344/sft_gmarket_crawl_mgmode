@@ -104,7 +104,7 @@ class NormalRunTest(_FastCrawlTestCase):
         self.assertIsNotNone(summary.all_files)
         self.assertEqual(len(storage.load_collected_ids()), stats.success)
         self.assertEqual(
-            len(json.loads(summary.all_files[0].read_text())), summary.total_success
+            len(json.loads(summary.all_files[0].read_text(encoding="utf-8"))), summary.total_success
         )
         self.assertEqual(storage.load_partial_results("가공식품"), [])
 
@@ -155,7 +155,7 @@ class CancelTest(_FastCrawlTestCase):
         self.assertIsNone(summary.error)
         self.assertEqual(summary.total_success, 10)  # 유실 없이 부분 결과 보존
         self.assertIsNotNone(summary.all_files)
-        self.assertEqual(len(json.loads(summary.all_files[0].read_text())), 10)
+        self.assertEqual(len(json.loads(summary.all_files[0].read_text(encoding="utf-8"))), 10)
         self.assertEqual(storage.load_state()["completed"], [])
         self.assertEqual(len(storage.load_collected_ids()), 10)
 
@@ -194,7 +194,7 @@ class CheckpointFailureTest(_FastCrawlTestCase):
         # 성공했으므로 레코드는 유실되지 않았고, 그 시점에 ID 도 커밋되었다.
         self.assertEqual(summary.total_success, 1)
         self.assertIsNotNone(summary.all_files)
-        saved = json.loads(summary.all_files[0].read_text())
+        saved = json.loads(summary.all_files[0].read_text(encoding="utf-8"))
         self.assertEqual(len(saved), 1)
         committed_ids = storage.load_collected_ids()
         self.assertEqual(committed_ids, {"1"})
@@ -249,7 +249,7 @@ class LeftoverCheckpointReconciliationTest(_FastCrawlTestCase):
         self.assertEqual(storage.load_partial_results("완료카테"), [])
         promoted_files = list(storage.output_dir.glob("gmarket_fast_완료카테_*.json"))
         self.assertEqual(len(promoted_files), 1)
-        self.assertEqual(len(json.loads(promoted_files[0].read_text())), 2)
+        self.assertEqual(len(json.loads(promoted_files[0].read_text(encoding="utf-8"))), 2)
 
     def test_leftover_checkpoint_without_committed_ids_is_reconciled(self) -> None:
         """체크포인트는 썼지만 ID 커밋 전에 죽은 극단적 크래시 창(HIGH-1 의 남은
@@ -327,7 +327,10 @@ class FailClosedPromotionTest(_FastCrawlTestCase):
         # old(승격분) + new(신규 카테고리 최종 저장) = 서로 다른 두 파일.
         # old 레코드가 정확히 한 번만 나타나야 한다(중복 승격 없음).
         old_occurrences = sum(
-            1 for p in promoted for r in json.loads(p.read_text()) if r.get("goodscode") == "old"
+            1
+            for p in promoted
+            for r in json.loads(p.read_text(encoding="utf-8"))
+            if r.get("goodscode") == "old"
         )
         self.assertEqual(old_occurrences, 1)
 
@@ -453,7 +456,10 @@ class PromotionIdempotencyTest(_FastCrawlTestCase):
         self.assertEqual(len(all_finals), 1)  # 여전히 1개 — _recovered_hash 중복 없음
 
         occurrences = sum(
-            1 for p in all_finals for r in json.loads(p.read_text()) if r.get("goodscode") == "A100"
+            1
+            for p in all_finals
+            for r in json.loads(p.read_text(encoding="utf-8"))
+            if r.get("goodscode") == "A100"
         )
         self.assertEqual(occurrences, 1)
         self.assertFalse(storage._partial_path("cat").exists())  # 이번엔 정리 성공
@@ -480,7 +486,10 @@ class PromotionIdempotencyTest(_FastCrawlTestCase):
         # 결과 파일이 진짜로 생겨야 한다 — 그렇지 않으면 데이터가 유실된다.
         real_promoted = list(storage.output_dir.glob("gmarket_fast_cat_*.json"))
         self.assertEqual(len(real_promoted), 1)
-        self.assertEqual(json.loads(real_promoted[0].read_text())[0]["goodscode"], "A100")
+        self.assertEqual(
+            json.loads(real_promoted[0].read_text(encoding="utf-8"))[0]["goodscode"],
+            "A100",
+        )
         self.assertEqual(storage.load_collected_ids(), {"A100"})
         self.assertEqual(storage.load_partial_results("cat"), [])  # 체크포인트는 정리됨
 
@@ -513,7 +522,10 @@ class PromotionIdempotencyTest(_FastCrawlTestCase):
         # 최종 파일에서 최소 1회는 반드시 발견돼야 한다.
         all_files = list(storage.output_dir.glob("gmarket_fast_cat_*.json"))
         total_occurrences = sum(
-            1 for p in all_files for r in json.loads(p.read_text()) if r.get("goodscode") == "A100"
+            1
+            for p in all_files
+            for r in json.loads(p.read_text(encoding="utf-8"))
+            if r.get("goodscode") == "A100"
         )
         self.assertGreaterEqual(total_occurrences, 1)
         self.assertEqual(storage.load_collected_ids(), {"A100"})
@@ -584,8 +596,12 @@ class ContentHashFullRecordTest(unittest.TestCase):
         jp1, _ = storage.promote_partial(before, "cat", h_before)
         jp2, _ = storage.promote_partial(after, "cat", h_after)
         self.assertNotEqual(jp1, jp2)
-        self.assertEqual(json.loads(jp1.read_text())[0]["store_name"], "before")
-        self.assertEqual(json.loads(jp2.read_text())[0]["store_name"], "after")
+        self.assertEqual(
+            json.loads(jp1.read_text(encoding="utf-8"))[0]["store_name"], "before"
+        )
+        self.assertEqual(
+            json.loads(jp2.read_text(encoding="utf-8"))[0]["store_name"], "after"
+        )
 
 
 class ReplanRequiredTest(_FastCrawlTestCase):
@@ -618,7 +634,10 @@ class ReplanRequiredTest(_FastCrawlTestCase):
         self.assertIn("x", storage.load_collected_ids())
         final_files = list(storage.output_dir.glob("gmarket_fast_cat_*.json"))
         x_occurrences = sum(
-            1 for p in final_files for r in json.loads(p.read_text()) if r.get("goodscode") == "x"
+            1
+            for p in final_files
+            for r in json.loads(p.read_text(encoding="utf-8"))
+            if r.get("goodscode") == "x"
         )
         self.assertEqual(x_occurrences, 1)  # 승격분에만 존재 — 재수집으로 중복되지 않음
 

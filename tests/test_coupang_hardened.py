@@ -344,6 +344,13 @@ class PreflightTest(unittest.TestCase):
                 result = check_runtime()
         self.assertEqual(result.status, PreflightStatus.PACKAGE_MISSING)
 
+    def test_install_guide_uses_pinned_setup_order(self):
+        from app.core.coupang.preflight import INSTALL_GUIDE
+
+        self.assertIn("SellerCollector.exe --setup-runtime", INSTALL_GUIDE)
+        self.assertIn("fetch official/stable/152.0.4-beta.28", INSTALL_GUIDE)
+        self.assertLess(INSTALL_GUIDE.index("fetch "), INSTALL_GUIDE.index("set "))
+
     def test_package_version_mismatch(self):
         """camoufox installed but wrong version → PACKAGE_VERSION_MISMATCH."""
         fake_mod = MagicMock()
@@ -972,6 +979,10 @@ class SetupToolVerifyTest(unittest.TestCase):
             patch.object(sru, "_check_package_version", return_value=None),
             patch.object(sru, "run_camoufox_cmd",
                          side_effect=lambda args, desc: calls.append(list(args)) or True),
+            # Gmarket 런타임 설치는 Windows의 LOCALAPPDATA를 사용하므로,
+            # 이 테스트는 Camoufox 명령 순서만 검증하도록 설치 결과를 격리한다.
+            patch.object(sru, "install_gmarket_browser", return_value=True),
+            patch.object(sru, "_gmarket_chromium_installed", return_value=True),
             patch.object(sru, "verify_postcondition", return_value=True),
             patch("importlib.metadata.version", return_value=PINNED_CAMOUFOX_VERSION),
             patch.object(sys, "argv", ["setup_coupang_runtime.py"]),
@@ -981,6 +992,51 @@ class SetupToolVerifyTest(unittest.TestCase):
         self.assertEqual(calls[0], ["sync"])
         self.assertEqual(calls[1], ["fetch", sru.PINNED_BROWSER])
         self.assertEqual(calls[2], ["set", sru.PINNED_BROWSER])
+
+    def test_gmarket_check_rejects_wrong_chromium_revision(self):
+        import scripts.setup_coupang_runtime as sru
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "ms-playwright" / "chromium-1" / "chrome-win64"
+            wrong.mkdir(parents=True)
+            (wrong / "chrome.exe").write_bytes(b"fake")
+            with (
+                patch.dict(os.environ, {"LOCALAPPDATA": tmp}),
+                patch.object(sru, "_expected_gmarket_chromium_revision", return_value="1228"),
+            ):
+                self.assertFalse(sru._gmarket_chromium_installed())
+
+    def test_gmarket_check_accepts_exact_chromium_revision(self):
+        import scripts.setup_coupang_runtime as sru
+
+        with tempfile.TemporaryDirectory() as tmp:
+            expected = Path(tmp) / "ms-playwright" / "chromium-1228" / "chrome-win64"
+            expected.mkdir(parents=True)
+            (expected / "chrome.exe").write_bytes(b"fake")
+            with (
+                patch.dict(os.environ, {"LOCALAPPDATA": tmp}),
+                patch.object(sru, "_expected_gmarket_chromium_revision", return_value="1228"),
+                patch("app.core.gmarket_preflight.sys.platform", "win32"),
+            ):
+                self.assertTrue(sru._gmarket_chromium_installed())
+
+    def test_expected_gmarket_revision_reads_patchright_manifest(self):
+        import scripts.setup_coupang_runtime as sru
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "package"
+            package.mkdir()
+            cli = package / "cli.js"
+            cli.write_text("", encoding="utf-8")
+            (package / "browsers.json").write_text(
+                json.dumps({"browsers": [{"name": "chromium", "revision": "1228"}]}),
+                encoding="utf-8",
+            )
+            with patch(
+                "patchright._impl._driver.compute_driver_executable",
+                return_value=("node", str(cli)),
+            ):
+                self.assertEqual(sru._expected_gmarket_chromium_revision(), "1228")
 
 
 class CsvFormulaInjectionTest(unittest.TestCase):

@@ -7,6 +7,7 @@ __pycache__/
 
 # Virtual env
 .venv/
+.venv-win/
 venv/
 
 # Build artifacts
@@ -17,9 +18,14 @@ dist/
 # IDE / tool-local settings
 .qoder/
 .codegraph/
+.omx/
 
 # Crawl output data
 output/
+
+# Foodspring standalone crawler runtime artifacts
+foodspring_crawl/logs/
+foodspring_crawl/state/
 
 # Test/scan working logs — contain session cookies + scraped business/personal
 # data. Kept on disk for debugging but never committed.

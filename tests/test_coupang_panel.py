@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication, QTabWidget
 
 from app.ui.coupang_panel import CoupangPanel
+from app.ui.foodspring_panel import FoodSpringPanel
 from app.ui.main_window import MainWindow
 
 _app = None
@@ -91,12 +92,13 @@ class MainWindowTabTest(unittest.TestCase):
     def tearDown(self):
         self.win.close()
 
-    def test_has_two_tabs(self):
-        """AC-02: QTabWidget with exactly Gmarket and Coupang tabs."""
+    def test_has_three_tabs(self):
+        """AC-02: QTabWidget with Gmarket, Coupang and Foodspring tabs."""
         self.assertIsInstance(self.win.tab_widget, QTabWidget)
-        self.assertEqual(self.win.tab_widget.count(), 2)
+        self.assertEqual(self.win.tab_widget.count(), 3)
         self.assertEqual(self.win.tab_widget.tabText(0), "Gmarket")
         self.assertEqual(self.win.tab_widget.tabText(1), "Coupang")
+        self.assertEqual(self.win.tab_widget.tabText(2), "Foodspring")
 
     def test_window_title_platform_neutral(self):
         """AC-02: platform-neutral title."""
@@ -122,10 +124,21 @@ class MainWindowTabTest(unittest.TestCase):
         """AC-04: Coupang panel exists and app starts without Camoufox."""
         self.assertIsInstance(self.win.coupang_panel, CoupangPanel)
 
+    def test_foodspring_panel_exists(self):
+        """Foodspring panel exists as a third tab."""
+        self.assertIsInstance(self.win.foodspring_panel, FoodSpringPanel)
+
     def test_cross_tab_busy_blocks_coupang(self):
         """AC-15: Gmarket running blocks Coupang start."""
         self.win._set_ui_state("crawling")
         self.assertFalse(self.win.coupang_panel.btn_start.isEnabled())
+
+    def test_cross_tab_busy_blocks_foodspring(self):
+        """Gmarket running blocks Foodspring start."""
+        self.win._set_ui_state("crawling")
+        self.assertFalse(self.win.foodspring_panel.btn_start.isEnabled())
+        self.win._set_ui_state("idle")
+        self.assertTrue(self.win.foodspring_panel.btn_start.isEnabled())
 
     def test_cross_tab_busy_blocks_gmarket(self):
         """AC-15: Coupang running blocks Gmarket start."""

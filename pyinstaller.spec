@@ -2,7 +2,7 @@
 """PyInstaller 빌드 스펙 (WORK_ORDER §7.1 / §13 P3).
 
 사용법:
-    pip install pyinstaller
+    pip install pyinstaller==6.21.0
     pyinstaller pyinstaller.spec
 
 2026-07-24: WSL2 Linux 환경에서 venv + pip install(requirements.txt, pyinstaller)
@@ -56,6 +56,7 @@ a = Analysis(
     binaries=list(_patchright_bins) + _playwright_bins,
     datas=[
         (str(project_root / "app" / "ui" / "styles" / "theme.qss"), "app/ui/styles"),
+        (str(project_root / "app" / "core" / "foodspring" / "goods_list_query.graphql"), "app/core/foodspring"),
     ] + _pkg_datas + _patchright_datas + _playwright_datas,
     hiddenimports=[
         "PyQt6.QtCore",
@@ -64,8 +65,9 @@ a = Analysis(
         "apify_fingerprint_datapoints",
         "browserforge",
         "browserforge.headers",
-        "browserforge.fingerprint",
+        "browserforge.fingerprints",
         "camoufox",
+        "camoufox.__main__",
         "camoufox.sync_api",
         "camoufox.pkgman",
         "camoufox.geolocation",
@@ -76,7 +78,16 @@ a = Analysis(
         "scrapling",
         "scrapling.fetchers",
         "patchright",
+        "patchright._impl._driver",
         "curl_cffi",
+        "click",
+        "rich_click",
+        "openpyxl",
+        "openpyxl.cell._writer",
+        "openpyxl.drawing.image",
+        "openpyxl.styles",
+        "openpyxl.utils.cell",
+        "scripts.setup_coupang_runtime",
     ] + _patchright_hidden + _scrapling_hidden + _playwright_hidden,
     hookspath=[],
     hooksconfig={},
@@ -104,63 +115,8 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-
-# --- CoupangRuntimeSetup: console setup tool for browser/GeoIP installation ---
-setup_a = Analysis(
-    [str(project_root / "scripts" / "setup_coupang_runtime.py")],
-    pathex=[str(project_root)],
-    binaries=list(_patchright_bins),
-    datas=list(_pkg_datas) + _patchright_datas,
-    hiddenimports=[
-        "camoufox",
-        "camoufox.__main__",
-        "camoufox.pkgman",
-        "camoufox.geolocation",
-        "camoufox.multiversion",
-        "camoufox.addons",
-        "camoufox.sync_api",
-        "apify_fingerprint_datapoints",
-        "browserforge",
-        "browserforge.headers",
-        "browserforge.fingerprint",
-        "rich_click",
-        "click",
-        "patchright",
-        "patchright._impl._driver",
-    ] + _patchright_hidden,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=["PyQt6", "tkinter"],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-)
-
-setup_pyz = PYZ(setup_a.pure, setup_a.zipped_data, cipher=block_cipher)
-
-setup_exe = EXE(
-    setup_pyz,
-    setup_a.scripts,
-    setup_a.binaries,
-    setup_a.zipfiles,
-    setup_a.datas,
-    [],
-    name="CoupangRuntimeSetup",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
+    # 설치 모드는 콘솔 진행 로그가 필요하다. 일반 GUI 모드는 app.main 이 시작 직후
+    # 이 콘솔을 숨기므로 사용자에게는 기존 windowed 앱처럼 보인다.
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

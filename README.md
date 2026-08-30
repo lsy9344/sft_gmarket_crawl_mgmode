@@ -1,22 +1,40 @@
-# 판매자 정보 수집기 v3.0 (Gmarket + Coupang)
+# 판매자 정보 수집기 v3.0 (Gmarket + Coupang + Foodspring)
 
 Gmarket 베스트 10 + 슈퍼딜 12 = **22개 카테고리**의 판매자 사업자정보를 수집하는
 Windows용 PyQt6 데스크톱 프로그램. 프로그램 시작 시 **사전 조사(Pre-scan)** 로
 카테고리별 상품 수·신규 대상 수를 먼저 파악한 뒤 사용자 확인을 거쳐 수집한다.
 
 > 상세 사양: [`WORK_ORDER.md`](WORK_ORDER.md) · [`TECH_SPEC.md`](TECH_SPEC.md)
-> **Coupang 수집**: [`docs/coupang/`](docs/coupang/) 참조 — `/np/omp` '전체' 탭 + 스토어 API 3개로 필수 7항목 100% 확보. Gmarket/Coupang **2탭 UI**로 통합 완료.
+> **Coupang 수집**: [`docs/coupang/`](docs/coupang/) 참조 — `/np/omp` '전체' 탭 + 스토어 API 3개로 필수 7항목 100% 확보.
+> **Foodspring 수집**: [`foodspring_crawl/REPORT_CRAWL_METHOD.md`](foodspring_crawl/REPORT_CRAWL_METHOD.md) 참조 —
+> `/special/wcpd` 전국 택배 배송 기획전 상품 10,000개 + 판매자 사업자정보를 Excel로 출력.
+> Gmarket/Coupang/Foodspring **3탭 UI**로 통합 완료.
 
 ## 설치
 
 ```bash
 pip install -r requirements.txt
 
-# 브라우저 런타임 (앱이 쓰는 두 브라우저 — 배포 exe 에서는 CoupangRuntimeSetup.exe 가 자동 설치):
-patchright install chromium                       # Gmarket: stealth Chromium (~150MB)
+# 브라우저 런타임 (소스 실행): 고정 버전 순서를 지키며 설치
+python scripts/setup_coupang_runtime.py
+```
+
+배포본은 `SellerCollector.exe` 단일 파일이다. 최초 1회 명령 프롬프트에서
+런타임 설치 모드를 실행한 뒤 GUI를 연다.
+
+```bat
+SellerCollector.exe --setup-runtime
+SellerCollector.exe --verify-runtime
+SellerCollector.exe
+```
+
+수동 설치가 필요하면 반드시 `sync → fetch 고정버전 → set 고정버전` 순서를 사용한다:
+
+```bash
 python -m camoufox sync
+python -m camoufox fetch official/stable/152.0.4-beta.28
 python -m camoufox set official/stable/152.0.4-beta.28
-python -m camoufox fetch                          # Coupang: Camoufox 브라우저 + GeoIP DB
+patchright install chromium
 ```
 
 > `requirements.txt` 는 base `scrapling` + StealthySession 런타임 의존(`patchright`,
@@ -24,7 +42,8 @@ python -m camoufox fetch                          # Coupang: Camoufox 브라우�
 > `scrapling[fetchers]` extra 는 `playwright==1.61` 을 강제해 camoufox(playwright<1.61)
 > 와 충돌하므로 쓰지 않는다 — StealthySession 은 playwright 비의존인 patchright 를
 > 쓰므로 playwright 1.60 으로 동작한다. 두 탭 모두 브라우저 미설치 상태에서도 앱은
-> 기동되며 preflight 로 안내한다.
+> 기동되며, Gmarket은 정확한 Patchright Chromium revision을, Coupang은
+> Camoufox/브라우저/GeoIP를 preflight로 확인해 setup 도구를 안내한다.
 
 - Python 3.10+ (3.12 권장), Windows 10/11
 - 네트워크: 한국 가정용 IP 기준 (프록시 불필요)
@@ -203,16 +222,16 @@ core 계층을 UI 없이 직접 쓰는 코드/테스트를 위한 방어선이�
 저장되는 위험한 불일치가 생길 수 있어, 하드 실패로 조기에 잡는다.
 
 **저장 경로 단위 잠금**(6차 리뷰 MEDIUM): `Storage` 는 생성 시 출력
-디렉터리에 `.gmarket_fast.lock` 배타적 잠금을 건다(Windows 는 `msvcrt`,
-POSIX 는 `fcntl`). 서로 다른 프로세스(예: 사용자가 실행 파일을 실수로 두
+디렉터리에 배타적 잠금을 건다(Windows 는 경로 해시 기반 named mutex,
+POSIX 는 `.gmarket_fast.lock` + `fcntl`). 서로 다른 프로세스(예: 사용자가 실행 파일을 실수로 두
 번 실행)가 같은 저장 경로를 동시에 쓰면 체크포인트의 고정 `.tmp` 파일이나
 manifest 의 read-modify-write 가 서로 덮어쓰며 손상될 수 있기 때문이다.
 잠금은 **인스턴스 단위가 아니라 프로세스+경로 단위**로 한 번만 건다 —
 `main_window._make_storage()` 는 버튼을 누를 때마다 같은 경로로 새
 `Storage` 인스턴스를 만드는데, 이 기존 패턴이 자기 자신과 충돌하면 안
 되기 때문이다. 실제로 막는 것은 "다른 프로세스가 같은 경로를 쓰는 상황"
-뿐이다. 잠금 파일 자체를 만들 수 없는 예외적 환경(읽기 전용 등)에서는
-잠금 없이 진행한다(앱이 아예 못 뜨는 것보다 낫다).
+뿐이다. 잠금을 만들거나 적용할 수 없으면 상태/결과 안전을 보장할 수 없으므로
+수집을 시작하지 않는 fail-closed 방식이다.
 
 ## 출력 (`output/` 또는 사용자 지정 경로)
 
@@ -246,7 +265,9 @@ manifest 의 read-modify-write 가 서로 덮어쓰며 손상될 수 있기 때�
 - `.promoted_hashes.json` — 체크포인트 승격 완료 manifest(내부 관리용,
   사용자가 직접 다룰 필요 없음 — 손상되거나 사라져도 데이터 유실 없이
   최악의 경우 중복 파일 하나가 다시 생성될 뿐이다).
-- `.gmarket_fast.lock` — 저장 경로 단위 프로세스 잠금 파일(내부 관리용).
+- `.gmarket_fast.lock` — POSIX 저장 경로 단위 프로세스 잠금 파일(내부 관리용).
+  Windows에서는 같은 경로 해시를 사용하는 OS named mutex로 잠그므로 이 파일은
+  생성되지 않는다.
 
 `[초기화]` 버튼은 `collected_ids`/`fastcrawl_state`뿐 아니라 남은 체크포인트
 파일도 모두 삭제한다. 체크포인트 삭제가 일부라도 실패하면(디스크/권한 문제)
@@ -296,40 +317,51 @@ JSON/CSV 저장은 둘 다 임시 파일에 완전히 쓴 뒤 원자적으로 �
 
 ## 패키징 (P3, 선택)
 
-```bash
-pip install pyinstaller
-pyinstaller pyinstaller.spec
+Windows 배포 후보는 `scripts\build_windows.bat`으로 만든다. 이 스크립트는
+Python 3.12의 깨끗한 `.venv-win`을 만들고, 고정된 직접 의존성을 설치해 전체
+테스트를 통과한 뒤 PyInstaller 6.21.0으로 빌드한다.
+
+```bat
+scripts\build_windows.bat
 ```
 
-`pyinstaller.spec` 은 2개의 실행 파일을 생성한다:
+`pyinstaller.spec` 은 GUI와 런타임 설치 모드를 포함한 실행 파일 하나를 생성한다:
 
 | 실행 파일 | 용도 | 콘솔 |
 |---|---|---|
-| `SellerCollector.exe` | 메인 2탭 UI 앱 | 없음 (windowed) |
-| `CoupangRuntimeSetup.exe` | Gmarket+Coupang 브라우저 런타임 설치 도구 (Camoufox+GeoIP, patchright Chromium) | 있음 (console) |
+| `SellerCollector.exe` | 메인 2탭 UI + `--setup-runtime` 설치 + `--verify-runtime` 검증 | 설치 모드만 표시 |
 
-배포 시 두 파일을 함께 제공한다. 사용자는 최초 1회 `CoupangRuntimeSetup.exe` 를
-실행하여 **두 브라우저 런타임(Coupang용 Camoufox+GeoIP, Gmarket용 patchright Chromium)**
-을 설치한 뒤 `SellerCollector.exe` 를 사용한다.
+배포 시 단일 EXE와 스크립트가 만든 `SHA256SUMS.txt`를 함께 제공한다. 사용자는
+최초 1회 `SellerCollector.exe --setup-runtime`을 실행하여 **두 브라우저
+런타임(Coupang용 Camoufox+GeoIP, Gmarket용 patchright Chromium)**을 설치한 뒤
+인자 없이 `SellerCollector.exe`를 실행한다.
 
-### 배포 시 유의사항 (2026-07-27 실측 검증)
+### 배포 시 유의사항 (2026-07-28 clean-cache 재검증)
 
-- **인터넷 필수**: `CoupangRuntimeSetup.exe` 는 Coupang용 Camoufox(GitHub ~492MB) +
+최신 Windows 후보의 산출물 hash, Hyper-V 체크포인트, 설치 전/후 preflight,
+양 플랫폼 실수집 행·필드 검증과 종료 후 잔류 프로세스 결과는
+[`docs/RELEASE_READINESS.md`](docs/RELEASE_READINESS.md)에 기록한다.
+
+- **인터넷 필수**: `SellerCollector.exe --setup-runtime`은 Coupang용 Camoufox(GitHub ~492MB) +
   GeoIP(jsdelivr ~45MB) + Gmarket용 patchright Chromium(Playwright CDN ~150MB) 등
   총 약 1.4GB 를 내려받는다. 사내망/방화벽이 `github.com`·`objects.githubusercontent.com`·
   `cdn.jsdelivr.net`·`raw.githubusercontent.com`·`api.github.com`·`playwright.download.prss.microsoft.com`
   (Playwright 브라우저 CDN) 중 하나라도 막으면 설치가 실패한다.
-- **SmartScreen**: 실행 파일은 코드서명이 없어 새 PC 첫 실행 시 SmartScreen 경고가
-  뜰 수 있다. `추가 정보 → 실행`으로 진행한다.
-- **동일 사용자로 실행**: 설치기와 앱은 per-user 캐시(`%LOCALAPPDATA%\camoufox`,
+- **코드 서명**: 2026-07-28 내부 후보의 단일 EXE는
+  `CN=SellerCollector Internal Release` 자체서명 인증서로 Authenticode 서명하고
+  타임스탬프를 추가했다. 수신 PC에 함께 제공한 공개 인증서를 신뢰 저장소에 설치한
+  경우에만 서명이 `Valid`다. 공개 CA 서명이나 SmartScreen 평판은 아니므로 조직
+  외부 배포에는 별도의 공개 신뢰 코드 서명이 필요하다. 정확한 인증서와 hash는
+  [`docs/RELEASE_READINESS.md`](docs/RELEASE_READINESS.md)를 따른다.
+- **동일 사용자로 실행**: 설치 모드와 GUI는 per-user 캐시(`%LOCALAPPDATA%\camoufox`,
   `%LOCALAPPDATA%\ms-playwright`)를 공유하므로 반드시 같은 Windows 사용자 계정으로
   실행한다. 설치기만 "관리자 권한으로 실행"하면 경로가 달라져 앱이 브라우저를 찾지 못한다.
 - **방화벽(Gmarket)**: Gmarket 첫 수집 시 patchright Chromium("Google Chrome for
   Testing")에 대한 Windows 방화벽(인바운드) 팝업이 뜰 수 있다. 아웃바운드 수집은
   허용 없이도 정상 동작하므로 팝업은 닫아도 된다.
 - **GeoIP 30일 만료**: preflight 가 GeoIP DB 를 30일(`GEOIP_MAX_AGE_DAYS`) 이내로만
-  허용한다. 30일이 지나면 앱이 Coupang 탭을 거부하므로 `CoupangRuntimeSetup.exe` 를
-  다시 실행해 GeoIP 를 갱신해야 한다.
+  허용한다. 30일이 지나면 앱이 Coupang 탭을 거부하므로
+  `SellerCollector.exe --setup-runtime`을 다시 실행해 GeoIP를 갱신해야 한다.
 
 > **VM 실측으로 발견·수정한 배포 블로킹 버그 (2026-07-27)** — 복원한 Windows 11 VM 에
 > 배포물을 설치해 두 플랫폼 실수집까지 검증하며 다음을 수정했다(현재 모두 수정·검증 완료):
@@ -338,11 +370,11 @@ pyinstaller pyinstaller.spec
 >    `app/core/coupang/preflight.py` 에서 channel/pinned 검사 제거(version.json 으로 고정 유지).
 > 2. **Gmarket 브라우저 런타임**: frozen 빌드에 `patchright` 모듈 미번들 +
 >    stealth Chromium 미설치로 사전조사 즉시 실패 → `pyinstaller.spec` 에 patchright 번들,
->    `requirements.txt` 에 런타임 의존 고정, `CoupangRuntimeSetup.exe` 가 patchright
->    Chromium 을 설치하도록 확장.
+>    `requirements.txt` 에 런타임 의존 고정, `SellerCollector.exe --setup-runtime`이
+>    patchright Chromium 을 설치하도록 통합.
 >
 > 소스 수정 반영본으로 재빌드해야 배포 exe 에 적용된다: Windows 에서
-> `pyinstaller pyinstaller.spec`.
+> `scripts\build_windows.bat`.
 
 ## Coupang CLI 어댑터
 
@@ -366,6 +398,9 @@ python coupang_crawl/coupang_omp_crawler.py [--max-scroll-pages N] [--output PRE
 
 - `{prefix}.json` / `{prefix}.csv` — 최종 결과 (UTF-8 / UTF-8-sig)
 - `{prefix}_partial.json` / `{prefix}_partial.csv` — 취소/오류 시 부분 결과
+- 같은 prefix의 결과가 이미 있으면 `_2`, `_3` ... 을 붙여 기존 JSON/CSV 쌍을
+  덮어쓰지 않는다. 출력 폴더는 프로세스 단위로 잠겨 앱 두 개가 같은 폴더에
+  동시에 저장하는 것도 차단한다.
 - CSV는 수식 주입 방어(`=`,`+`,`-`,`@` 앞에 `'` 부착)
 
 ## 테스트

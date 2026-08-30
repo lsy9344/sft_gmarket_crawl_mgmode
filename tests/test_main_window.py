@@ -71,6 +71,24 @@ class InitialStateTest(_MainWindowTestCase):
         self.assertTrue(event.isAccepted())
 
 
+class GmarketRuntimePreflightTest(_MainWindowTestCase):
+    def test_missing_runtime_blocks_prescan_before_storage_or_worker(self) -> None:
+        from app.core.gmarket_preflight import GmarketPreflightResult
+
+        self.win.settings.selected_categories = lambda: [object()]  # type: ignore[method-assign]
+        result = GmarketPreflightResult(False, "setup required")
+        with (
+            patch("app.core.gmarket_preflight.check_gmarket_runtime", return_value=result),
+            patch.object(QMessageBox, "critical") as critical,
+            patch.object(self.win, "_make_storage") as make_storage,
+        ):
+            self.win.on_prescan()
+
+        critical.assert_called_once()
+        make_storage.assert_not_called()
+        self.assertIsNone(self.win.prescan_worker)
+
+
 class CloseEventRaceTest(_MainWindowTestCase):
     """3차 리뷰 HIGH-2/HIGH-3 회귀: 종료 확인 대화상자가 열려 있는 동안(Qt 의
     중첩 이벤트 루프가 다른 시그널을 계속 처리하는 동안) Pre-scan 완료

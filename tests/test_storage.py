@@ -18,6 +18,15 @@ from app.core.storage import LoadStatus, Storage
 from app.models.records import RECORD_FIELDS
 
 
+def _hold_output_lock_in_child(path: str, ready, release) -> None:
+    """spawn 가능한 프로세스 간 잠금 테스트 helper."""
+    from app.core.storage import acquire_output_lock
+
+    acquire_output_lock(Path(path))
+    ready.set()
+    release.wait(timeout=10)
+
+
 def _tmp_storage() -> Storage:
     return Storage(tempfile.mkdtemp())
 
@@ -28,7 +37,8 @@ class CollectedIdsTest(unittest.TestCase):
         st.save_collected_ids({"333", "111", "222"})
         self.assertEqual(st.load_collected_ids(), {"111", "222", "333"})
         self.assertEqual(
-            json.loads(st.collected_ids_path.read_text()), ["111", "222", "333"]
+            json.loads(st.collected_ids_path.read_text(encoding="utf-8")),
+            ["111", "222", "333"],
         )
 
     def test_missing_file_returns_empty_set(self) -> None:
@@ -153,7 +163,7 @@ class SaveResultsTest(unittest.TestCase):
         self.assertNotEqual(cp1, cp2)
         self.assertTrue(jp1.exists() and jp2.exists())
         # 첫 파일 내용이 두 번째 저장에 의해 덮어써지지 않았어야 한다.
-        self.assertEqual(len(json.loads(jp1.read_text())), 1)
+        self.assertEqual(len(json.loads(jp1.read_text(encoding="utf-8"))), 1)
 
     def test_csv_formula_injection_is_escaped(self) -> None:
         st = _tmp_storage()
@@ -374,6 +384,31 @@ class InstanceLockTest(unittest.TestCase):
         st1 = Storage(tmp)
         st2 = Storage(tmp)  # 같은 프로세스, 같은 경로 — 실패하면 안 된다.
         self.assertEqual(st1.output_dir, st2.output_dir)
+
+    def test_lock_held_by_spawned_process_blocks_current_process(self) -> None:
+        """Windows named mutex와 POSIX flock을 같은 subprocess 계약으로 검증."""
+        import multiprocessing
+
+        ctx = multiprocessing.get_context("spawn")
+        with tempfile.TemporaryDirectory() as tmp:
+            ready = ctx.Event()
+            release = ctx.Event()
+            child = ctx.Process(
+                target=_hold_output_lock_in_child,
+                args=(tmp, ready, release),
+            )
+            child.start()
+            try:
+                self.assertTrue(ready.wait(timeout=10), "child가 출력 잠금을 획득하지 못함")
+                with self.assertRaises(OSError):
+                    storage_module.acquire_output_lock(Path(tmp))
+            finally:
+                release.set()
+                child.join(timeout=10)
+                if child.is_alive():
+                    child.terminate()
+                    child.join(timeout=5)
+            self.assertEqual(child.exitcode, 0)
 
     @unittest.skipUnless(sys.platform != "win32", "POSIX fcntl 기반 테스트")
     def test_lock_held_by_another_process_blocks_storage_construction(self) -> None:

@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import atexit
 import csv
+import hashlib
 import json
+import os
 import sys
+import threading
 import warnings
 from datetime import datetime
 from enum import Enum
@@ -34,46 +37,91 @@ _LOCK_FILENAME = ".gmarket_fast.lock"
 # (예: 사용자가 실행 파일을 실수로 두 번 실행)가 같은 저장 경로를 동시에
 # 쓰는 상황"이다(6차 리뷰 MEDIUM 회귀 방지).
 _held_locks: dict[str, object] = {}
+_held_locks_guard = threading.Lock()
 
 
-def _acquire_output_lock(output_dir: Path) -> None:
-    key = str(output_dir.resolve())
-    if key in _held_locks:
-        return
-    lock_path = output_dir / _LOCK_FILENAME
-    try:
-        f = open(lock_path, "a+")  # noqa: SIM115 - 프로세스 수명 동안 의도적으로 열어둔다(잠금 유지)
-    except OSError:
-        # 잠금 파일 자체를 만들 수 없는 저장 경로(예: 읽기 전용)라면 잠금
-        # 없이 진행한다 — 기존 동작(저장 자체가 나중에 실패로 이어짐)을
-        # 유지하며, 잠금 기능 부재로 앱이 아예 못 뜨는 것보다 낫다.
-        return
-    try:
+def acquire_output_lock(output_dir: Path) -> None:
+    """한 프로세스만 지정 출력 디렉터리를 사용하도록 잠근다.
+
+    Gmarket 상태 파일뿐 아니라 Coupang JSON/CSV 쌍도 같은 출력 디렉터리에서
+    서로 덮어쓰면 안 되므로 두 수집 경로가 이 잠금을 공유한다. 잠금을 만들거나
+    적용할 수 없으면 안전을 증명할 수 없으므로 fail-closed 한다.
+    """
+    key = os.path.normcase(str(output_dir.resolve()))
+    with _held_locks_guard:
+        if key in _held_locks:
+            return
         if sys.platform == "win32":
-            import msvcrt
+            _acquire_windows_output_mutex(output_dir, key)
+            return
+        lock_path = output_dir / _LOCK_FILENAME
+        try:
+            f = open(lock_path, "a+")  # noqa: SIM115 - 프로세스 수명 동안 의도적으로 열어둔다(잠금 유지)
+        except OSError as e:
+            raise OSError(
+                f"저장 경로 '{output_dir}' 에 안전 잠금 파일을 만들 수 없습니다: {e}"
+            ) from e
+        try:
+            if sys.platform == "win32":
+                import msvcrt
 
-            f.seek(0)
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
 
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as e:
-        f.close()
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            f.close()
+            raise OSError(
+                f"저장 경로 '{output_dir}' 가 다른 프로세스(다른 실행 중인 창)에서 "
+                f"이미 사용 중인 것 같습니다. 같은 저장 경로를 동시에 사용하는 두 "
+                f"개의 인스턴스는 결과/체크포인트를 서로 덮어써 손상시킬 수 "
+                f"있어 잠급니다. 다른 창을 먼저 닫거나 다른 저장 경로를 사용하세요."
+            ) from e
+        except ImportError as e:
+            f.close()
+            raise OSError("현재 플랫폼에서 출력 경로 안전 잠금을 사용할 수 없습니다.") from e
+        _held_locks[key] = f
+        # 프로세스 종료 시 명시적으로 닫는다 — 그래야 (a) 잠금이 확실히 풀리고
+        # (b) 인터프리터 종료 중 GC 가 "닫지 않은 파일"이라고 경고하지 않는다.
+        atexit.register(f.close)
+
+
+def _acquire_windows_output_mutex(output_dir: Path, key: str) -> None:
+    """파일 삭제를 막지 않는 경로 기반 Windows named mutex를 획득한다."""
+    import ctypes
+    from ctypes import wintypes
+
+    mutex_name = "Local\\SellerCollector-" + hashlib.sha256(key.encode("utf-8")).hexdigest()
+    ctypes_api = vars(ctypes)
+    win_dll = ctypes_api["WinDLL"]
+    get_last_error = ctypes_api["get_last_error"]
+    win_error = ctypes_api["WinError"]
+    kernel32 = win_dll("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.CreateMutexW(None, False, mutex_name)
+    if not handle:
+        raise OSError(
+            f"저장 경로 '{output_dir}' 의 Windows 안전 잠금을 만들 수 없습니다: "
+            f"{win_error(get_last_error())}"
+        )
+    if get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
         raise OSError(
             f"저장 경로 '{output_dir}' 가 다른 프로세스(다른 실행 중인 창)에서 "
-            f"이미 사용 중인 것 같습니다. 같은 저장 경로를 동시에 사용하는 두 "
-            f"개의 인스턴스는 체크포인트/manifest 를 서로 덮어써 손상시킬 수 "
-            f"있어 잠급니다. 다른 창을 먼저 닫거나 다른 저장 경로를 사용하세요."
-        ) from e
-    except ImportError:
-        # msvcrt/fcntl 을 쓸 수 없는 예외적인 플랫폼 — 잠금 없이 진행한다.
-        f.close()
-        return
-    _held_locks[key] = f
-    # 프로세스 종료 시 명시적으로 닫는다 — 그래야 (a) 잠금이 확실히 풀리고
-    # (b) 인터프리터 종료 중 GC 가 "닫지 않은 파일"이라고 경고하지 않는다.
-    atexit.register(f.close)
+            "이미 사용 중입니다. 다른 창을 먼저 닫거나 다른 저장 경로를 사용하세요."
+        )
+    _held_locks[key] = handle
+    atexit.register(kernel32.CloseHandle, handle)
+
+
+# 기존 내부 테스트/호출 경로의 호환성을 유지한다.
+_acquire_output_lock = acquire_output_lock
 
 
 class LoadStatus(Enum):
@@ -119,7 +167,7 @@ class Storage:
         # (6차 리뷰 MEDIUM). 잠금 실패는 OSError 로 전파되며, 호출자
         # (main_window._make_storage) 는 이미 OSError 를 잡아 사용자에게
         # 안내하는 경로가 있으므로 새 예외 타입을 추가하지 않는다.
-        _acquire_output_lock(self.output_dir)
+        acquire_output_lock(self.output_dir)
 
     # ── 경로 ────────────────────────────────────────────────────────
     @property

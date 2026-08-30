@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-import re
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+_WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
 
 
 @dataclass
@@ -22,17 +29,24 @@ class CoupangRunConfig:
             raise ValueError("max_scroll_pages must be >= 1")
         if self.batch_size < 1:
             raise ValueError("batch_size must be >= 1")
-        if self.warmup_time < 0:
+        if not math.isfinite(self.warmup_time) or self.warmup_time < 0:
             raise ValueError("warmup_time must be >= 0")
-        if self.delay_min < 0:
+        if not math.isfinite(self.delay_min) or self.delay_min < 0:
             raise ValueError("delay_min must be >= 0")
-        if self.delay_max < self.delay_min:
+        if not math.isfinite(self.delay_max) or self.delay_max < self.delay_min:
             raise ValueError("delay_max must be >= delay_min")
         if self.output_prefix is not None:
             if not self.output_prefix.strip():
                 self.output_prefix = None
-            elif re.search(r"[/\\]", self.output_prefix):
-                raise ValueError("output_prefix must not contain path separators")
+            else:
+                prefix = self.output_prefix
+                if any(ch in _WINDOWS_FORBIDDEN_CHARS or ord(ch) < 32 for ch in prefix):
+                    raise ValueError("output_prefix contains Windows-forbidden characters")
+                if prefix.endswith((".", " ")):
+                    raise ValueError("output_prefix must not end with a dot or space")
+                stem = prefix.split(".", 1)[0].upper()
+                if stem in _WINDOWS_RESERVED_NAMES:
+                    raise ValueError("output_prefix uses a reserved Windows device name")
 
 
 RECORD_FIELDS = (

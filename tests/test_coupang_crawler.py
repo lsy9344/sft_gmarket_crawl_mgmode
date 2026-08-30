@@ -1,5 +1,6 @@
 """Coupang 코어 엔진 테스트 — 네트워크 없이 fake browser/page 사용 (AC-06~13, 18, 21, 22, 24)."""
 
+import csv
 import json
 import os
 import tempfile
@@ -618,6 +619,77 @@ class ExporterTest(unittest.TestCase):
             files = os.listdir(tmp)
             self.assertFalse(any(f.endswith(".tmp") for f in files))
 
+    def test_reused_prefix_preserves_existing_result_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _make_config(tmp)
+            exporter = CoupangExporter(config)
+            first = [CoupangRecord(vendor_id="V1").to_dict()]
+            second = [CoupangRecord(vendor_id="V2").to_dict()]
+
+            first_json, first_csv = exporter.save(first)
+            second_json, second_csv = exporter.save(second)
+
+            self.assertNotEqual(first_json, second_json)
+            self.assertNotEqual(first_csv, second_csv)
+            self.assertTrue(second_json.endswith("test_output_2.json"))
+            self.assertTrue(second_csv.endswith("test_output_2.csv"))
+            with open(first_json, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)[0]["vendor_id"], "V1")
+            with open(second_json, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)[0]["vendor_id"], "V2")
+
+    def test_orphaned_half_pair_is_never_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _make_config(tmp)
+            orphan = Path(tmp) / "test_output.json"
+            orphan.write_text("old", encoding="utf-8")
+
+            json_path, csv_path = CoupangExporter(config).save(
+                [CoupangRecord(vendor_id="V2").to_dict()]
+            )
+
+            self.assertEqual(orphan.read_text(encoding="utf-8"), "old")
+            self.assertTrue(json_path.endswith("test_output_2.json"))
+            self.assertTrue(csv_path.endswith("test_output_2.csv"))
+
+    def test_parallel_saves_keep_json_csv_pairs_together(self):
+        import concurrent.futures
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _make_config(tmp)
+            exporter = CoupangExporter(config)
+
+            def save_one(vendor_id: str) -> tuple[str, str]:
+                paths = exporter.save([CoupangRecord(vendor_id=vendor_id).to_dict()])
+                return paths  # type: ignore[return-value]
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                pairs = list(pool.map(save_one, ("V1", "V2", "V3", "V4")))
+
+            self.assertEqual(len({json_path for json_path, _ in pairs}), 4)
+            for json_path, csv_path in pairs:
+                with open(json_path, encoding="utf-8") as f:
+                    vendor_id = json.load(f)[0]["vendor_id"]
+                with open(csv_path, encoding="utf-8-sig", newline="") as f:
+                    row = next(csv.DictReader(f))
+                self.assertEqual(row["vendor_id"], vendor_id)
+
+    @unittest.skipUnless(os.name != "nt", "POSIX fcntl 기반 잠금 재현")
+    def test_external_export_lock_blocks_direct_exporter(self):
+        import fcntl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / ".coupang_export.lock"
+            with open(lock_path, "a+b") as external:
+                external.write(b"\0")
+                external.flush()
+                external.seek(0)
+                fcntl.flock(external.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaisesRegex(OSError, "다른 프로세스"):
+                    CoupangExporter(_make_config(tmp)).save(
+                        [CoupangRecord(vendor_id="V1").to_dict()]
+                    )
+
 
 class ConfigValidationTest(unittest.TestCase):
     """AC-05: config validation."""
@@ -630,9 +702,20 @@ class ConfigValidationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             CoupangRunConfig(output_dir=Path("/tmp"), delay_min=3.0, delay_max=1.0)
 
+    def test_non_finite_timings_rejected(self):
+        for field in ("warmup_time", "delay_min", "delay_max"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    CoupangRunConfig(output_dir=Path("/tmp"), **{field: value})
+
     def test_path_separator_in_prefix(self):
         with self.assertRaises(ValueError):
             CoupangRunConfig(output_dir=Path("/tmp"), output_prefix="foo/bar")
+
+    def test_windows_invalid_prefixes(self):
+        for prefix in ("foo:bar", "foo*bar", "CON", "CON.txt", "foo.", "foo "):
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                CoupangRunConfig(output_dir=Path("/tmp"), output_prefix=prefix)
 
     def test_empty_prefix_becomes_none(self):
         c = CoupangRunConfig(output_dir=Path("/tmp"), output_prefix="  ")

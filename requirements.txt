@@ -1,6 +1,6 @@
 # 판매자 정보 수집 시스템 v3.0 (Gmarket + Coupang) — 의존성
-requests>=2.28
-beautifulsoup4>=4.12
+requests==2.34.2
+beautifulsoup4==4.15.0
 # scrapling.fetchers(StealthySession)를 사용하지만 [fetchers] extra 는
 # playwright==1.61.0 을 강제해 camoufox 0.5.4(playwright<1.61) 와 충돌한다.
 # 따라서 base scrapling + StealthySession 런타임 의존을 개별 고정한다.
@@ -9,15 +9,19 @@ beautifulsoup4>=4.12
 # 빌드에서 Gmarket 사전조사가 ModuleNotFoundError 로 즉시 실패한다(2026-07-27 VM 실측).
 scrapling==0.4.11
 patchright==1.61.2
-msgspec>=0.18
-anyio>=4
-protego>=0.3
-curl_cffi>=0.7
+msgspec==0.21.1
+anyio==4.14.2
+protego==0.6.2
+curl_cffi==0.15.0
 playwright==1.60.0  # camoufox 0.5.4(playwright<1.61) 호환 고정
-PyQt6>=6.5
+PyQt6==6.11.0
+# Foodspring 크롤러: Excel(xlsx) 출력
+openpyxl==3.1.5
 # Coupang 크롤러: Camoufox 브라우저 자동화 + GeoIP
 camoufox[geoip]==0.5.4
 
 # 설치 후 브라우저 런타임 다운로드 필요(CoupangRuntimeSetup.exe 가 자동 수행):
-#   python -m camoufox sync && python -m camoufox fetch   # Coupang: Camoufox + GeoIP
-#   patchright install chromium                            # Gmarket: stealth Chromium
+#   python -m camoufox sync
+#   python -m camoufox fetch official/stable/152.0.4-beta.28
+#   python -m camoufox set official/stable/152.0.4-beta.28
+#   patchright install chromium

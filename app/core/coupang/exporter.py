@@ -5,13 +5,53 @@ from __future__ import annotations
 import csv
 import json
 import os
+import sys
 import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models.coupang_records import RECORD_FIELDS, CoupangRunConfig
 
 _CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
+_EXPORT_LOCK_FILENAME = ".coupang_export.lock"
+_save_guard = threading.Lock()
+
+
+@contextmanager
+def _exclusive_export_lock(out_dir: Path):
+    """JSON/CSV 경로 선택과 저장을 프로세스 간에도 직렬화한다."""
+    lock_path = out_dir / _EXPORT_LOCK_FILENAME
+    try:
+        lock_file = open(lock_path, "a+b")  # noqa: SIM115 - 잠금 획득 실패와 저장 중 오류를 구분해 닫는다
+    except OSError as e:
+        raise OSError(f"Coupang 결과 잠금 파일을 만들 수 없습니다: {lock_path}: {e}") from e
+
+    try:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        lock_file.close()
+        raise OSError(
+            f"다른 프로세스가 '{out_dir}'에 Coupang 결과를 저장 중입니다. "
+            "저장이 끝난 뒤 다시 시도하세요."
+        ) from e
+    try:
+        yield
+    finally:
+        lock_file.close()
 
 
 class CsvWriteError(Exception):
@@ -40,36 +80,38 @@ class CoupangExporter:
         local_now = datetime.now(timezone.utc).astimezone()
         return f"coupang_omp_sellers_{local_now.strftime('%Y%m%d_%H%M%S')}"
 
-    def save(self, records: list[dict], partial: bool = False) -> tuple[str | None, str | None]:
-        if not records and not partial:
-            out_dir = Path(self.config.output_dir)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            prefix = self._prefix()
-            json_path = str(out_dir / f"{prefix}.json")
-            csv_path = str(out_dir / f"{prefix}.csv")
-            self._atomic_write_json(json_path, [])
-            try:
-                self._atomic_write_csv(csv_path, [])
-            except Exception as e:
-                raise CsvWriteError(json_path, e) from e
-            return json_path, csv_path
+    @staticmethod
+    def _available_paths(out_dir: Path, prefix: str, partial: bool) -> tuple[str, str]:
+        """기존 결과를 덮어쓰지 않는 JSON/CSV 한 쌍의 경로를 고른다."""
+        suffix = "_partial" if partial else ""
+        index = 1
+        while True:
+            numbered = "" if index == 1 else f"_{index}"
+            stem = f"{prefix}{numbered}{suffix}"
+            json_path = out_dir / f"{stem}.json"
+            csv_path = out_dir / f"{stem}.csv"
+            if not json_path.exists() and not csv_path.exists():
+                return str(json_path), str(csv_path)
+            index += 1
 
-        if not records:
+    def save(self, records: list[dict], partial: bool = False) -> tuple[str | None, str | None]:
+        if not records and partial:
             return None, None
 
         out_dir = Path(self.config.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         prefix = self._prefix()
-        suffix = "_partial" if partial else ""
-        json_path = str(out_dir / f"{prefix}{suffix}.json")
-        csv_path = str(out_dir / f"{prefix}{suffix}.csv")
-
-        self._atomic_write_json(json_path, records)
-        try:
-            self._atomic_write_csv(csv_path, records)
-        except Exception as e:
-            raise CsvWriteError(json_path, e) from e
-        return json_path, csv_path
+        # 파일명 선택부터 JSON/CSV 승격까지 같은 프로세스의 복수 스레드를
+        # 직렬화한다. 프로세스 간 경쟁은 crawler 시작 시 출력 디렉터리 잠금으로
+        # 차단하고, Exporter를 직접 쓰는 경로도 파일 잠금으로 한 번 더 보호한다.
+        with _save_guard, _exclusive_export_lock(out_dir):
+            json_path, csv_path = self._available_paths(out_dir, prefix, partial)
+            self._atomic_write_json(json_path, records)
+            try:
+                self._atomic_write_csv(csv_path, records)
+            except Exception as e:
+                raise CsvWriteError(json_path, e) from e
+            return json_path, csv_path
 
     def _atomic_write_json(self, path: str, records: list[dict]) -> None:
         dir_path = os.path.dirname(path)

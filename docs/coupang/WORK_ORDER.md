@@ -625,10 +625,10 @@ safe point는 다음 위치에 둔다.
 - Camoufox browser `official/stable v152.0.4-beta.28`
 - `scrapling==0.4.11`
 
-현재 `requirements.txt`에는 `camoufox` 직접 의존성이 없고
-`scrapling[fetchers]>=0.4.11`만 있다 (`requirements.txt:1-11`). 따라서
-성공한 venv의 lock/freeze를 근거로 **`camoufox[geoip]==0.5.4`**를 직접
-의존성으로 명시한다. `geoip=True`는 `geoip` extra가 없으면 즉시 실패한다
+현재 `requirements.txt`에는 `scrapling==0.4.11`과
+**`camoufox[geoip]==0.5.4`**가 직접 고정되어 있다. `geoip=True`는 `geoip`
+extra가 없으면 즉시 실패하므로 배포 의존성에서 제거하거나 base
+`camoufox`로 낮추면 안 된다
 (`camoufox/geolocation.py:120-127`, 설치된 0.5.4 기준). 최신 버전을 임의로
 선택하지 않는다.
 
@@ -639,8 +639,8 @@ safe point는 다음 위치에 둔다.
 ```bash
 python -m pip install -r requirements.txt
 python -m camoufox sync
+python -m camoufox fetch official/stable/152.0.4-beta.28
 python -m camoufox set official/stable/152.0.4-beta.28
-python -m camoufox fetch
 python -m camoufox version
 ```
 
@@ -650,10 +650,10 @@ python -m camoufox version
 (`camoufox/pkgman.py:54-74,721-790`, 설치된 0.5.4 기준).
 
 앱은 수집 시작 중에 package/browser/GeoIP 자산을 암묵적으로 다운로드하지
-않는다. Coupang 시작 전에 package, pinned browser, GeoIP DB 존재/갱신 필요
-상태를 검사하고 부족하면 위 설치 명령을 안내한 뒤 시작을 거부한다. 오프라인
-상태에서는 Gmarket 탭과 앱 자체는 정상 기동해야 하며, Coupang은 “인터넷 연결
-또는 runtime 준비 필요”로 실패해야 한다. `geoip=False`로 조용히 강등하지 않는다.
+않는다. Gmarket 사전 조사 전에 Patchright 패키지와 정확한 Chromium revision을,
+Coupang 시작 전에 package, pinned browser, GeoIP DB 존재/갱신 상태를 검사한다.
+부족하면 setup 도구를 안내한 뒤 해당 수집만 거부하며 앱 자체는 정상 기동한다.
+`geoip=False`로 조용히 강등하지 않는다.
 
 Linux에서 디스플레이 없는 실환경 테스트만 `xvfb-run`을 사용한다. Windows GUI
 실행 경로에 `xvfb`를 요구하지 않는다.
@@ -666,23 +666,21 @@ Linux에서 디스플레이 없는 실환경 테스트만 `xvfb-run`을 사용�
 - 앱 이름을 플랫폼 중립 이름으로 변경
 - Camoufox/Playwright hidden import와 필요한 package data 조사·반영
 - **배포 계약:** PyInstaller 앱 exe에는 약 1.2GB browser/GeoIP cache를 직접
-  넣지 않는다. `scripts/setup_coupang_runtime.py`를 콘솔형
-  `CoupangRuntimeSetup.exe`로 함께 빌드해 package에 포함하고, 이 setup 도구가
-  pinned browser와 GeoIP DB를 per-user cache에 설치/검증한다. 앱은 설치를
-  수행하지 않고 preflight와 안내만 담당한다. 따라서 지원 배포물은
-  `SellerCollector.exe + CoupangRuntimeSetup.exe + 안내문`이며 bare 앱 exe
-  단독은 Coupang 지원 배포물이 아니다.
-- 브라우저 미설치 상태에서 Gmarket 탭은 실행 가능하고 Coupang 탭은 명확한
-  안내를 표시하는지 검증
+  넣지 않는다. `scripts/setup_coupang_runtime.py`를 단일 `SellerCollector.exe`의
+  `--setup-runtime` 및 `--verify-runtime` 모드에 포함하고, 이 모드가 pinned
+  browser와 GeoIP DB를 per-user cache에 설치/검증한다. GUI 수집 경로는 설치를
+  암묵적으로 수행하지 않고 preflight와 단일 EXE 명령 안내만 담당한다.
+- 브라우저 미설치 상태에서도 앱은 기동되고, Gmarket/Coupang 각 수집 시작은
+  정확한 setup 안내와 함께 차단되는지 검증
 - Windows에서 실제 빌드 후 Gmarket/Coupang 양쪽 스모크 수행
 
 clean Windows 사용자 프로필(기존 Camoufox cache 없음)에서 아래 순서를
 릴리스 테스트한다.
 
-1. 앱 exe만 실행: 앱/Gmarket 정상, Coupang 시작 차단 및 정확한 setup 안내
-2. `CoupangRuntimeSetup.exe` 실행: pinned browser/GeoIP 설치와 버전 확인
+1. 앱 exe만 실행: 앱 정상 기동, Gmarket/Coupang 시작 차단 및 정확한 setup 안내
+2. `SellerCollector.exe --setup-runtime` 실행: pinned browser/GeoIP 설치와 버전 확인
 3. 앱 재실행: Coupang preflight 통과 및 최소 수집 성공
-4. cache를 일시적으로 사용할 수 없게 한 상태: 앱/Gmarket 정상, Coupang만 실패
+4. cache를 일시적으로 사용할 수 없게 한 상태: 앱은 정상, 두 수집은 각각 명확히 실패
 
 브라우저 자산 배포 방식이 확정되지 않으면 개발 완료가 아니라 **릴리스 보류**다.
 
@@ -885,7 +883,7 @@ ruff가 venv에 없으면 새 의존성을 추가하지 말고 현재 프로젝�
 | `requirements.txt` | 검증된 Camoufox 직접 의존성 명시 | clean venv install |
 | `pyinstaller.spec` | 이름/hidden import/data/browser 정책 반영 | Windows build/smoke |
 | `README.md` | 2탭 사용법, 설치, 출력, 제한 갱신 | 명령 실행 가능성 확인 |
-| `scripts/setup_coupang_runtime.py` | pinned browser/GeoIP를 per-user cache에 설치/검증하는 console setup | `CoupangRuntimeSetup.exe` 빈 Windows cache 테스트 |
+| `scripts/setup_coupang_runtime.py` | pinned browser/GeoIP를 per-user cache에 설치/검증하는 단일 EXE 모드 | `SellerCollector.exe --setup-runtime` 빈 Windows cache 테스트 |
 | `tests/*` | §13 기준 자동화 | 전체 discover 통과 |
 
 `app/core/storage.py`, `app/core/crawler.py`, Gmarket model/schema는 이번 작업의

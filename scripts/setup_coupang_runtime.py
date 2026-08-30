@@ -1,7 +1,8 @@
 """Coupang 런타임 설치/검증 도구 (WORK_ORDER §11.3).
 
 Camoufox pinned browser와 GeoIP DB를 per-user cache에 설치/검증한다.
-PyInstaller로 CoupangRuntimeSetup.exe로 빌드하여 배포물에 포함한다.
+PyInstaller 단일 SellerCollector.exe의 --setup-runtime/--verify-runtime 모드에
+포함되며 소스에서는 이 파일을 직접 실행할 수도 있다.
 
 사용법:
     python scripts/setup_coupang_runtime.py [--verify-only]
@@ -19,8 +20,10 @@ from pathlib import Path
 # Windows 콘솔(cp949 등)에서 유니코드(예: em-dash) 출력 시 UnicodeEncodeError 로
 # 스크립트가 중단되는 것을 막는다. frozen 콘솔 exe 에서 특히 중요하다.
 try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 except (AttributeError, ValueError):
     pass
 
@@ -37,6 +40,15 @@ from app.core.coupang.preflight import (
     _find_geoip_ipv4,
     _get_install_dir,
 )
+from app.core.gmarket_preflight import (
+    browsers_dir as _shared_gmarket_browsers_dir,
+)
+from app.core.gmarket_preflight import (
+    chromium_installed as _shared_gmarket_chromium_installed,
+)
+from app.core.gmarket_preflight import (
+    expected_chromium_revision as _shared_expected_gmarket_chromium_revision,
+)
 
 PINNED_BROWSER = f"{PINNED_BROWSER_CHANNEL}/stable/{PINNED_BROWSER_VERSION}"
 
@@ -48,23 +60,19 @@ def _gmarket_browsers_dir() -> Path | None:
     (%LOCALAPPDATA%\\ms-playwright). 여기 설치하면 앱이 PLAYWRIGHT_BROWSERS_PATH
     를 이 경로로 설정해 patchright 가 브라우저를 찾는다.
     """
-    local = os.environ.get("LOCALAPPDATA", "")
-    if local:
-        return Path(local) / "ms-playwright"
-    return None
+    return _shared_gmarket_browsers_dir()
 
 
 def _gmarket_chromium_installed() -> bool:
-    """patchright Chromium 이 per-user 경로에 설치돼 있는지 확인."""
-    d = _gmarket_browsers_dir()
-    if d is None or not d.is_dir():
-        return False
-    for chrom in d.glob("chromium-*"):
-        if (chrom / "chrome-win64" / "chrome.exe").is_file():
-            return True
-        if (chrom / "chrome-linux" / "chrome").is_file():  # 개발(WSL) 검증용
-            return True
-    return False
+    """현재 patchright가 요구하는 정확한 Chromium revision을 확인."""
+    return _shared_gmarket_chromium_installed(
+        _gmarket_browsers_dir(), _expected_gmarket_chromium_revision()
+    )
+
+
+def _expected_gmarket_chromium_revision() -> str | None:
+    """번들된 patchright browsers.json에서 요구 Chromium revision을 읽는다."""
+    return _shared_expected_gmarket_chromium_revision()
 
 
 def install_gmarket_browser() -> bool:

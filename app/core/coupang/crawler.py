@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.core.base import CancelledError, Control
+from app.core.storage import acquire_output_lock
 from app.models.coupang_records import (
     CoupangRecord,
     CoupangRunConfig,
@@ -99,6 +100,8 @@ class CoupangCrawler:
         browser = None
         cm = None  # Camoufox context manager (real browser only)
         try:
+            self.config.output_dir.mkdir(parents=True, exist_ok=True)
+            acquire_output_lock(self.config.output_dir)
             browser, cm = self._create_browser()
             page = browser.new_page()
             self._run_pipeline(page, summary)
@@ -158,7 +161,7 @@ class CoupangCrawler:
         except ImportError as e:
             raise _RunError(
                 "Camoufox 패키지가 설치되지 않았습니다. "
-                "설치: pip install camoufox[geoip]==0.5.4 && python -m camoufox fetch",
+                "명령 프롬프트에서 SellerCollector.exe --setup-runtime 을 먼저 실행하세요.",
                 reason="error",
             ) from e
         cm = Camoufox(headless=False, geoip=True, locale="ko-KR", humanize=True)
@@ -320,16 +323,21 @@ class CoupangCrawler:
         body_json = json.dumps(template)
 
         result = page.evaluate("""async (bodyStr) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 30000);
             try {
                 const r = await fetch("https://www.coupang.com/np/omp/api/getPromotion", {
                     method: "POST",
                     credentials: "include",
                     headers: {"Content-Type": "application/json"},
-                    body: bodyStr
+                    body: bodyStr,
+                    signal: controller.signal
                 });
                 const text = await r.text();
                 return {status: r.status, body: text};
-            } catch(e) { return {error: e.message}; }
+            } catch(e) {
+                return {error: e.name === "AbortError" ? "요청 시간 초과(30초)" : e.message};
+            } finally { clearTimeout(timer); }
         }""", body_json)
 
         if result.get("error"):
@@ -395,11 +403,14 @@ class CoupangCrawler:
     def _get_vendors_for_items(self, page, vendor_item_ids: list[str]) -> tuple[dict, bool]:
         """Returns (vendors_dict, had_error)."""
         result = page.evaluate("""async (args) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 30000);
             try {
                 const r = await fetch("https://shop.coupang.com/api/v2/store/individualInfo/products", {
                     method: "POST",
                     credentials: "include",
                     headers: {"Content-Type": "application/json"},
+                    signal: controller.signal,
                     body: JSON.stringify({
                         vendorItemIds: args.viids,
                         isVIBased: true,
@@ -411,7 +422,9 @@ class CoupangCrawler:
                 });
                 const text = await r.text();
                 return {status: r.status, body: text};
-            } catch(e) { return {error: e.message}; }
+            } catch(e) {
+                return {error: e.name === "AbortError" ? "요청 시간 초과(30초)" : e.message};
+            } finally { clearTimeout(timer); }
         }""", {"viids": vendor_item_ids, "storeId": 109671, "vendorId": "A00067881"})
 
         if result.get("error"):
@@ -488,12 +501,16 @@ class CoupangCrawler:
 
     def _get_store_review(self, page, vendor_id: str) -> dict | None:
         result = page.evaluate("""async (vid) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 30000);
             try {
                 const params = new URLSearchParams({vendorId: vid, urlName: vid});
-                const r = await fetch('https://shop.coupang.com/api/v1/store/getStoreReview?' + params.toString(), {credentials: 'include'});
+                const r = await fetch('https://shop.coupang.com/api/v1/store/getStoreReview?' + params.toString(), {credentials: 'include', signal: controller.signal});
                 const text = await r.text();
                 return {status: r.status, body: text};
-            } catch(e) { return {error: e.message}; }
+            } catch(e) {
+                return {error: e.name === "AbortError" ? "요청 시간 초과(30초)" : e.message};
+            } finally { clearTimeout(timer); }
         }""", vendor_id)
 
         if result.get("error"):

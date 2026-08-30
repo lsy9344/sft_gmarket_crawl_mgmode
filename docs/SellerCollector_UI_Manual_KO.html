@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>판매자 정보 수집기 UI 사용 매뉴얼</title>
+  <style>
+    @page { size: A4; margin: 12mm; }
+    body { font-family: "Noto Sans CJK KR", "Malgun Gothic", sans-serif; color: #172033; background: white; font-size: 9pt; line-height: 1.32; margin: 0; }
+    h1 { color: #0b3c78; font-size: 28pt; margin: 0 0 10px; }
+    h2 { color: #0b3c78; font-size: 18pt; border-bottom: 2px solid #2d6fbb; padding-bottom: 4px; margin: 0 0 9px; }
+    h3 { color: #164f8c; font-size: 11.5pt; margin: 9px 0 4px; }
+    p { margin: 3px 0 6px; }
+    ol, ul { margin: 3px 0 7px 20px; padding: 0; }
+    li { margin: 2px 0; }
+    code { font-family: "WenQuanYi Zen Hei Mono", monospace; background: #edf3f9; padding: 2px 4px; color: #0b3c78; }
+    .break { page-break-before: always; }
+    .cover { padding-top: 0; }
+    .subtitle { font-size: 15pt; color: #526174; margin-bottom: 42px; }
+    .quick { background: #edf5ff; border-left: 5px solid #2d6fbb; padding: 10px 14px; margin: 14px 0; }
+    .warning { background: #fff7df; border-left: 5px solid #e2a400; padding: 8px 11px; margin: 8px 0; }
+    .good { background: #edf9f1; border-left: 5px solid #2b9a55; padding: 8px 11px; margin: 8px 0; }
+    .danger { background: #fff0f0; border-left: 5px solid #d54545; padding: 8px 11px; margin: 8px 0; }
+    .steps { width: 100%; border-collapse: collapse; margin: 6px 0; }
+    .steps th { background: #164f8c; color: white; padding: 4px; text-align: left; }
+    .steps td { border: 1px solid #cbd5e1; padding: 4px; vertical-align: top; }
+    .steps td:first-child { width: 9%; text-align: center; font-weight: bold; color: #164f8c; }
+    .screen { border: 1px solid #b8c4d1; margin: 4px 20px 6px; }
+    .small { font-size: 9pt; color: #5f6c7b; }
+    .commands { background: #142033; color: white; padding: 8px 12px; font-family: "WenQuanYi Zen Hei Mono", monospace; line-height: 1.45; }
+    .commands span { color: #a8d5ff; }
+    .page-no { text-align: right; color: #7b8794; font-size: 8.5pt; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="page cover">
+    <p class="small">SellerCollector v3.0 · Windows 단일 EXE</p>
+    <h1>판매자 정보 수집기<br>UI 사용 매뉴얼</h1>
+    <p class="subtitle">처음 사용하는 분을 위한 쉽고 간단한 안내서</p>
+    <div class="quick">
+      <b>핵심 사용 순서</b><br>
+      ① 최초 1회 런타임 설치 → ② 저장 폴더 선택 → ③ 최소 범위로 테스트 → ④ 결과 확인
+    </div>
+    <div class="warning">
+      <b>운영 주의:</b> 사이트 소유자의 허가와 조직 정책이 확인된 범위에서만 수집하세요.
+      차단 우회, 프록시 회전, 로그인 우회 기능은 사용하지 않습니다.
+    </div>
+    <p class="small">작성일: 2026-07-29 · 대상 파일: SellerCollector.exe</p>
+    <p class="page-no">1 / 5</p>
+  </div>
+
+  <div class="page break">
+    <h2>1. 처음 한 번만 준비하기</h2>
+    <h3>① EXE가 있는 폴더에서 명령 프롬프트 열기</h3>
+    <p>파일 탐색기에서 <code>SellerCollector.exe</code>가 있는 폴더를 엽니다.
+       주소창에 <code>cmd</code>를 입력하고 Enter를 누릅니다.</p>
+
+    <h3>② 브라우저 런타임 설치</h3>
+    <div class="commands"><span>SellerCollector.exe</span> --setup-runtime</div>
+    <p>인터넷에서 Gmarket·Coupang용 브라우저와 GeoIP 데이터를 설치합니다.
+       약 1.4GB를 내려받을 수 있으며, 완료될 때까지 창을 닫지 마세요.</p>
+
+    <h3>③ 설치 확인</h3>
+    <div class="commands"><span>SellerCollector.exe</span> --verify-runtime</div>
+    <p>마지막에 성공 메시지가 나오고 종료 코드가 0이면 준비가 끝난 것입니다.</p>
+
+    <h3>④ 프로그램 실행</h3>
+    <p><code>SellerCollector.exe</code>를 더블클릭합니다. 화면 위쪽에서
+       <b>Gmarket</b> 또는 <b>Coupang</b> 탭을 선택합니다.</p>
+
+    <div class="good"><b>권장 첫 테스트</b><br>
+      Gmarket은 카테고리 1개·수집 수량 10개, Coupang은 최대 피드 페이지 1로 시작하세요.
+    </div>
+    <div class="warning"><b>같은 사용자 계정 사용</b><br>
+      설치 명령과 GUI를 같은 Windows 사용자로 실행해야 합니다. 설치 명령만 관리자 계정으로 실행하지 마세요.
+    </div>
+    <p class="page-no">2 / 5</p>
+  </div>
+
+  <div class="page break">
+    <h2>2. Gmarket 탭 사용하기</h2>
+    <img class="screen" src="manual_assets/gmarket_ui.png" width="550" height="450" alt="Gmarket 화면">
+    <table class="steps">
+      <tr><th>순서</th><th>할 일</th></tr>
+      <tr><td>1</td><td><b>카테고리</b>: 처음에는 전체 선택을 끄고 원하는 항목 1개만 선택합니다.</td></tr>
+      <tr><td>2</td><td><b>수집 수량</b>: 첫 테스트는 10을 권장합니다. 요청 간격은 기본값 0.5초를 유지합니다.</td></tr>
+      <tr><td>3</td><td><b>저장 경로</b>: 로컬 폴더를 선택합니다. 공유 폴더나 네트워크 드라이브는 사용하지 마세요.</td></tr>
+      <tr><td>4</td><td><b>사전 조사</b>: 전체·신규·이미 수집 건수를 확인합니다.</td></tr>
+      <tr><td>5</td><td>신규 대상이 있으면 <b>수집 시작</b>을 누릅니다.</td></tr>
+      <tr><td>6</td><td>완료 후 저장 폴더에서 <b>JSON·CSV</b> 결과를 확인합니다.</td></tr>
+    </table>
+    <p class="small">사전 조사 뒤 카테고리나 저장 경로를 바꾸면 사전 조사를 다시 실행해야 합니다.</p>
+    <p class="page-no">3 / 5</p>
+  </div>
+
+  <div class="page break">
+    <h2>3. Coupang 탭 사용하기</h2>
+    <img class="screen" src="manual_assets/coupang_ui.png" width="550" height="450" alt="Coupang 화면">
+    <table class="steps">
+      <tr><th>순서</th><th>할 일</th></tr>
+      <tr><td>1</td><td><b>출력 폴더</b>에서 결과를 저장할 로컬 폴더를 반드시 선택합니다.</td></tr>
+      <tr><td>2</td><td>첫 테스트는 <b>최대 피드 페이지 1</b>로 설정합니다.</td></tr>
+      <tr><td>3</td><td>배치 10, 웜업 20초, 지연 최소 1.0초·최대 2.5초는 기본값을 유지합니다.</td></tr>
+      <tr><td>4</td><td>출력 prefix는 선택 사항입니다. 비우면 파일 이름이 자동 생성됩니다.</td></tr>
+      <tr><td>5</td><td><b>수집 시작</b>을 누르고 단계·진행·통계와 로그를 확인합니다.</td></tr>
+      <tr><td>6</td><td>완료 후 <b>결과 열기</b>를 눌러 JSON·CSV 파일을 확인합니다.</td></tr>
+    </table>
+    <div class="warning"><b>동시에 실행하지 마세요.</b><br>
+      Gmarket과 Coupang은 한 번에 하나만 실행됩니다. 한 탭의 작업을 끝내거나 취소한 뒤 다른 탭을 시작하세요.
+    </div>
+    <p class="page-no">4 / 5</p>
+  </div>
+
+  <div class="last break">
+    <h2>4. 버튼·결과·문제 해결</h2>
+    <table class="steps">
+      <tr><th>버튼</th><th>기능</th></tr>
+      <tr><td>일시정지</td><td>현재 처리 뒤 잠시 멈춥니다. <b>재개</b>로 계속합니다.</td></tr>
+      <tr><td>취소</td><td>현재 요청을 정리한 뒤 중단하며, 수집된 내용은 부분 결과로 저장됩니다.</td></tr>
+      <tr><td>이어서 수집</td><td>Gmarket의 남은 신규 대상만 다시 조사해 이어서 수집합니다.</td></tr>
+      <tr><td>초기화</td><td>Gmarket 수집 이력과 진행 상태를 지웁니다. 전체를 다시 수집할 때만 사용하세요.</td></tr>
+    </table>
+
+    <h3>자주 발생하는 문제</h3>
+    <ul>
+      <li><b>런타임 미준비:</b> 프로그램을 닫고 <code>--setup-runtime</code>을 다시 실행한 뒤 <code>--verify-runtime</code>으로 확인합니다.</li>
+      <li><b>Gmarket 수집 시작 버튼이 비활성:</b> 카테고리를 선택하고 먼저 <b>사전 조사</b>를 실행합니다.</li>
+      <li><b>Coupang 시작 불가:</b> 출력 폴더가 입력됐는지, 다른 탭이 실행 중인지 확인합니다.</li>
+      <li><b>방화벽 알림:</b> Gmarket 첫 실행 때 Chromium 인바운드 알림이 나오면 창을 닫아도 됩니다.</li>
+      <li><b>30일 뒤 Coupang 실행 거부:</b> GeoIP 갱신을 위해 <code>--setup-runtime</code>을 다시 실행합니다.</li>
+      <li><b>결과 위치를 모름:</b> 선택한 저장 폴더를 확인하거나 Coupang의 <b>결과 열기</b>를 누릅니다.</li>
+    </ul>
+
+    <div class="danger"><b>중단해야 하는 경우</b><br>
+      403·429 오류, CAPTCHA, 사이트 차단 메시지 또는 비정상 오류가 반복되면 즉시 취소하고 운영 책임자에게 확인하세요.
+    </div>
+    <div class="good"><b>종료 방법</b><br>
+      작업이 끝난 뒤 창의 X 버튼으로 종료합니다. 수집 중이면 종료 확인창에서 안전한 중단을 선택하세요.
+    </div>
+    <p class="page-no">5 / 5</p>
+  </div>
+</body>
+</html>
