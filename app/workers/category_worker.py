@@ -34,6 +34,9 @@ class CategoryWorker(QThread):
                 control=self._control,
                 browser_factory=self._browser_factory,
                 on_log=self.log_message.emit,
+                # 트리 로드 중 차단도 IP 평판 차단의 신호 — 수집 엔진과 같은
+                # 쿨다운 게이트를 공유하도록 output 폴더에 기록한다.
+                block_state_dir=self._cache.path.parent,
             )
             groups = fetcher.fetch()
             fetched_at = self._cache.save(groups)

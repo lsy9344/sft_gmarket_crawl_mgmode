@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from app.core.coupang import blockguard
+
 # JSONP 콜백 — 페이지 자신이 쓰는 패턴 재현 (청크 6913 분석 근거)
 CATEGORY_LIST_FETCH_JS = """
 async () => {
@@ -318,11 +320,12 @@ class CategoryTreeFetcher:
     """
 
     def __init__(self, control=None, browser_factory=None, on_log=None,
-                 warmup_time: float = 15.0) -> None:
+                 warmup_time: float = 15.0, block_state_dir: Path | None = None) -> None:
         self._control = control
         self._browser_factory = browser_factory
         self._on_log = on_log
         self._warmup_time = warmup_time
+        self._block_state_dir = block_state_dir
 
     def _log(self, msg: str) -> None:
         if self._on_log is not None:
@@ -341,6 +344,18 @@ class CategoryTreeFetcher:
         if self._control is not None:
             self._control.checkpoint()
 
+    def _record_block(self, reason: str) -> None:
+        """차단 감지를 blockguard 에 기록 (best-effort). IP 차단 재발 대비.
+
+        block_state_dir 미지정 시 기록하지 않는다 — 기존 동작 유지.
+        """
+        if self._block_state_dir is None:
+            return
+        path = blockguard.record_block(self._block_state_dir, reason=reason)
+        if path:
+            self._log(f"  차단 상태 기록: {path} "
+                      f"({blockguard.DEFAULT_BLOCK_COOLDOWN_HOURS:.0f}시간 쿨다운)")
+
     def fetch(self) -> list[tuple[str, list[CategoryNode]]]:
         from app.core.coupang.crawler import COUPANG_HOME
         from app.core.coupang.search_parser import is_blocked
@@ -353,6 +368,7 @@ class CategoryTreeFetcher:
             html = page.content()
             blocked, reason = is_blocked(html)
             if blocked:
+                self._record_block(f"홈 웜업 차단: {reason}")
                 raise CategoryFetchError(f"쿠팡 차단 감지: {reason}. 쿨다운 후 재시도하세요.")
             self._natural_warmup(page)
             self._checkpoint()

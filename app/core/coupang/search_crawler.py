@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from app.core.base import CancelledError  # noqa: F401 - 호출 측 예외 계약 재노출
+from app.core.coupang import blockguard
 from app.core.coupang.crawler import CoupangCrawler, _RunError, _safe_callback
 from app.core.coupang.search_parser import (
     DOM_EXTRACTION_JS,
@@ -101,6 +102,19 @@ def classify_blocked_html(html: str) -> str:
     return ""
 
 
+_AKAMAI_REFERENCE_RE = re.compile(r"Reference #[\w.]+")
+
+
+def extract_akamai_reference(html: str) -> str:
+    """Akamai 차단 응답의 Reference # 식별자 추출 (없으면 빈 문자열).
+
+    Reference 는 차단 건을 엣지 단위로 대조하는 진단 정보다 — 차단 상태
+    기록(coupang_block_state.json)과 로그에 함께 남긴다.
+    """
+    m = _AKAMAI_REFERENCE_RE.search(html or "")
+    return m.group(0) if m else ""
+
+
 @dataclass
 class SearchRunConfig(CoupangRunConfig):
     """수집 실행 설정 — 카테고리 전용(기본) 또는 키워드(층1/2 포함) 모드."""
@@ -156,6 +170,45 @@ class SearchCrawler(CoupangCrawler):
     # 테스트에서 오버라이드 가능
     _backoff_seconds = BACKOFF_SECONDS
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # 마지막 차단 응답의 Akamai Reference # — run() 종료 시 차단 상태에 기록
+        self._last_block_reference = ""
+
+    def run(self) -> CoupangRunSummary:
+        """차단 쿨다운 게이트 + 차단 상태 기록 후 부모 파이프라인 실행.
+
+        차단 감지 후 쿨다운 미경과 재실행은 실패 확률이 높을뿐 아니라 IP 평판을
+        추가로 깎는다(2026-08-30 실측 — 차단 4.8시간 뒤 재실행, 재차 차단).
+        """
+        remaining = blockguard.cooldown_remaining_seconds(self.config.output_dir)
+        if remaining > 0:
+            state = blockguard.read_block_state(self.config.output_dir) or {}
+            blocked_at = str(state.get("blocked_at", "?"))
+            summary = CoupangRunSummary()
+            summary.error = (
+                f"이전 차단({blocked_at}) 후 쿨다운 중입니다 — 약 "
+                f"{blockguard.format_remaining(remaining)} 후 재시도하세요. "
+                "쿨다운 중 재실행은 IP 평판을 더 나쁘게 만듭니다."
+            )
+            summary.termination_reason = "block_cooldown"
+            self._log(f"실행 차단: {summary.error}")
+            self._emit_stats(summary)
+            return summary
+        self._last_block_reference = ""
+        summary = super().run()
+        if summary.termination_reason == "blocked":
+            path = blockguard.record_block(
+                self.config.output_dir,
+                reason=summary.error or "",
+                reference=self._last_block_reference,
+            )
+            self._log(
+                f"  차단 상태 기록: {path} — "
+                f"{blockguard.DEFAULT_BLOCK_COOLDOWN_HOURS:.0f}시간 쿨다운 후 재시도하세요."
+            )
+        return summary
+
     def _phase(self, name: str) -> None:
         idx = SEARCH_PHASES.index(name) + 1
         _safe_callback(self._on_phase, "on_phase", self._on_log, name, idx, len(SEARCH_PHASES))
@@ -171,6 +224,7 @@ class SearchCrawler(CoupangCrawler):
         from app.core.coupang.crawler import COUPANG_HOME
         page.goto(COUPANG_HOME, wait_until="domcontentloaded", timeout=30000)
         self.control.sleep(2 * self._wait_scale)
+        self._verify_warmup_ok(page)
         self._natural_interaction(page, config.warmup_time)
         self.control.checkpoint()
         self._log("  Akamai 검증 완료.")
@@ -311,6 +365,29 @@ class SearchCrawler(CoupangCrawler):
 
     # ── 수집 헬퍼 ──────────────────────────────────────────────────────────
 
+    def _verify_warmup_ok(self, page) -> None:
+        """웜업 직후 홈 HTML 차단 검사 — 홈부터 거부면 IP 평판 차단으로 조기 중단.
+
+        기존에는 홈 검증 없이 "Akamai 검증 완료"를 로그해, 홈 자체가 차단된
+        세션인지 첫 PLP 진입만 거부된 것인지 로그로 구분이 불가능했다.
+        홈 차단은 세션 시작부터 거부된 것이므로 이후 단계를 진행하지 않는다.
+        """
+        try:
+            html = page.content()
+        except Exception as e:  # noqa: BLE001 - 브라우저 경계 오류 시 검사 생략
+            self._log(f"  홈 콘텐츠 확인 실패({type(e).__name__}) — 차단 검사 생략")
+            return
+        blocked, reason = is_blocked(html)
+        if not blocked:
+            return
+        diagnosis = self._dump_blocked_page(page, "home_warmup", html)
+        hint = f" — {diagnosis}" if diagnosis else ""
+        raise _RunError(
+            f"홈 웜업 단계에서 차단 감지: {reason}{hint}. "
+            "IP 평판 차단 가능성 — 쿨다운 후 재시도하세요.",
+            reason="blocked",
+        )
+
     def _merge(self, products: dict[str, SearchProduct], items: list[SearchProduct]) -> int:
         fresh = 0
         for p in items:
@@ -340,12 +417,16 @@ class SearchCrawler(CoupangCrawler):
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = out_dir / f"blocked_{safe_name}_{ts}.html"
         diagnosis = classify_blocked_html(html)
+        reference = extract_akamai_reference(html)
+        if reference:
+            self._last_block_reference = reference
         try:
             path.write_text(html, encoding="utf-8")
         except OSError as e:
             self._log(f"    [차단 진단] 응답 저장 실패: {e}")
             return diagnosis
-        self._log(f"    [차단 진단] 차단 응답 저장: {path} ({diagnosis}) "
+        reference_note = f" | {reference}" if reference else ""
+        self._log(f"    [차단 진단] 차단 응답 저장: {path} ({diagnosis}{reference_note}) "
                   f"(최종 URL: {getattr(page, 'url', '?')})")
         return diagnosis
 

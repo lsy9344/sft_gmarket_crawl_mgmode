@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.core.base import CancelledError, Control
+from app.core.config import PROJECT_ROOT
 from app.core.storage import acquire_output_lock
 from app.models.coupang_records import (
     CoupangRecord,
@@ -104,6 +105,7 @@ class CoupangCrawler:
             acquire_output_lock(self.config.output_dir)
             browser, cm = self._create_browser()
             page = browser.new_page()
+            self._attach_http_status_logger(page)
             self._run_pipeline(page, summary)
         except CancelledError:
             summary.cancelled = True
@@ -153,7 +155,13 @@ class CoupangCrawler:
         return summary
 
     def _create_browser(self):
-        """Returns (browser, context_manager). cm is None for injected factories."""
+        """Returns (browser, context_manager). cm is None for injected factories.
+
+        영속 프로필(persistent_context)로 쿠키·방문 이력을 실행 간 누적해 세션
+        신뢰를 축적한다(SEARCH_POC_FINDINGS 가설 A — 매 실행 신규 세션 + 즉시
+        카테고리 진입 패턴은 Akamai 점수에 불리). 프로필 락·손상 등으로 기동이
+        실패하면 기존의 신규 세션 방식으로 폴백한다 — 회귀 없음.
+        """
         if self._browser_factory is not None:
             return self._browser_factory(), None
         try:
@@ -164,9 +172,46 @@ class CoupangCrawler:
                 "명령 프롬프트에서 SellerCollector.exe --setup-runtime 을 먼저 실행하세요.",
                 reason="error",
             ) from e
+        if self.config.use_persistent_profile:
+            profile_dir = self.config.profile_dir or PROJECT_ROOT / "runtime_profile"
+            try:
+                cm = Camoufox(
+                    headless=False, geoip=True, locale="ko-KR", humanize=True,
+                    persistent_context=True, user_data_dir=str(profile_dir),
+                )
+                browser = cm.__enter__()
+            except Exception as e:  # noqa: BLE001 - 프로필 락 등 기동 실패 → 폴백
+                self._log(f"  영속 프로필 기동 실패({type(e).__name__}: {e}) — 신규 세션으로 진행")
+            else:
+                self._log(f"  영속 프로필 사용: {profile_dir}")
+                return browser, cm
         cm = Camoufox(headless=False, geoip=True, locale="ko-KR", humanize=True)
         browser = cm.__enter__()
         return browser, cm
+
+    def _attach_http_status_logger(self, page) -> None:
+        """문서(document) 탐색의 4xx/5xx 응답 상태를 로그에 남긴다 (차단 진단용).
+
+        진입 차단(403 등)은 문서 탐색 응답 상태에 직접 드러난다. 리소스/XHR
+        요청은 제외 — 해당 URL 의 상태만으로 IP 차단 여부를 판단할 수 있게
+        하는 것이 목적이다(2026-08-30 차단 사례: 상태 코드가 로그에 없어
+        원인 분류가 어려웠음). 진단 기능이므로 개별 실패는 무시한다.
+        """
+
+        def _on_response(response) -> None:
+            try:
+                if response.request.resource_type != "document":
+                    return
+                status = response.status
+                if status >= 400:
+                    self._log(f"  [HTTP {status}] {response.url[:160]}")
+            except Exception:  # noqa: BLE001 - 진단 로그 경계 격리
+                pass
+
+        try:
+            page.on("response", _on_response)
+        except Exception as e:  # noqa: BLE001 - 진단 로거 부착 실패는 무시
+            self._log(f"  HTTP 상태 로거 부착 실패: {e}")
 
     @property
     def _wait_scale(self) -> float:

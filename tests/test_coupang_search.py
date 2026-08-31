@@ -13,13 +13,15 @@ import unittest
 from pathlib import Path
 
 from app.core.base import Control
+from app.core.coupang import blockguard
+from app.core.coupang.crawler import COUPANG_HOME
 from app.core.coupang.search_crawler import SearchCrawler, SearchRunConfig
 from app.core.coupang.search_parser import (
     is_blocked,
     parse_extracted,
     parse_href,
-    parse_price_bands,
     parse_price,
+    parse_price_bands,
 )
 
 _OK_HTML = "<html><body>" + ("검색결과 콘텐츠 " * 400) + "</body></html>"
@@ -72,12 +74,13 @@ class FakeSearchPage:
     """정렬별 DOM 추출 결과·개별 API 응답을 스크립팅하는 fake page."""
 
     def __init__(self, sorter_rows=None, content_html=_OK_HTML, viids=None,
-                 menu_has_link=False):
+                 menu_has_link=False, home_html=_OK_HTML):
         self.mouse = FakeMouse()
         self.url = "about:blank"
         self._sorter_rows = list(sorter_rows or [])
         self._dom_call = 0
         self._content_html = content_html
+        self._home_html = home_html
         self._viids = viids or []
         self.menu_has_link = menu_has_link
         self.goto_urls = []
@@ -95,6 +98,8 @@ class FakeSearchPage:
         self.waited_url_patterns.append(str(url))
 
     def content(self):
+        if self.url == COUPANG_HOME:
+            return self._home_html
         return self._content_html
 
     def title(self):
@@ -358,6 +363,40 @@ class SearchPipelineTest(unittest.TestCase):
             self.assertIn("Access Denied", dumps[0].read_text(encoding="utf-8"))
         self.assertEqual(summary.termination_reason, "blocked")
         self.assertIn("Akamai", summary.error)
+
+    def test_blocked_home_stops_immediately(self):
+        """홈 웜업 단계 차단 — IP 평판 차단 신호로 목록 로드 전에 즉시 중단."""
+        page = FakeSearchPage(home_html=_AKAMAI_HTML)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page)
+            dumps = list(Path(tmp).glob("blocked_home_warmup_*.html"))
+            self.assertEqual(len(dumps), 1)
+        self.assertEqual(summary.termination_reason, "blocked")
+        self.assertIn("홈 웜업", summary.error)
+        self.assertEqual(len(page.goto_urls), 1)  # 홈만 로드 — 목록 시도 없음
+
+    def test_blocked_run_records_state_with_reference(self):
+        """차단 종료 시 output_dir 에 차단 상태 기록 — Akamai Reference 포함."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], content_html=_AKAMAI_HTML)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page)
+            self.assertEqual(summary.termination_reason, "blocked")
+            state = blockguard.read_block_state(Path(tmp))
+            self.assertIsNotNone(state)
+            self.assertIn("Reference #", str(state.get("reference", "")))
+            self.assertGreater(blockguard.cooldown_remaining_seconds(Path(tmp)), 0.0)
+
+    def test_block_cooldown_gate_blocks_rerun(self):
+        """쿨다운 중 재실행은 브라우저를 건드리지 않고 거부된다."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], content_html=_AKAMAI_HTML)
+        with tempfile.TemporaryDirectory() as tmp:
+            first = _run(tmp, page)
+            self.assertEqual(first.termination_reason, "blocked")
+            gotos_after_first = len(page.goto_urls)
+            second = _run(tmp, page)
+            self.assertEqual(second.termination_reason, "block_cooldown")
+            self.assertIn("쿨다운", second.error)
+            self.assertEqual(len(page.goto_urls), gotos_after_first)
 
 
 class SearchParserTest(unittest.TestCase):

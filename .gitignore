@@ -31,3 +31,6 @@ foodspring_crawl/state/
 # data. Kept on disk for debugging but never committed.
 coupang_crawl/test_logs/
 coupang_crawl/runtime_profile/
+
+# Coupang persistent browser profile (cookies/session history) — engine default
+runtime_profile/
