@@ -74,7 +74,7 @@ class FakeSearchPage:
     """정렬별 DOM 추출 결과·개별 API 응답을 스크립팅하는 fake page."""
 
     def __init__(self, sorter_rows=None, content_html=_OK_HTML, viids=None,
-                 menu_has_link=False, home_html=_OK_HTML):
+                 menu_has_link=False, home_html=_OK_HTML, login_state=False):
         self.mouse = FakeMouse()
         self.url = "about:blank"
         self._sorter_rows = list(sorter_rows or [])
@@ -83,6 +83,7 @@ class FakeSearchPage:
         self._home_html = home_html
         self._viids = viids or []
         self.menu_has_link = menu_has_link
+        self._login_state = login_state
         self.goto_urls = []
         self.waited_url_patterns = []
         self.backoff_sleeps = []
@@ -109,6 +110,9 @@ class FakeSearchPage:
         pass
 
     def evaluate(self, script, *args):
+        if "login.coupang.com" in script:
+            # 로그인 상태 판별 JS — login_state 로 시뮬레이션
+            return self._login_state
         if "ProductUnit_productUnit" in script:
             if self._dom_call < len(self._sorter_rows):
                 rows = self._sorter_rows[self._dom_call]
@@ -160,7 +164,7 @@ class ClickJsErrorPage(FakeSearchPage):
 
 def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocket=True,
          content_html=_OK_HTML, include_price_bands=False, category_id="", max_pages=3,
-         keyword="뷰티", category_name="", subcategories=()):
+         keyword="뷰티", category_name="", subcategories=(), require_login=False):
     config = SearchRunConfig(
         output_dir=Path(tmp_dir),
         output_prefix="search_test",
@@ -171,6 +175,7 @@ def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocke
         include_price_bands=include_price_bands,
         category_id=category_id,
         subcategories=subcategories,
+        require_login=require_login,
         category_cooldown_min=0,
         category_cooldown_max=0,
         max_pages=max_pages,
@@ -397,6 +402,42 @@ class SearchPipelineTest(unittest.TestCase):
             self.assertEqual(second.termination_reason, "block_cooldown")
             self.assertIn("쿨다운", second.error)
             self.assertEqual(len(page.goto_urls), gotos_after_first)
+
+
+class LoginPolicyTest(unittest.TestCase):
+    """require_login 정책 — 로그인 세션 강제와 수집 진행 여부."""
+
+    def test_login_required_aborts_anonymous_session(self):
+        """require_login + 비로그인 → login_required 로 즉시 중단."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], login_state=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, require_login=True)
+            self.assertEqual(summary.termination_reason, "login_required")
+            self.assertIn("로그인", summary.error)
+            # 홈만 로드 — PLP 진행 없음
+            self.assertEqual(len(page.goto_urls), 1)
+
+    def test_login_required_proceeds_logged_in(self):
+        """require_login + 로그인 세션 → 정상 수집."""
+        rows_seq = [[_row("11")], [], []]
+        page = FakeSearchPage(sorter_rows=rows_seq, viids=["11"], login_state=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, require_login=True, sorters=("saleCountDesc",))
+            self.assertIsNone(summary.error)
+            self.assertEqual(summary.products_seen, 1)
+
+    def test_login_state_check_skipped_when_not_required(self):
+        """require_login=False + 비로그인 → 기존 경로 그대로 수집."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], viids=["11"],
+                              login_state=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, sorters=("saleCountDesc",))
+            self.assertIsNone(summary.error)
+
+    def test_require_login_type_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", require_login="yes")
 
 
 class SearchParserTest(unittest.TestCase):

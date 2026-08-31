@@ -132,6 +132,9 @@ class SearchRunConfig(CoupangRunConfig):
     subcategories: tuple[tuple[str, str], ...] = ()
     category_cooldown_min: float = 30.0
     category_cooldown_max: float = 60.0
+    # 로그인 세션 강제 — True 면 비로그인 세션에서 수집을 거부한다
+    # (전용 계정 1회 로그인 후 사용. 로그인 세션은 Akamai 신뢰 한도가 높다).
+    require_login: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -151,6 +154,9 @@ class SearchRunConfig(CoupangRunConfig):
         for cid, _name in self.subcategories:
             if not str(cid).strip().isdigit():
                 raise ValueError(f"subcategory id must be numeric: {cid}")
+        if not isinstance(self.require_login, bool):
+            # TRY004 무시 — 설정 검증은 ValueError 관례
+            raise ValueError("require_login must be a bool")  # noqa: TRY004
         if self.category_cooldown_min < 0 or self.category_cooldown_max < self.category_cooldown_min:
             raise ValueError("invalid category cooldown range")
 
@@ -225,6 +231,7 @@ class SearchCrawler(CoupangCrawler):
         page.goto(COUPANG_HOME, wait_until="domcontentloaded", timeout=30000)
         self.control.sleep(2 * self._wait_scale)
         self._verify_warmup_ok(page)
+        self._check_login_state(page)
         self._natural_interaction(page, config.warmup_time)
         self.control.checkpoint()
         self._log("  Akamai 검증 완료.")
@@ -364,6 +371,32 @@ class SearchCrawler(CoupangCrawler):
         summary.termination_reason = summary.termination_reason or "success"
 
     # ── 수집 헬퍼 ──────────────────────────────────────────────────────────
+
+    def _check_login_state(self, page) -> None:
+        """홈에서 로그인 세션 여부를 확인하고 require_login 정책을 적용한다.
+
+        로그인 세션은 Akamai 신뢰 한도가 비로그인보다 높다(외부 실운영 도구
+        OpenCLI 도 로그인 세션을 전제). 판별 불가(None)는 정책 위반이 아니므로
+        그대로 진행한다 — 홈 DOM 변형 등으로 오탐해 수집을 막지 않는다.
+        """
+        from app.core.coupang.login import evaluate_login_state
+
+        state = evaluate_login_state(page)
+        if state is True:
+            self._log("  로그인 세션 확인 — 계정 신뢰 등급으로 수집합니다.")
+            return
+        if state is None:
+            self._log("  로그인 상태 확인 불가 — 세션 정책 검사 없이 진행합니다.")
+            return
+        self._log("  비로그인 세션입니다 — 익명 신뢰 등급으로 수집합니다.")
+        require_login = bool(getattr(self.config, "require_login", False))
+        if require_login:
+            raise _RunError(
+                "쿠팡 로그인 세션이 없습니다. '쿠팡 로그인' 버튼으로 1회 로그인한 뒤 "
+                "다시 실행하세요. (로그인 세션은 차단 임계가 높지만, 전용 계정을 "
+                "사용하고 하루 볼륨 상한을 지키세요)",
+                reason="login_required",
+            )
 
     def _verify_warmup_ok(self, page) -> None:
         """웜업 직후 홈 HTML 차단 검사 — 홈부터 거부면 IP 평판 차단으로 조기 중단.

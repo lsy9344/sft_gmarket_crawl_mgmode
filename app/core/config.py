@@ -31,6 +31,10 @@ def _default_project_root() -> Path:
 PROJECT_ROOT = _default_project_root()
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
 
+# 쿠팡 영속 브라우저 프로필 — 쿠키(로그인 세션)·방문 이력을 실행 간 누적한다.
+# exe 옆에 생성되며 세션 데이터를 담으므로 저장소에 커밋하지 않는다(.gitignore).
+DEFAULT_COUPANG_PROFILE_DIR = PROJECT_ROOT / "runtime_profile"
+
 COLLECTED_IDS_FILENAME = "collected_ids.json"
 STATE_FILENAME = "fastcrawl_state.json"
 # 체크포인트 승격 콘텐츠 해시 manifest — 정상 저장/승격 어느 경로로든 이미

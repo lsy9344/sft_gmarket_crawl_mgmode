@@ -35,6 +35,7 @@ from app.ui.widgets.progress_panel import ProgressPanel
 from app.ui.widgets.result_table import ResultTable
 from app.ui.widgets.settings_panel import SettingsPanel
 from app.workers.category_worker import CategoryWorker
+from app.workers.coupang_login_worker import CoupangLoginWorker
 from app.workers.coupang_worker import CoupangWorker
 from app.workers.search_worker import SearchWorker
 from app.workers.crawl_worker import CrawlWorker
@@ -71,6 +72,8 @@ class MainWindow(QMainWindow):
         # Coupang 카테고리 상태
         self.category_control: Control | None = None
         self.category_worker: SearchWorker | None = None
+        self.category_login_control: Control | None = None
+        self.category_login_worker = None
         self.categories_control: Control | None = None
         self.categories_worker: CategoryWorker | None = None
         self.category_cache = CategoryTreeCache(
@@ -164,6 +167,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.category_panel, "Coupang 카테고리")
 
         self.category_panel.btn_refresh_categories.clicked.connect(self.on_categories_refresh)
+        self.category_panel.btn_login.clicked.connect(self.on_category_login)
         self.category_panel.btn_start.clicked.connect(self.on_category_start)
         self.category_panel.btn_pause.clicked.connect(self.on_category_pause)
         self.category_panel.btn_resume.clicked.connect(self.on_category_resume)
@@ -206,7 +210,8 @@ class MainWindow(QMainWindow):
     # ── 전역 단일 워커 ─────────────────────────────────────────────
     def _active_worker(self):
         for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker,
-                       self.foodspring_worker, self.category_worker, self.categories_worker):
+                       self.foodspring_worker, self.category_worker, self.categories_worker,
+                       self.category_login_worker):
             if worker is not None and worker.isRunning():
                 return worker
         return None
@@ -994,6 +999,61 @@ class MainWindow(QMainWindow):
     def _on_categories_thread_done(self) -> None:
         self.category_panel.set_loading_categories(False)
 
+    def on_category_login(self) -> None:
+        """쿠팡 로그인 세션 준비 — 영속 프로필 브라우저에서 직접 로그인 (1회)."""
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            return
+
+        from app.core.coupang.preflight import PreflightStatus, check_runtime
+
+        try:
+            pf = check_runtime()
+        except Exception as e:  # noqa: BLE001 - preflight 경계 격리
+            QMessageBox.critical(
+                self, "Coupang 런타임 확인 실패",
+                f"런타임 준비 상태를 확인하는 중 예기치 못한 오류가 발생했습니다:\n{e}",
+            )
+            return
+        if pf.status != PreflightStatus.OK:
+            QMessageBox.critical(self, "Coupang 런타임 미준비", pf.message)
+            return
+
+        self.category_login_control = Control()
+        worker = CoupangLoginWorker(self.category_login_control)
+        worker.log_message.connect(self.category_panel.append_log)
+        worker.login_finished.connect(self._on_category_login_result)
+        worker.error_occurred.connect(self._on_category_login_error)
+        worker.finished.connect(self._on_category_login_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.category_login_worker = worker
+
+        self.category_panel.set_state("logging_in")
+        self._show_status("쿠팡 로그인 대기 중 — 브라우저에서 로그인을 완료하세요.")
+        self.category_panel.append_log(
+            "[로그인] 브라우저를 열고 로그인을 진행하세요 (최대 5분 대기).")
+        worker.start()
+
+    def _on_category_login_result(self, completed: bool) -> None:
+        if completed:
+            self.category_panel.append_log(
+                "[로그인] 완료 — 이제 '로그인 세션으로 수집'을 체크하고 수집할 수 있습니다.")
+            self._show_status("쿠팡 로그인 완료")
+        else:
+            self.category_panel.append_log(
+                "[로그인] 완료되지 않았습니다. 필요하면 다시 시도하세요.")
+            self._show_status("쿠팡 로그인 미완료")
+
+    def _on_category_login_error(self, msg: str) -> None:
+        self.category_panel.append_log(f"[오류] {msg}")
+        self._show_status("쿠팡 로그인 실패")
+
+    def _on_category_login_thread_done(self) -> None:
+        self.category_login_worker = None
+        if self.category_panel._state == "logging_in":
+            self.category_panel.set_state("idle")
+
     def on_category_start(self) -> None:
         if self._closing or self._close_prompt_active:
             return
@@ -1089,6 +1149,10 @@ class MainWindow(QMainWindow):
             self._show_status("Coupang 카테고리 수집 진행 중...")
 
     def on_category_cancel(self) -> None:
+        if self.category_login_worker is not None and self.category_login_worker.isRunning():
+            if self.category_login_control:
+                self.category_login_control.request_cancel()
+            return
         if self.category_control:
             self.category_control.request_cancel()
             self.category_panel.set_state("cancelling")

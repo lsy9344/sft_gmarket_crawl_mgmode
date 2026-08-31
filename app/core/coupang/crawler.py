@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.core.base import CancelledError, Control
-from app.core.config import PROJECT_ROOT
+from app.core.config import DEFAULT_COUPANG_PROFILE_DIR
 from app.core.storage import acquire_output_lock
 from app.models.coupang_records import (
     CoupangRecord,
@@ -173,7 +173,7 @@ class CoupangCrawler:
                 reason="error",
             ) from e
         if self.config.use_persistent_profile:
-            profile_dir = self.config.profile_dir or PROJECT_ROOT / "runtime_profile"
+            profile_dir = self.config.profile_dir or DEFAULT_COUPANG_PROFILE_DIR
             try:
                 cm = Camoufox(
                     headless=False, geoip=True, locale="ko-KR", humanize=True,

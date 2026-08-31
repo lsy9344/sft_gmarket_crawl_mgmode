@@ -123,6 +123,12 @@ class CategoryPanel(QWidget):
         self.chk_include_subs.setChecked(True)
         form.addRow("하위 카테고리:", self.chk_include_subs)
 
+        self.chk_login = QCheckBox("로그인 세션으로 수집 (수집용 전용 계정 권장)")
+        self.chk_login.setToolTip(
+            "체크 시 비로그인 세션이면 수집을 중단합니다.\n"
+            "'쿠팡 로그인' 버튼으로 1회 로그인하면 영속 프로필에 세션이 유지됩니다.")
+        form.addRow("세션:", self.chk_login)
+
         self.spin_max_pages = QSpinBox()
         self.spin_max_pages.setRange(1, 50)
         self.spin_max_pages.setValue(17)
@@ -146,13 +152,17 @@ class CategoryPanel(QWidget):
 
         # ── 제어 버튼 ────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
+        self.btn_login = QPushButton("쿠팡 로그인 (1회)")
+        self.btn_login.setToolTip(
+            "영속 프로필 브라우저를 열어 직접 로그인합니다.\n"
+            "캡차·보안 알림은 직접 통과하면 되고, 완료를 감지하면 세션이 저장됩니다.")
         self.btn_start = QPushButton("수집 시작")
         self.btn_pause = QPushButton("일시정지")
         self.btn_resume = QPushButton("재개")
         self.btn_cancel = QPushButton("취소")
         self.btn_open_result = QPushButton("결과 열기")
-        for b in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_cancel,
-                  self.btn_open_result):
+        for b in (self.btn_login, self.btn_start, self.btn_pause, self.btn_resume,
+                  self.btn_cancel, self.btn_open_result):
             btn_row.addWidget(b)
         layout.addLayout(btn_row)
 
@@ -264,15 +274,18 @@ class CategoryPanel(QWidget):
         self.btn_start.setEnabled(s in ("idle", "finished", "failed"))
         self.btn_pause.setEnabled(s == "running")
         self.btn_resume.setEnabled(s == "paused")
-        self.btn_cancel.setEnabled(s in ("running", "paused"))
+        self.btn_cancel.setEnabled(s in ("running", "paused", "logging_in"))
         self.btn_open_result.setEnabled(s in ("idle", "finished", "failed"))
         settings_enabled = s in ("idle", "finished", "failed")
         for w in (self.output_dir_edit, self.chk_exclude_rocket, self.chk_include_subs,
-                  self.spin_max_pages, self.spin_delay_min, self.spin_delay_max):
+                  self.chk_login, self.spin_max_pages, self.spin_delay_min,
+                  self.spin_delay_max):
             w.setEnabled(settings_enabled)
         self.btn_browse.setEnabled(settings_enabled)
         self.category_tree.setEnabled(settings_enabled)
         self.btn_refresh_categories.setEnabled(settings_enabled and s != "loading_categories")
+        # 로그인 세션은 수집 실행 중(프로필 락)에 열 수 없다
+        self.btn_login.setEnabled(settings_enabled and s != "logging_in")
 
     def set_loading_categories(self, loading: bool) -> None:
         self.btn_refresh_categories.setEnabled(not loading)
@@ -283,10 +296,11 @@ class CategoryPanel(QWidget):
     def set_external_busy(self, busy: bool) -> None:
         if busy:
             for b in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_cancel,
-                      self.btn_refresh_categories):
+                      self.btn_refresh_categories, self.btn_login):
                 b.setEnabled(False)
             for w in (self.output_dir_edit, self.chk_exclude_rocket, self.chk_include_subs,
-                      self.spin_max_pages, self.spin_delay_min, self.spin_delay_max):
+                      self.chk_login, self.spin_max_pages, self.spin_delay_min,
+                      self.spin_delay_max):
                 w.setEnabled(False)
             self.btn_browse.setEnabled(False)
             self.category_tree.setEnabled(False)
@@ -318,6 +332,7 @@ class CategoryPanel(QWidget):
                 page_delay_min=delay_min,
                 page_delay_max=delay_max,
                 subcategories=tuple(subs),
+                require_login=self.chk_login.isChecked(),
             )
         except ValueError:
             return None
