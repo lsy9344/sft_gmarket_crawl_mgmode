@@ -142,3 +142,21 @@ python scripts/prototypes/coupang_patchright_fruit.py \
 한 명령은 네트워크 묶음 하나만 실행하며, 차단 신호를 발견하면 즉시 공통 안전 기록을
 잠근다. 전체 배경, 결과와 완료 범위는
 `docs/coupang/PATCHRIGHT_EXPERIMENT_REPORT.md`를 따른다.
+
+## 과일 전량 수집 — 상품 목록 단계
+
+`8개 → 12개` 판매자 포함 시험이 성공한 뒤에는 상품 목록과 판매자정보를 나눈다.
+다음 명령은 현재 위치에서 상품 링크 24개만 추가로 저장하며 판매자 API는 호출하지
+않는다.
+
+```bash
+python scripts/prototypes/coupang_patchright_full_fruit.py \
+  --limit 24 \
+  --output-dir ~/Desktop/PatchrightFruit
+```
+
+처음 실행할 때 기존 사과/배 위치 20개를 가져와 `fruit_products.csv`에 첫 44개를
+보존한다. `fruit_collection_state.json`에는 다음 위치를 저장한다. 50페이지에서도
+상품이 계속 나오면 완료로 표시하지 않고 `incomplete_limit_reached`로 멈춘다.
+확대 순서와 완료 기준은
+`docs/coupang/PATCHRIGHT_FULL_FRUIT_COLLECTION_PLAN.md`를 따른다.

@@ -19,6 +19,7 @@
 | **`WORK_ORDER.md`** | **Gmarket PyQt6 앱에 Coupang v3를 2탭으로 통합하기 위한 구현 작업지시서 — 문서 우선순위, 변경 파일, 스레드/종료/저장 계약, 테스트와 완료 기준** | **1.0** |
 | **`CATEGORY_CONCEPT.md`** | **★ 컨셉 전환(2026-08-24): 키워드 검색 → 카테고리 선택 수집 — 카테고리 트리 데이터 소스·수집 파이프라인·변경 파일** | **1** |
 | **`PATCHRIGHT_EXPERIMENT_REPORT.md`** | **Patchright 변경 뒤 Access Denied 비교, 7회 실접속 결과, 과일 12개 하위 카테고리 순차 수집 설계·검증·한계** | **1** |
+| **`PATCHRIGHT_FULL_FRUIT_COLLECTION_PLAN.md`** | **상품 목록과 판매자정보를 분리한 과일 전량 수집 전환 계획, 24개→60개→다중 페이지 확대 기준과 완료 조건** | **1** |
 | `SEARCH_POC_FINDINGS.md` | 검색/페이지네이션 실측 연대기 rev.1~25 — SRP page≥2 비로그인 기각 확정, 카테고리 PLP 돌파 경로 발견 | 25 |
 | `FINAL_DATA_REPORT.md` | 뷰티 트리 14개 카테고리 수집 최종 리포트 — 고유 판매자 1,580명 | 1 |
 | **`CRAWL_RESULTS.md`** | **★ 구현 실측 결과 보고서 — 수집 대상(/np/omp '전체' 탭), 동작하는 3-API 파이프라인, 필수항목 검증(7/7), '전체' 탭 피드 총량 조사(§4.3, 180개). 현재 기준(source of truth)** | **6** |
