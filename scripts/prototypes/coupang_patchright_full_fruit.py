@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.core.coupang.patchright_canary import authorize_block_recovery
 from app.core.coupang.patchright_full_fruit import (
     run_listing_batch,
     run_listing_category,
@@ -48,6 +49,11 @@ def main() -> int:
         action="store_true",
         help="한 Chrome에서 현재 하위 카테고리 종료 조건까지 처리",
     )
+    mode.add_argument(
+        "--recovery-probe",
+        action="store_true",
+        help="차단 1시간 뒤 현재 위치의 상품 8개만 한 번 확인",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -55,7 +61,17 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        if args.category:
+        if args.recovery_probe:
+            allowed, reason = authorize_block_recovery()
+            if not allowed:
+                result = {"event": "guard_refused", "reason": reason}
+            else:
+                result = run_listing_batch(
+                    output_dir=args.output_dir,
+                    limit=8,
+                    on_event=_print_state,
+                )
+        elif args.category:
             result = run_listing_category(
                 output_dir=args.output_dir,
                 on_event=_print_state,

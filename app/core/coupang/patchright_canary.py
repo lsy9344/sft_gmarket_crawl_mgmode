@@ -18,6 +18,7 @@ HOME_URL = "https://www.coupang.com/"
 CATEGORY_URL = "https://www.coupang.com/np/categories/{category_id}?page=1"
 MAX_ITEMS = 10
 MIN_LIVE_INTERVAL_SECONDS = 30 * 60
+BLOCK_RECOVERY_INTERVAL_SECONDS = 60 * 60
 BLOCK_STATUSES = {403, 418, 429}
 BLOCK_MARKERS = (
     "access denied",
@@ -130,9 +131,11 @@ def claim_live_attempt(
     if guard.get("blocked"):
         return False, "이전 시험에서 차단되어 Patchright 실접속이 잠겼습니다."
     last_attempt = guard.get("last_attempt_ts")
+    history = guard.get("block_history")
     if guard and (
         not isinstance(guard.get("blocked"), bool)
         or not isinstance(last_attempt, (int, float))
+        or (history is not None and not isinstance(history, list))
     ):
         return False, "안전 기록 형식이 잘못되어 실접속을 중단합니다."
     if isinstance(last_attempt, (int, float)):
@@ -141,16 +144,16 @@ def claim_live_attempt(
             minutes = int(remaining // 60) + 1
             return False, f"다음 Patchright 시험까지 {minutes}분 남았습니다."
     try:
-        _write_guard(
-            {
-                "last_attempt_at": time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(current)
-                ),
-                "last_attempt_ts": current,
-                "blocked": False,
-            },
-            root,
-        )
+        next_guard = {
+            "last_attempt_at": time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(current)
+            ),
+            "last_attempt_ts": current,
+            "blocked": False,
+        }
+        if history is not None:
+            next_guard["block_history"] = history
+        _write_guard(next_guard, root)
     except CanaryGuardError as error:
         return False, str(error)
     return True, ""
@@ -166,13 +169,63 @@ def inspect_block(page, response=None) -> tuple[bool, int | None, str]:
     return blocked, status, reference
 
 
-def record_block(root: Path | None = None, *, reference: str = "") -> None:
+def record_block(
+    root: Path | None = None,
+    *,
+    reference: str = "",
+    now: float | None = None,
+) -> None:
+    current = time.time() if now is None else now
     try:
         guard = _read_guard(root)
     except CanaryGuardError:
         guard = {}
-    guard.update(blocked=True, reference=reference)
+    guard.update(
+        blocked=True,
+        reference=reference,
+        blocked_at=time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(current)
+        ),
+        blocked_ts=current,
+    )
     _write_guard(guard, root)
+
+
+def authorize_block_recovery(
+    root: Path | None = None,
+    *,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """차단 뒤 1시간이 지난 소량 확인 1회만 위해 잠금을 연다."""
+    current = time.time() if now is None else now
+    try:
+        guard = _read_guard(root)
+    except CanaryGuardError as error:
+        return False, str(error)
+    if not guard.get("blocked"):
+        return False, "차단된 안전 기록이 없어 복구 확인을 실행하지 않습니다."
+    blocked_ts = guard.get("blocked_ts")
+    history = guard.get("block_history", [])
+    if not isinstance(blocked_ts, (int, float)) or not isinstance(history, list):
+        return False, "차단 시각 또는 이력 형식이 잘못되어 잠금을 유지합니다."
+    remaining = BLOCK_RECOVERY_INTERVAL_SECONDS - (current - blocked_ts)
+    if remaining > 0:
+        minutes = int(remaining // 60) + 1
+        return False, f"차단 뒤 소량 확인까지 {minutes}분 남았습니다."
+    history.append(
+        {
+            "blocked_at": guard.get("blocked_at", ""),
+            "blocked_ts": blocked_ts,
+            "reference": guard.get("reference", ""),
+            "recovery_authorized_at": time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(current)
+            ),
+            "recovery_authorized_ts": current,
+        }
+    )
+    guard.update(blocked=False, block_history=history)
+    _write_guard(guard, root)
+    return True, ""
 
 
 @contextmanager

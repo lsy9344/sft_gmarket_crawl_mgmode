@@ -273,6 +273,7 @@ C:\Users\dltnd\Desktop\PatchrightFruit_backup_20260901_2006_category1
 C:\Users\dltnd\AppData\Local\SellerCollectorPatchrightCanary_backup_20260901_2006_category1
 C:\Users\dltnd\Desktop\PatchrightFruit_backup_20260901_2043_blocked_cat3p2
 C:\Users\dltnd\AppData\Local\SellerCollectorPatchrightCanary_backup_20260901_2043_blocked_cat3p2
+C:\Users\dltnd\AppData\Local\SellerCollectorPatchrightCanary_backup_20260901_2054_recovery_ready
 ```
 
 백업 브랜치:
@@ -343,6 +344,12 @@ Windows Patchright 관련 테스트 39개와 새 코드 검사가 통과했다.
 카테고리 하나만 처리할 수 있다. 이 재발 방지 변경은 실제 네트워크 없는 Patchright
 관련 테스트 42개와 코드 검사를 통과했다.
 
+사용자 지시에 따른 복구 확인은 일반 수집과 분리했다. `--recovery-probe`는 차단 시각
+뒤 최소 1시간이 지나야 잠금을 한 번 열고 현재 위치에서 상품 8개만 처리한다. 이전
+참조번호와 차단 시각은 `block_history`에 남는다. 1시간 전 실행 거절과 이력 보존을
+포함한 실제 네트워크 없는 Patchright 관련 테스트 44개가 통과했다. 이번 요청 시각을
+기준으로 실제 확인은 2026-09-01 21:53:55 KST 이후 한 번만 실행한다.
+
 ## 8. 과일 전체 수집 방법
 
 과일 루트 자체는 하위 카테고리 상품과 많이 겹치므로 새 전체 작업에서는 아래 12개
@@ -391,6 +398,6 @@ py scripts\prototypes\coupang_patchright_fruit.py `
 장시간 성공 여부는 아직 검증되지 않았다. 8개, 12개, 상품 목록 24개, 한 페이지
 최대 60개, 연속 3페이지와 연속 10페이지 확대는 모두 정상 종료했다. 현재 전량
 사과/배와 귤/한라봉/감귤류는 완료됐고 현재 재개 위치는 감/홍시/곶감 2페이지다.
-하지만 실제 403이 발생했으므로 단순한 30분 대기 뒤 자동 재개하지 않는다. 공통
-안전 기록은 `blocked`로 유지하며, 일반 브라우저 상태와 재개 조건을 별도로 검토하기
-전에는 같은 엔진이나 다른 엔진으로 다시 접속하지 않는다.
+실제 403이 발생했으므로 기존 30분 규칙으로 자동 재개하지 않는다. 사용자 지시에 따라
+2026-09-01 21:53:55 KST 이후 감류 2페이지 상품 8개만 복구 확인하고 즉시 종료한다.
+그 전에는 공통 안전 기록을 `blocked`로 유지하며 다른 엔진으로도 접속하지 않는다.

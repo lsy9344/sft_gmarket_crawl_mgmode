@@ -12,6 +12,7 @@ from unittest.mock import patch
 from app.core.coupang.patchright_canary import (
     CATEGORY_URL,
     HOME_URL,
+    authorize_block_recovery,
     record_block,
     run_canary,
 )
@@ -163,6 +164,27 @@ class PatchrightCanaryTest(unittest.TestCase):
             )
         self.assertEqual(result["event"], "guard_refused")
         self.assertEqual(calls, [])
+
+    def test_block_recovery_is_refused_before_one_hour(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record_block(root, reference="Reference #18.wait", now=1_000.0)
+            allowed, reason = authorize_block_recovery(root, now=4_599.0)
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertFalse(allowed)
+        self.assertIn("1분", reason)
+        self.assertTrue(guard["blocked"])
+
+    def test_block_recovery_after_one_hour_preserves_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record_block(root, reference="Reference #18.kept", now=1_000.0)
+            allowed, reason = authorize_block_recovery(root, now=4_600.0)
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+        self.assertFalse(guard["blocked"])
+        self.assertEqual(guard["block_history"][0]["reference"], "Reference #18.kept")
 
     def test_corrupt_guard_fails_closed(self):
         calls: list[tuple[Path, bool]] = []

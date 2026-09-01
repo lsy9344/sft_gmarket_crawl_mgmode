@@ -222,3 +222,15 @@ python scripts/prototypes/coupang_patchright_full_fruit.py \
 이 결과 뒤 `--all-categories` 명령은 제거했다. `--pages`도 카테고리 경계를 넘지
 않는다. 공통 안전 기록이 `blocked`이므로 `--category`를 포함한 모든 실접속은 재개
 조건을 검토하고 잠금을 명시적으로 해제하기 전까지 실행하지 않는다.
+
+차단 뒤 소량 복구 확인은 다음 명령만 사용한다. 차단 시각부터 1시간 전이면 브라우저를
+열지 않고 거절하며, 허용돼도 현재 위치에서 상품 8개만 확인하고 끝난다.
+
+```bash
+python scripts/prototypes/coupang_patchright_full_fruit.py \
+  --recovery-probe \
+  --output-dir ~/Desktop/PatchrightFruit
+```
+
+이번 복구 확인은 2026-09-01 21:53:55 KST 이후 한 번만 실행한다. 성공해도 같은
+실행에서 수량을 늘리거나 다음 카테고리로 넘어가지 않는다.
