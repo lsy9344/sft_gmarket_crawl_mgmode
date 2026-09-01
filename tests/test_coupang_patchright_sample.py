@@ -1,4 +1,4 @@
-"""Patchright 3건 표본 수집 시험 — 실제 브라우저·네트워크 없음."""
+"""Patchright 소량 순차 수집 시험 — 실제 브라우저·네트워크 없음."""
 
 from __future__ import annotations
 
@@ -221,16 +221,90 @@ class PatchrightSampleTest(unittest.TestCase):
         self.assertFalse(calls[0][1])
         self.assertTrue(context.closed)
 
-    def test_rejects_limit_above_three_before_browser(self):
+    def test_rejects_limit_above_five_before_browser(self):
         calls: list[tuple[Path, bool]] = []
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 run_sample(
                     category_id="176573",
                     output_dir=Path(tmp),
-                    limit=4,
+                    limit=6,
                     state_root=Path(tmp),
                     browser_scope_factory=_factory(_Page(), calls, _Context(_Page())),
+                )
+        self.assertEqual(calls, [])
+
+    def test_offset_skips_previous_items_and_next_run_resumes(self):
+        first_page = _Page()
+        first_context = _Context(first_page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = run_sample(
+                category_id="176573",
+                output_dir=root / "out",
+                limit=2,
+                offset=3,
+                state_root=root / "state-1",
+                browser_scope_factory=_factory(
+                    first_page, [], first_context
+                ),
+            )
+            progress = json.loads(
+                Path(first["progress_path"]).read_text("utf-8")
+            )
+
+            second_page = _Page()
+            second_context = _Context(second_page)
+            second = run_sample(
+                category_id="176573",
+                output_dir=root / "out",
+                limit=1,
+                state_root=root / "state-2",
+                browser_scope_factory=_factory(
+                    second_page, [], second_context
+                ),
+            )
+
+        self.assertEqual(first["event"], "sample_completed")
+        self.assertEqual(first_page.extraction_limits, [5])
+        self.assertEqual(first_page.vendor_batches, [["3004", "3005"]])
+        self.assertEqual(first["next_offset"], 5)
+        self.assertEqual(progress["next_offset"], 5)
+        self.assertEqual(
+            progress["seen_vendor_item_ids"],
+            ["3001", "3002", "3003", "3004", "3005"],
+        )
+        self.assertEqual(second["event"], "sample_completed")
+        self.assertEqual(second_page.extraction_limits, [6])
+        self.assertEqual(second_page.vendor_batches, [["3006"]])
+        self.assertEqual(second["next_offset"], 6)
+
+    def test_rejects_offset_behind_saved_progress_before_browser(self):
+        calls: list[tuple[Path, bool]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            (output_dir / "patchright_progress_176573.json").write_text(
+                json.dumps(
+                    {
+                        "category_id": "176573",
+                        "next_offset": 5,
+                        "seen_vendor_item_ids": ["3001"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                run_sample(
+                    category_id="176573",
+                    output_dir=output_dir,
+                    limit=1,
+                    offset=4,
+                    state_root=root / "state",
+                    browser_scope_factory=_factory(
+                        _Page(), calls, _Context(_Page())
+                    ),
                 )
         self.assertEqual(calls, [])
 
@@ -306,6 +380,7 @@ class PatchrightSampleTest(unittest.TestCase):
             result = run_sample(
                 category_id="176573",
                 output_dir=root / "out",
+                limit=3,
                 state_root=root / "state",
                 browser_scope_factory=_factory(page, [], context),
             )

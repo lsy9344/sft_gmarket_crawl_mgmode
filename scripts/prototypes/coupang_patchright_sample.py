@@ -1,4 +1,4 @@
-"""PROTOTYPE CLI: Patchright로 쿠팡 판매자 정보를 최대 3건만 저장한다."""
+"""PROTOTYPE CLI: Patchright로 쿠팡 판매자 정보를 작은 묶음으로 저장한다."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _print_state(state: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Patchright 쿠팡 판매자 최대 3건 표본 수집 시험"
+        description="Patchright 쿠팡 판매자 소량 순차 수집 시험"
     )
     parser.add_argument("--category", required=True, metavar="CATEGORY_ID")
     parser.add_argument(
@@ -48,12 +48,19 @@ def main() -> int:
         type=Path,
         default=Path.home() / "Desktop" / "PatchrightSample",
     )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=None,
+        help="처음 건너뛸 상품 수(생략하면 저장된 다음 위치 사용)",
+    )
     args = parser.parse_args()
     try:
         result = run_sample(
             category_id=args.category,
             output_dir=args.output_dir,
             limit=args.limit,
+            offset=args.offset,
             on_event=_print_state,
         )
     except ValueError as error:

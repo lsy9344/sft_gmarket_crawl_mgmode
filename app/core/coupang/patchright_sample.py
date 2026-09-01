@@ -1,8 +1,9 @@
-"""PROTOTYPE: Patchright로 상품·판매자 최대 3건만 확인한다."""
+"""PROTOTYPE: Patchright로 상품·판매자를 작은 묶음으로 확인한다."""
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -26,7 +27,8 @@ from app.core.coupang.patchright_canary import (
 from app.core.coupang.search_parser import parse_extracted
 from app.models.coupang_records import CoupangRecord, CoupangRunConfig
 
-MAX_SAMPLE_ITEMS = 3
+MAX_SAMPLE_ITEMS = 5
+MAX_SAMPLE_SCAN_ITEMS = 20
 SHOP_SESSION_URL = "https://shop.coupang.com/A00067881"
 
 FETCH_VENDORS_JS = r"""
@@ -172,6 +174,58 @@ def _product_dict(product) -> dict:
     }
 
 
+def _progress_path(output_dir: Path, category_id: str) -> Path:
+    return output_dir / f"patchright_progress_{category_id}.json"
+
+
+def _read_progress(output_dir: Path, category_id: str) -> tuple[int, list[str]]:
+    path = _progress_path(output_dir, category_id)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return 0, []
+    except (OSError, ValueError) as error:
+        raise ValueError(f"수집 위치 기록을 읽지 못했습니다: {error}") from error
+    if not isinstance(value, dict) or value.get("category_id") != category_id:
+        raise ValueError("수집 위치 기록 형식이 잘못됐습니다.")
+    next_offset = value.get("next_offset")
+    seen = value.get("seen_vendor_item_ids")
+    if (
+        not isinstance(next_offset, int)
+        or not 0 <= next_offset <= MAX_SAMPLE_SCAN_ITEMS
+        or not isinstance(seen, list)
+        or any(not isinstance(item, str) or not item for item in seen)
+    ):
+        raise ValueError("수집 위치 기록 형식이 잘못됐습니다.")
+    return next_offset, list(dict.fromkeys(seen))
+
+
+def _save_progress(
+    output_dir: Path,
+    category_id: str,
+    next_offset: int,
+    seen_vendor_item_ids: list[str],
+) -> str:
+    path = _progress_path(output_dir, category_id)
+    temporary = path.with_name(f"{path.name}.tmp")
+    value = {
+        "category_id": category_id,
+        "next_offset": next_offset,
+        "seen_vendor_item_ids": list(dict.fromkeys(seen_vendor_item_ids)),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(temporary, path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
+    return str(path)
+
+
 def _parse_vendors(
     data: dict, requested_vendor_item_ids: list[str], limit: int
 ) -> dict[str, dict]:
@@ -257,22 +311,35 @@ def run_sample(
     category_id: str,
     output_dir: Path,
     limit: int = MAX_SAMPLE_ITEMS,
+    offset: int | None = None,
     control: Control | None = None,
     on_event: Callable[[dict], None] | None = None,
     state_root: Path | None = None,
     browser_scope_factory: Callable | None = None,
 ) -> dict:
-    """홈·목록 한 페이지에서 시작해 판매자 정보를 최대 3건만 저장한다."""
+    """홈·목록 한 페이지에서 다음 작은 묶음의 판매자 정보를 저장한다."""
     if not category_id.isdigit():
         raise ValueError("category_id는 숫자여야 합니다.")
     if not 1 <= limit <= MAX_SAMPLE_ITEMS:
         raise ValueError(f"limit는 1~{MAX_SAMPLE_ITEMS}여야 합니다.")
+    saved_offset, seen_vendor_item_ids = _read_progress(output_dir, category_id)
+    if offset is None:
+        offset = saved_offset
+    elif offset < saved_offset:
+        raise ValueError(
+            f"offset은 저장된 다음 위치 {saved_offset}보다 작을 수 없습니다."
+        )
+    if offset < 0 or offset + limit > MAX_SAMPLE_SCAN_ITEMS:
+        raise ValueError(
+            f"offset + limit는 {MAX_SAMPLE_SCAN_ITEMS} 이하여야 합니다."
+        )
 
     state = {
         "mode": "live_sample",
         "browser": "Patchright + installed Google Chrome",
         "category_id": category_id,
         "limit": limit,
+        "offset": offset,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "document_navigations": 0,
         "api_calls": 0,
@@ -317,11 +384,23 @@ def run_sample(
                     **{f"{name}_status": status},
                 )
 
-            # 앞선 실접속 canary에서 확인된 넓은 링크 셀렉터를 그대로 쓴다.
-            # 중복 링크가 섞이면 결과가 3개보다 적어질 수 있지만 더 읽지는 않는다.
-            rows = page.evaluate(EXTRACT_PRODUCTS_JS, limit)
+            # 같은 목록 페이지에서 저장된 위치까지 읽고, 이미 처리한 상품은 제외한다.
+            # 페이지를 넘기거나 추가 문서 요청을 만들지는 않는다.
+            scan_limit = offset + limit
+            rows = page.evaluate(EXTRACT_PRODUCTS_JS, scan_limit)
             _checkpoint(control)
-            products = [p for p in parse_extracted(rows) if p.vendor_item_id][:limit]
+            parsed_products = [
+                product for product in parse_extracted(rows) if product.vendor_item_id
+            ]
+            seen = set(seen_vendor_item_ids)
+            if seen:
+                products = [
+                    product
+                    for product in parsed_products
+                    if product.vendor_item_id not in seen
+                ][:limit]
+            else:
+                products = parsed_products[offset:scan_limit]
             if not products:
                 return _emit(
                     state,
@@ -330,7 +409,13 @@ def run_sample(
                     error="목록에서 vendorItemId가 있는 상품을 찾지 못했습니다.",
                 )
             product_rows = [_product_dict(product) for product in products]
-            _emit(state, "products_sampled", on_event, products=product_rows)
+            _emit(
+                state,
+                "products_sampled",
+                on_event,
+                products=product_rows,
+                scan_limit=scan_limit,
+            )
 
             _checkpoint(control)
             blocked, status, reference = _navigate(
@@ -440,6 +525,32 @@ def run_sample(
                     json_path=error.json_path,
                     csv_path="",
                 )
+            selected_ids = [product.vendor_item_id for product in products]
+            if seen_vendor_item_ids:
+                updated_seen = [*seen_vendor_item_ids, *selected_ids]
+            else:
+                updated_seen = [
+                    product.vendor_item_id
+                    for product in parsed_products[: offset + len(products)]
+                ]
+            next_offset = offset + len(products)
+            try:
+                progress_path = _save_progress(
+                    output_dir,
+                    category_id,
+                    next_offset,
+                    updated_seen,
+                )
+            except OSError as error:
+                return _emit(
+                    state,
+                    "failed",
+                    on_event,
+                    error=f"결과는 저장했지만 수집 위치 기록에 실패했습니다: {error}",
+                    records=records,
+                    json_path=json_path,
+                    csv_path=csv_path,
+                )
             return _emit(
                 state,
                 "sample_completed",
@@ -448,6 +559,8 @@ def run_sample(
                 record_count=len(records),
                 json_path=json_path,
                 csv_path=csv_path,
+                next_offset=next_offset,
+                progress_path=progress_path,
             )
     except CancelledError:
         json_path, csv_path, save_error = _save_partial_safely(records, output_dir)
