@@ -219,10 +219,10 @@ class PatchrightCanaryTest(unittest.TestCase):
             )
             resumed, _reason = authorize_recovery_resume(root, now=next_day)
             too_large, too_large_reason = claim_live_attempt(
-                root, now=next_day, planned_items=24
+                root, now=next_day, planned_items=180
             )
             allowed, _reason = claim_live_attempt(
-                root, now=next_day, planned_items=8
+                root, now=next_day, planned_items=60
             )
             guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
         self.assertTrue(first)
@@ -230,9 +230,9 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertIn("다음 날", same_day_reason)
         self.assertTrue(resumed)
         self.assertFalse(too_large)
-        self.assertIn("최대 8개", too_large_reason)
+        self.assertIn("최대 60개", too_large_reason)
         self.assertTrue(allowed)
-        self.assertEqual(guard["recovery_ramp_limit"], 8)
+        self.assertEqual(guard["recovery_ramp_limit"], 60)
 
     def test_recovery_ramp_advances_only_in_order(self):
         attempt = time.mktime((2026, 9, 1, 21, 53, 51, 0, 0, -1))
@@ -243,10 +243,10 @@ class PatchrightCanaryTest(unittest.TestCase):
             claim_live_attempt(root, now=attempt)
             record_recovery_hold(root, now=hold)
             authorize_recovery_resume(root, now=next_day)
-            wrong, wrong_reason = advance_recovery_ramp(24, root, now=next_day)
-            first, _reason = advance_recovery_ramp(8, root, now=next_day)
+            wrong, wrong_reason = advance_recovery_ramp(180, root, now=next_day)
+            first, _reason = advance_recovery_ramp(60, root, now=next_day)
             second, _reason = advance_recovery_ramp(
-                24, root, now=next_day + (3 * 60 * 60)
+                180, root, now=next_day + (3 * 60 * 60)
             )
             third, _reason = advance_recovery_ramp(
                 600, root, now=next_day + (6 * 60 * 60)

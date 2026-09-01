@@ -41,9 +41,9 @@ class PatchrightAutomationTest(unittest.TestCase):
             return run
 
         runners = {
-            "recovery8": runner("recovery8", "listing_batch_completed"),
-            "recovery24": runner("recovery24", "listing_batch_completed"),
-            "recovery600": runner("recovery600", "listing_pages_completed"),
+            "page1": runner("page1", "listing_pages_completed"),
+            "pages3": runner("pages3", "listing_pages_completed"),
+            "pages10": runner("pages10", "listing_pages_completed"),
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -59,7 +59,7 @@ class PatchrightAutomationTest(unittest.TestCase):
                     runners=runners,
                 )
                 for stage, stage_time in zip(
-                    ("recovery8", "recovery24", "recovery600"),
+                    ("page1", "pages3", "pages10"),
                     times,
                     strict=True,
                 )
@@ -75,7 +75,7 @@ class PatchrightAutomationTest(unittest.TestCase):
             ["automation_stage_completed"] * 3,
         )
         self.assertEqual(
-            calls, ["recovery8", "recovery24", "recovery600"]
+            calls, ["page1", "pages3", "pages10"]
         )
         self.assertEqual(state["completed_stages"], calls)
         self.assertFalse(state["halted"])
@@ -87,12 +87,12 @@ class PatchrightAutomationTest(unittest.TestCase):
         second_time = time.mktime((2026, 9, 2, 3, 55, 0, 0, 0, -1))
         second_calls: list[str] = []
         runners = {
-            "recovery8": lambda: {
+            "page1": lambda: {
                 "event": "blocked",
                 "reference": "Reference #18.test",
             },
-            "recovery24": lambda: second_calls.append("called") or {
-                "event": "listing_batch_completed"
+            "pages3": lambda: second_calls.append("called") or {
+                "event": "listing_pages_completed"
             },
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -102,14 +102,14 @@ class PatchrightAutomationTest(unittest.TestCase):
             self._seed_recovery_hold(state_root)
             first = run_automation_stage(
                 output_dir=output_dir,
-                stage="recovery8",
+                stage="page1",
                 state_root=state_root,
                 now=first_time,
                 runners=runners,
             )
             second = run_automation_stage(
                 output_dir=output_dir,
-                stage="recovery24",
+                stage="pages3",
                 state_root=state_root,
                 now=second_time,
                 runners=runners,

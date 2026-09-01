@@ -21,7 +21,7 @@ MIN_LIVE_INTERVAL_SECONDS = 3 * 60 * 60
 MAX_LIVE_SESSIONS_PER_DAY = 3
 MAX_DAILY_ITEMS = 1_500
 MAX_SESSION_ITEMS = 600
-RECOVERY_RAMP_LIMITS = (8, 24, 600)
+RECOVERY_RAMP_LIMITS = (60, 180, 600)
 BLOCK_RECOVERY_INTERVAL_SECONDS = 60 * 60
 BLOCK_STATUSES = {403, 418, 429}
 BLOCK_MARKERS = (
@@ -306,7 +306,7 @@ def authorize_recovery_resume(
     *,
     now: float | None = None,
 ) -> tuple[bool, str]:
-    """복구 확인 다음 날부터 8→24→600개 확대 검증을 시작한다."""
+    """복구 확인 다음 날부터 1→3→10페이지 확대 검증을 시작한다."""
     current = time.time() if now is None else now
     try:
         guard = _read_guard(root)

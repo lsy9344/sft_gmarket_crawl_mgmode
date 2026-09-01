@@ -19,7 +19,7 @@ def main() -> int:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=("recovery8", "recovery24", "recovery600", "audit"),
+        choices=("page1", "pages3", "pages10", "audit"),
     )
     parser.add_argument(
         "--output-dir",

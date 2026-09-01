@@ -18,7 +18,6 @@ from app.core.coupang.patchright_canary import (
 from app.core.coupang.patchright_full_fruit import (
     STATE_FILENAME,
     FullFruitStore,
-    run_listing_batch,
     run_listing_pages,
 )
 
@@ -26,12 +25,12 @@ AUTOMATION_STATE_FILENAME = "patchright_automation_state.json"
 AUTOMATION_LOG_FILENAME = "patchright_automation_log.jsonl"
 AUTOMATION_DEADLINE = "2026-09-02 09:00:00"
 AUTOMATION_DEADLINE_TS = time.mktime((2026, 9, 2, 9, 0, 0, 0, 0, -1))
-LIVE_STAGE_ORDER = ("recovery8", "recovery24", "recovery600")
-STAGE_LIMITS = {"recovery8": 8, "recovery24": 24, "recovery600": 600}
+LIVE_STAGE_ORDER = ("page1", "pages3", "pages10")
+STAGE_LIMITS = {"page1": 60, "pages3": 180, "pages10": 600}
 SUCCESS_EVENTS = {
-    "recovery8": {"listing_batch_completed"},
-    "recovery24": {"listing_batch_completed"},
-    "recovery600": {"listing_pages_completed"},
+    "page1": {"listing_pages_completed"},
+    "pages3": {"listing_pages_completed"},
+    "pages10": {"listing_pages_completed"},
 }
 
 
@@ -173,7 +172,7 @@ def run_automation_stage(
         return result
 
     backup_dir = _backup_before_stage(output_dir, stage, state_root, current)
-    if stage == "recovery8":
+    if stage == "page1":
         allowed, reason = authorize_recovery_resume(state_root, now=current)
         if not allowed:
             state.update(
@@ -192,13 +191,13 @@ def run_automation_stage(
             return result
     if runners is None:
         runners = {
-            "recovery8": lambda: run_listing_batch(
-                output_dir=output_dir, limit=8, state_root=state_root
+            "page1": lambda: run_listing_pages(
+                output_dir=output_dir, page_count=1, state_root=state_root
             ),
-            "recovery24": lambda: run_listing_batch(
-                output_dir=output_dir, limit=24, state_root=state_root
+            "pages3": lambda: run_listing_pages(
+                output_dir=output_dir, page_count=3, state_root=state_root
             ),
-            "recovery600": lambda: run_listing_pages(
+            "pages10": lambda: run_listing_pages(
                 output_dir=output_dir, page_count=10, state_root=state_root
             ),
         }

@@ -7,9 +7,9 @@ $outputDir = "C:\Users\dltnd\Desktop\PatchrightFruit"
 $userId = "${env:USERDOMAIN}\${env:USERNAME}"
 
 $schedule = @(
-    @{ Name = "PatchrightFruit-20260902-0055-recovery8"; At = "2026-09-02T00:55:00"; Stage = "recovery8" },
-    @{ Name = "PatchrightFruit-20260902-0400-recovery24"; At = "2026-09-02T04:00:00"; Stage = "recovery24" },
-    @{ Name = "PatchrightFruit-20260902-0705-recovery600"; At = "2026-09-02T07:05:00"; Stage = "recovery600" },
+    @{ Name = "PatchrightFruit-20260902-0055-page1"; At = "2026-09-02T00:55:00"; Stage = "page1" },
+    @{ Name = "PatchrightFruit-20260902-0400-pages3"; At = "2026-09-02T04:00:00"; Stage = "pages3" },
+    @{ Name = "PatchrightFruit-20260902-0705-pages10"; At = "2026-09-02T07:05:00"; Stage = "pages10" },
     @{ Name = "PatchrightFruit-20260902-0855-audit"; At = "2026-09-02T08:55:00"; Stage = "audit" }
 )
 
