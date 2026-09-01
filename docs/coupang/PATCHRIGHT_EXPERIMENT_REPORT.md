@@ -1,17 +1,17 @@
 # Patchright 쿠팡 실험 보고서
 
 작성일: 2026-09-01  
-상태: **과일 하위 카테고리 순차 수집 구현 및 첫 8개 확대 실접속 완료**
+상태: **상품·판매자 분리 전량 구조 구현 및 상품 목록 24개 확대 실접속 완료**
 
 ## 1. 결론
 
 Patchright와 Windows에 설치된 실제 Chrome 조합은 이 개발 PC에서 쿠팡 홈,
 카테고리 목록, 상점 세션 페이지에 처음 진입하는 데 성공했다. Patchright 적용 뒤
-완료한 실접속 9회에서는 화면에 보이는 `Access Denied`, CAPTCHA, HTTP
+완료한 실접속 10회에서는 화면에 보이는 `Access Denied`, CAPTCHA, HTTP
 403/418/429가 없었다.
 
 다만 이것은 "탐지되지 않았다"거나 "과일 전량 수집이 검증됐다"는 뜻이 아니다.
-확인한 범위는 과일 루트 첫 페이지의 상품 24개와 사과/배 첫 페이지의 상품 20개다.
+확인한 범위는 과일 루트 첫 페이지의 상품 24개와 사과/배 첫 페이지의 상품 44개다.
 사과/배 첫 8개는 기존 판매자 한 명으로 연결됐지만, 다음 12개에서 새 판매자 2명의
 완전한 사업자정보를 저장했다. 차단보다 목록 앞부분에 같은 판매자가 반복되어 새
 판매자 정보가 적게 나오는 현상은 계속 관찰됐다.
@@ -130,6 +130,7 @@ HTTP 주소 오류라고 단정할 근거도 없었다.
 | 15:17:10 | 과일 루트, 위치 16 | 새 상품 8 → 판매자 2 → 저장 0 | 3 / 2 | 없음 |
 | 15:47:56 | 사과/배 1페이지, 위치 0 | 새 상품 8 → 기존 판매자 1 → 저장 0 | 3 / 1 | 없음 |
 | 17:00:38 | 사과/배 1페이지, 위치 8 | 새 상품 12 → 판매자 3(기존 1) → 저장 2 | 3 / 3 | 없음 |
+| 17:30:58 | 전량 목록 단계, 사과/배 위치 20 | 새 상품 24, 첫 44개 상품 파일 저장 | 2 / 0 | 없음 |
 
 마지막 묶음에서는 이미 본 판매자 1명을 사업자정보 요청 전에 제외했다. 새 판매자
 1명은 표준 공개 사업자정보에 이름이 없어 결과 파일을 만들지 않았다. 재시도는 없었고
@@ -137,7 +138,8 @@ HTTP 주소 오류라고 단정할 근거도 없었다.
 
 ### 누계
 
-- 처리한 과일 상품: 44개(루트 24개 + 사과/배 20개)
+- 처리한 과일 상품 위치: 68개(루트 24개 + 사과/배 44개)
+- 전량 상품 파일의 고유 상품: 44개
 - 과일에서 확인한 고유 판매자 ID: 4개
 - 만들어진 JSON/CSV 결과 쌍: 4쌍
 - 저장 행: 5행
@@ -161,6 +163,11 @@ C:\Users\dltnd\Desktop\PatchrightFruit
 - `patchright_fruit_job.json`: 과일 전체 작업 위치와 누계
 - `patchright_sample_*.json`, `patchright_sample_*.csv`: 새 판매자 결과
 - `SHA256SUMS.txt`: 보관 파일 해시 목록
+- `fruit_products.csv`: 전량 단계의 고유 상품 목록
+- `fruit_sellers.csv`: 전량 단계의 판매자 처리 상태와 사업자정보
+- `fruit_product_seller.csv`: 상품과 판매자 연결
+- `fruit_collection_state.json`: 전량 단계의 정확한 재개 위치
+- `fruit_failed_sellers.json`, `fruit_collection_summary.json`: 실패 대기와 검증 요약
 
 네 번째 묶음 뒤 기존 과일 루트 위치 기록의 SHA-256은 다음과 같다.
 
@@ -184,6 +191,14 @@ a3b452dbf7c55bc412ba48adfff4237798c5e984fad02b1bc007150d1ce52623  patchright_fru
 fa54915bb36f044c5a1ec02fc6df80f38921540098b86422836d18dc4ecec507  patchright_progress_194284.json
 ```
 
+전량 상품 목록 24개 확대 뒤 새 파일의 주요 SHA-256은 다음과 같다.
+
+```text
+6f9eae2ff6f2d9738f8677c1572b9e44d47c2b26bb0e0683f388e4453a90a3ab  fruit_products.csv
+919d01db09bd52af23c7959801522095f16c2f8d30ed615105eb8a6cc4806e57  fruit_collection_summary.json
+f503ef2e7b7bd5c20d61e6c5f24041c062483e2d7210ecc6d1265eac1c9f843a  fruit_collection_state.json
+```
+
 백업:
 
 ```text
@@ -193,12 +208,17 @@ C:\Users\dltnd\Desktop\PatchrightFruit_backup_20260901_1548_leaf1
 C:\Users\dltnd\AppData\Local\SellerCollectorPatchrightCanary_backup_20260901_1548_leaf1
 C:\Users\dltnd\Desktop\PatchrightFruit_backup_20260901_1701_batch12
 C:\Users\dltnd\AppData\Local\SellerCollectorPatchrightCanary_backup_20260901_1701_batch12
+C:\Users\dltnd\Desktop\PatchrightFruit_backup_20260901_1721_full24_ready
+C:\Users\dltnd\AppData\Local\SellerCollectorPatchrightCanary_backup_20260901_1721_full24_ready
+C:\Users\dltnd\Desktop\PatchrightFruit_backup_20260901_1731_full24
+C:\Users\dltnd\AppData\Local\SellerCollectorPatchrightCanary_backup_20260901_1731_full24
 ```
 
 백업 브랜치:
 
 ```text
 backup/patchright-fruit-batch4-success-20260901-1517
+backup/patchright-full-fruit-24-price-ready-20260901-1723
 ```
 
 이전 변경까지 Windows 전체 테스트 352개가 통과했다. 과일 순차 작업과 상품 링크
@@ -207,6 +227,11 @@ backup/patchright-fruit-batch4-success-20260901-1517
 테스트는 359개 중 350개 통과, 4개 건너뜀, 9개 실패였다. 실패 9개는 이 Windows
 Python에 기존 Camoufox GeoIP 보조 패키지 `maxminddb`가 없는 환경 문제이며 이번
 Patchright 변경 시험에는 포함되지 않는다.
+
+전량 구조 추가 뒤 Windows의 실제 네트워크 없는 Patchright 관련 테스트 37개가
+통과했고 새 전량 모듈의 코드 검사도 통과했다. 24개 실접속 결과는 고유
+`vendorItemId` 44개, 기존 첫 20개 순서 일치, 새 24개 중복 0개, 필수 상품 열과
+가격 누락 0개로 다시 읽어 검증했다.
 
 ## 8. 과일 전체 수집 방법
 
@@ -253,7 +278,7 @@ py scripts\prototypes\coupang_patchright_fruit.py `
 판정한다. 마지막에는 모든 JSON을 판매자 ID로 다시 합쳐 고유 판매자 수, 필수 필드,
 파일 해시를 검증해야 한다.
 
-장시간 성공 여부는 아직 검증되지 않았다. 첫 하위 카테고리 8개와 다음 12개 묶음은
-모두 정상 종료했다. 현재 위치는 사과/배 1페이지의 상품 20개 뒤이고 묶음 크기는
-12개를 유지한다. 마지막 실접속은 2026-09-01 17:00:38 KST이므로 다음 실접속은
-17:30:38 이후에만 허용된다.
+장시간 성공 여부는 아직 검증되지 않았다. 8개, 12개, 상품 목록 24개 확대는 모두
+정상 종료했다. 현재 전량 위치는 사과/배 1페이지의 상품 44개 뒤다. 다음 단계는
+같은 페이지를 최대 60개까지 채우고 다음 페이지 이동을 확인하는 것이다. 마지막
+실접속은 2026-09-01 17:30:58 KST이므로 다음 실접속은 18:00:58 이후에만 허용된다.

@@ -160,3 +160,8 @@ python scripts/prototypes/coupang_patchright_full_fruit.py \
 상품이 계속 나오면 완료로 표시하지 않고 `incomplete_limit_reached`로 멈춘다.
 확대 순서와 완료 기준은
 `docs/coupang/PATCHRIGHT_FULL_FRUIT_COLLECTION_PLAN.md`를 따른다.
+
+2026-09-01 17:30:58 Windows 실접속에서 기존 위치 20 뒤의 새 상품 24개를
+성공적으로 추가했다. 홈과 목록은 HTTP 200, 문서 이동 2회, 판매자 API 0회였고
+차단은 없었다. `fruit_products.csv`의 첫 44개는 모두 고유하며 가격과 필수 상품
+열이 채워졌다. 다음 단계는 같은 페이지를 최대 60개까지 채우는 검증이다.
