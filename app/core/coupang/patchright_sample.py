@@ -27,8 +27,8 @@ from app.core.coupang.patchright_canary import (
 from app.core.coupang.search_parser import parse_extracted
 from app.models.coupang_records import CoupangRecord, CoupangRunConfig
 
-MAX_SAMPLE_ITEMS = 8
-MAX_SAMPLE_SCAN_ITEMS = 24
+MAX_SAMPLE_ITEMS = 12
+MAX_SAMPLE_SCAN_ITEMS = 60
 SHOP_SESSION_URL = "https://shop.coupang.com/A00067881"
 
 FETCH_VENDORS_JS = r"""
@@ -174,21 +174,28 @@ def _product_dict(product) -> dict:
     }
 
 
-def _progress_path(output_dir: Path, category_id: str) -> Path:
-    return output_dir / f"patchright_progress_{category_id}.json"
+def _progress_path(
+    output_dir: Path, category_id: str, page_number: int = 1
+) -> Path:
+    suffix = "" if page_number == 1 else f"_page_{page_number}"
+    return output_dir / f"patchright_progress_{category_id}{suffix}.json"
 
 
 def _read_progress(
-    output_dir: Path, category_id: str
+    output_dir: Path, category_id: str, page_number: int = 1
 ) -> tuple[int, list[str], list[str]]:
-    path = _progress_path(output_dir, category_id)
+    path = _progress_path(output_dir, category_id, page_number)
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return 0, [], []
     except (OSError, ValueError) as error:
         raise ValueError(f"수집 위치 기록을 읽지 못했습니다: {error}") from error
-    if not isinstance(value, dict) or value.get("category_id") != category_id:
+    if (
+        not isinstance(value, dict)
+        or value.get("category_id") != category_id
+        or value.get("page_number", 1) != page_number
+    ):
         raise ValueError("수집 위치 기록 형식이 잘못됐습니다.")
     next_offset = value.get("next_offset")
     seen_items = value.get("seen_vendor_item_ids")
@@ -212,14 +219,16 @@ def _read_progress(
 def _save_progress(
     output_dir: Path,
     category_id: str,
+    page_number: int,
     next_offset: int,
     seen_vendor_item_ids: list[str],
     seen_vendor_ids: list[str],
 ) -> str:
-    path = _progress_path(output_dir, category_id)
+    path = _progress_path(output_dir, category_id, page_number)
     temporary = path.with_name(f"{path.name}.tmp")
     value = {
         "category_id": category_id,
+        "page_number": page_number,
         "next_offset": next_offset,
         "seen_vendor_item_ids": list(dict.fromkeys(seen_vendor_item_ids)),
         "seen_vendor_ids": list(dict.fromkeys(seen_vendor_ids)),
@@ -235,6 +244,23 @@ def _save_progress(
         temporary.unlink(missing_ok=True)
         raise
     return str(path)
+
+
+def _read_global_seen_vendors(output_dir: Path) -> list[str]:
+    """모든 카테고리·페이지에서 이미 확인한 판매자를 모은다."""
+    seen: list[str] = []
+    for path in sorted(output_dir.glob("patchright_progress_*.json")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ValueError(f"판매자 중복 기록을 읽지 못했습니다: {error}") from error
+        vendors = value.get("seen_vendor_ids", []) if isinstance(value, dict) else None
+        if not isinstance(vendors, list) or any(
+            not isinstance(item, str) or not item for item in vendors
+        ):
+            raise ValueError("판매자 중복 기록 형식이 잘못됐습니다.")
+        seen.extend(vendors)
+    return list(dict.fromkeys(seen))
 
 
 def _parse_vendors(
@@ -323,6 +349,7 @@ def run_sample(
     output_dir: Path,
     limit: int = MAX_SAMPLE_ITEMS,
     offset: int | None = None,
+    page_number: int = 1,
     control: Control | None = None,
     on_event: Callable[[dict], None] | None = None,
     state_root: Path | None = None,
@@ -333,15 +360,21 @@ def run_sample(
         raise ValueError("category_id는 숫자여야 합니다.")
     if not 1 <= limit <= MAX_SAMPLE_ITEMS:
         raise ValueError(f"limit는 1~{MAX_SAMPLE_ITEMS}여야 합니다.")
+    if not 1 <= page_number <= 50:
+        raise ValueError("page_number는 1~50이어야 합니다.")
     saved_offset, seen_vendor_item_ids, seen_vendor_ids = _read_progress(
-        output_dir, category_id
+        output_dir, category_id, page_number
     )
-    if offset is None:
+    global_seen_vendor_ids = _read_global_seen_vendors(output_dir)
+    resuming = offset is None
+    if resuming:
         offset = saved_offset
     elif offset < saved_offset:
         raise ValueError(
             f"offset은 저장된 다음 위치 {saved_offset}보다 작을 수 없습니다."
         )
+    if resuming:
+        limit = min(limit, MAX_SAMPLE_SCAN_ITEMS - offset)
     if offset < 0 or offset + limit > MAX_SAMPLE_SCAN_ITEMS:
         raise ValueError(
             f"offset + limit는 {MAX_SAMPLE_SCAN_ITEMS} 이하여야 합니다."
@@ -351,12 +384,21 @@ def run_sample(
         "mode": "live_sample",
         "browser": "Patchright + installed Google Chrome",
         "category_id": category_id,
+        "page_number": page_number,
         "limit": limit,
         "offset": offset,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "document_navigations": 0,
         "api_calls": 0,
     }
+    if limit == 0:
+        return _emit(
+            state,
+            "page_exhausted",
+            on_event,
+            extracted_product_count=MAX_SAMPLE_SCAN_ITEMS,
+            reason="이 페이지의 안전 확인 범위를 모두 처리했습니다.",
+        )
     allowed, reason = claim_live_attempt(state_root)
     if not allowed:
         return _emit(state, "guard_refused", on_event, reason=reason)
@@ -373,7 +415,13 @@ def run_sample(
 
             pages = (
                 ("home", HOME_URL, 1_500),
-                ("category", CATEGORY_URL.format(category_id=category_id), 2_000),
+                (
+                    "category",
+                    CATEGORY_URL.format(category_id=category_id).replace(
+                        "?page=1", f"?page={page_number}"
+                    ),
+                    2_000,
+                ),
             )
             for name, url, settle_ms in pages:
                 _checkpoint(control)
@@ -417,9 +465,10 @@ def run_sample(
             if not products:
                 return _emit(
                     state,
-                    "failed",
+                    "page_exhausted",
                     on_event,
-                    error="목록에서 vendorItemId가 있는 상품을 찾지 못했습니다.",
+                    extracted_product_count=len(parsed_products),
+                    reason="이 페이지의 다음 상품이 없습니다.",
                 )
             product_rows = [_product_dict(product) for product in products]
             _emit(
@@ -471,7 +520,7 @@ def run_sample(
                 return _emit(
                     state, "failed", on_event, error="연결된 판매자를 찾지 못했습니다."
                 )
-            seen_vendor_set = set(seen_vendor_ids)
+            seen_vendor_set = set(global_seen_vendor_ids)
             vendors = {
                 vendor_id: vendor
                 for vendor_id, vendor in mapped_vendors.items()
@@ -495,15 +544,17 @@ def run_sample(
                     for product in parsed_products[: offset + len(products)]
                 ]
             next_offset = offset + len(products)
+            updated_seen_vendors = [*seen_vendor_ids, *mapped_vendors]
 
             if not vendors:
                 try:
                     progress_path = _save_progress(
                         output_dir,
                         category_id,
+                        page_number,
                         next_offset,
                         updated_seen_items,
-                        seen_vendor_ids,
+                        updated_seen_vendors,
                     )
                 except OSError as error:
                     return _emit(
@@ -569,12 +620,12 @@ def run_sample(
                 _wait(page, 1_500, control)
                 _checkpoint(control)
 
-            updated_seen_vendors = [*seen_vendor_ids, *vendors]
             if not records:
                 try:
                     progress_path = _save_progress(
                         output_dir,
                         category_id,
+                        page_number,
                         next_offset,
                         updated_seen_items,
                         updated_seen_vendors,
@@ -616,6 +667,7 @@ def run_sample(
                 progress_path = _save_progress(
                     output_dir,
                     category_id,
+                    page_number,
                     next_offset,
                     updated_seen_items,
                     updated_seen_vendors,

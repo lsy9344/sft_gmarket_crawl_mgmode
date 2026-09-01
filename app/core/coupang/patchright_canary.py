@@ -31,13 +31,28 @@ BLOCK_MARKERS = (
 REFERENCE_RE = re.compile(r"Reference\s*#([\w.-]+)", re.IGNORECASE)
 
 EXTRACT_PRODUCTS_JS = r"""
-(limit) => [...document.querySelectorAll('a[href*="/vp/products/"]')]
-  .slice(0, limit)
-  .map((a) => ({
-    href: a.getAttribute('href') || '',
-    title: (a.innerText || a.getAttribute('aria-label') || '')
-      .replace(/\s+/g, ' ').trim().slice(0, 120),
-  }))
+(limit) => {
+  const products = [];
+  const seen = new Set();
+  for (const a of document.querySelectorAll('a[href*="/vp/products/"]')) {
+    const href = a.getAttribute('href') || '';
+    let key = href;
+    try {
+      key = new URL(href, location.origin).searchParams.get('vendorItemId') || href;
+    } catch (_error) {
+      // 잘못된 링크는 href 자체로 중복을 판단한다.
+    }
+    if (!href || seen.has(key)) continue;
+    seen.add(key);
+    products.push({
+      href,
+      title: (a.innerText || a.getAttribute('aria-label') || '')
+        .replace(/\s+/g, ' ').trim().slice(0, 120),
+    });
+    if (products.length >= limit) break;
+  }
+  return products;
+}
 """
 
 OFFLINE_HTML = """

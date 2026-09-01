@@ -222,34 +222,115 @@ class PatchrightSampleTest(unittest.TestCase):
         self.assertFalse(calls[0][1])
         self.assertTrue(context.closed)
 
-    def test_rejects_limit_above_eight_before_browser(self):
+    def test_rejects_limit_above_twelve_before_browser(self):
         calls: list[tuple[Path, bool]] = []
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 run_sample(
                     category_id="176573",
                     output_dir=Path(tmp),
-                    limit=9,
+                    limit=13,
                     state_root=Path(tmp),
                     browser_scope_factory=_factory(_Page(), calls, _Context(_Page())),
                 )
         self.assertEqual(calls, [])
 
-    def test_rejects_scan_beyond_twenty_four_before_browser(self):
+    def test_rejects_scan_beyond_sixty_before_browser(self):
         calls: list[tuple[Path, bool]] = []
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 run_sample(
                     category_id="176573",
                     output_dir=Path(tmp),
-                    limit=8,
-                    offset=17,
+                    limit=12,
+                    offset=49,
                     state_root=Path(tmp),
                     browser_scope_factory=_factory(
                         _Page(), calls, _Context(_Page())
                     ),
                 )
         self.assertEqual(calls, [])
+
+    def test_page_number_changes_category_url_and_progress_file(self):
+        page = _Page()
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = run_sample(
+                category_id="176573",
+                page_number=2,
+                output_dir=root / "out",
+                limit=2,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+
+        self.assertEqual(result["event"], "sample_completed")
+        self.assertIn(
+            "https://www.coupang.com/np/categories/176573?page=2", page.urls
+        )
+        self.assertTrue(result["progress_path"].endswith("_page_2.json"))
+
+    def test_seen_vendor_in_other_category_is_skipped_globally(self):
+        page = _Page()
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            (output_dir / "patchright_progress_194282.json").write_text(
+                json.dumps(
+                    {
+                        "category_id": "194282",
+                        "next_offset": 1,
+                        "seen_vendor_item_ids": ["3001"],
+                        "seen_vendor_ids": ["V1"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = run_sample(
+                category_id="176573",
+                output_dir=output_dir,
+                limit=2,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+
+        self.assertEqual(result["event"], "sample_completed")
+        self.assertEqual(result["skipped_seen_vendor_count"], 1)
+        self.assertEqual(page.review_ids, ["V2"])
+
+    def test_returns_page_exhausted_without_shop_or_api(self):
+        page = _Page()
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            (output_dir / "patchright_progress_176573.json").write_text(
+                json.dumps(
+                    {
+                        "category_id": "176573",
+                        "next_offset": 6,
+                        "seen_vendor_item_ids": [f"{3000 + i}" for i in range(1, 7)],
+                        "seen_vendor_ids": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = run_sample(
+                category_id="176573",
+                output_dir=output_dir,
+                limit=1,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+
+        self.assertEqual(result["event"], "page_exhausted")
+        self.assertEqual(result["document_navigations"], 2)
+        self.assertEqual(result["api_calls"], 0)
+        self.assertNotIn(SHOP_SESSION_URL, page.urls)
 
     def test_offset_skips_previous_items_and_next_run_resumes(self):
         first_page = _Page()
