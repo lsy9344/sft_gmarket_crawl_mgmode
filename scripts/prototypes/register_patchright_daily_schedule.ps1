@@ -8,9 +8,9 @@ $userId = "${env:USERDOMAIN}\${env:USERNAME}"
 
 $schedule = @(
     @{ Name = "PatchrightFruit-20260903-0010-pages10a"; At = "2026-09-03T00:10:00"; Stage = "pages10_a" },
-    @{ Name = "PatchrightFruit-20260903-0315-pages10b"; At = "2026-09-03T03:15:00"; Stage = "pages10_b" },
-    @{ Name = "PatchrightFruit-20260903-0620-remainder"; At = "2026-09-03T06:20:00"; Stage = "daily_remainder" },
-    @{ Name = "PatchrightFruit-20260903-0830-audit"; At = "2026-09-03T08:30:00"; Stage = "audit" }
+    @{ Name = "PatchrightFruit-20260903-0215-pages10b"; At = "2026-09-03T02:15:00"; Stage = "pages10_b" },
+    @{ Name = "PatchrightFruit-20260903-0420-remainder"; At = "2026-09-03T04:20:00"; Stage = "daily_remainder" },
+    @{ Name = "PatchrightFruit-20260903-0630-audit"; At = "2026-09-03T06:30:00"; Stage = "audit" }
 )
 
 Get-ScheduledTask | Where-Object TaskName -Like "PatchrightFruit-20260903-*" |

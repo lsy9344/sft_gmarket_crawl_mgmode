@@ -17,7 +17,7 @@ from app.core.config import PROJECT_ROOT
 HOME_URL = "https://www.coupang.com/"
 CATEGORY_URL = "https://www.coupang.com/np/categories/{category_id}?page=1"
 MAX_ITEMS = 10
-MIN_LIVE_INTERVAL_SECONDS = 3 * 60 * 60
+MIN_LIVE_INTERVAL_SECONDS = 2 * 60 * 60
 MAX_LIVE_SESSIONS_PER_DAY = 3
 MAX_DAILY_ITEMS = 1_500
 MAX_SESSION_ITEMS = 600

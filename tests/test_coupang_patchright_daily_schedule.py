@@ -18,16 +18,24 @@ from app.core.coupang.patchright_daily_schedule import (
 
 
 class PatchrightDailyScheduleTest(unittest.TestCase):
-    def test_plan_uses_full_daily_envelope_without_shortening_interval(self):
+    def test_plan_uses_full_daily_envelope_with_two_hour_interval(self):
         plan = build_schedule()
         live = [item for item in plan if item["mode"] == "live"]
 
         self.assertEqual(len(live), 3)
+        self.assertEqual(
+            [item["scheduled_at"] for item in live],
+            [
+                "2026-09-03 00:10:00",
+                "2026-09-03 02:15:00",
+                "2026-09-03 04:20:00",
+            ],
+        )
         self.assertEqual([item["page_limit"] for item in live], [10, 10, 5])
         self.assertEqual(sum(item["item_budget"] for item in live), 1_500)
         self.assertTrue(
             all(
-                later["timestamp"] - earlier["timestamp"] >= 3 * 60 * 60
+                later["timestamp"] - earlier["timestamp"] >= 2 * 60 * 60
                 for earlier, later in pairwise(live)
             )
         )
@@ -64,8 +72,8 @@ class PatchrightDailyScheduleTest(unittest.TestCase):
         )}
         times = (
             time.mktime((2026, 9, 3, 0, 10, 0, 0, 0, -1)),
-            time.mktime((2026, 9, 3, 3, 15, 0, 0, 0, -1)),
-            time.mktime((2026, 9, 3, 6, 20, 0, 0, 0, -1)),
+            time.mktime((2026, 9, 3, 2, 15, 0, 0, 0, -1)),
+            time.mktime((2026, 9, 3, 4, 20, 0, 0, 0, -1)),
         )
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
@@ -98,7 +106,7 @@ class PatchrightDailyScheduleTest(unittest.TestCase):
     def test_failure_prevents_later_runner(self):
         calls: list[str] = []
         first_time = time.mktime((2026, 9, 3, 0, 10, 0, 0, 0, -1))
-        second_time = time.mktime((2026, 9, 3, 3, 15, 0, 0, 0, -1))
+        second_time = time.mktime((2026, 9, 3, 2, 15, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             first = run_daily_stage(

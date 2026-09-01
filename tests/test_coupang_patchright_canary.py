@@ -140,17 +140,21 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertEqual(second["event"], "guard_refused")
         self.assertEqual(len(calls), 1)
 
-    def test_three_hour_interval_is_enforced(self):
+    def test_two_hour_interval_is_enforced(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first, _reason = claim_live_attempt(root, now=base)
-            second, reason = claim_live_attempt(
-                root, now=base + (3 * 60 * 60) - 1
+            too_early, reason = claim_live_attempt(
+                root, now=base + (2 * 60 * 60) - 1
+            )
+            on_time, _reason = claim_live_attempt(
+                root, now=base + (2 * 60 * 60)
             )
         self.assertTrue(first)
-        self.assertFalse(second)
+        self.assertFalse(too_early)
         self.assertIn("1분", reason)
+        self.assertTrue(on_time)
 
     def test_daily_product_envelope_refuses_more_than_fifteen_hundred(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
