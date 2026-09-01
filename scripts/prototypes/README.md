@@ -171,3 +171,13 @@ python scripts/prototypes/coupang_patchright_full_fruit.py \
 바뀌어 파일에는 고유 상품 17개가 늘어난 총 61개가 남았다. 이전 44개 누락과 전체
 중복은 0개이며 가격과 필수 상품 열도 모두 채워졌다. 홈·목록 HTTP 200, 판매자 API
 0회, 재시도·차단 없음이었다. 다음 단계는 연속 3페이지 검증이다.
+
+연속 3페이지 검증은 다음 명령을 사용한다. Chrome과 홈은 한 번만 열고 현재 위치의
+페이지 3개를 차례로 처리한다. 페이지 사이에는 15초를 기다리고, 각 페이지가 끝날
+때마다 상품과 상태를 저장한다.
+
+```bash
+python scripts/prototypes/coupang_patchright_full_fruit.py \
+  --pages 3 \
+  --output-dir ~/Desktop/PatchrightFruit
+```

@@ -22,7 +22,7 @@ from app.core.coupang.patchright_canary import (
     record_block,
 )
 from app.core.coupang.patchright_fruit import FRUIT_CATEGORIES
-from app.core.coupang.patchright_sample import _checkpoint, _navigate
+from app.core.coupang.patchright_sample import _checkpoint, _navigate, _wait
 from app.core.coupang.search_parser import parse_extracted
 from app.models.coupang_records import RECORD_FIELDS
 
@@ -62,6 +62,7 @@ SUMMARY_FILENAME = "fruit_collection_summary.json"
 MAX_LISTING_ITEMS = 60
 MAX_CATEGORY_PAGES = 50
 EMPTY_PAGE_TOLERANCE = 2
+PAGE_DELAY_MS = 15_000
 
 
 def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
@@ -412,6 +413,53 @@ def run_listing_batch(
     """현재 위치에서 상품 목록만 한 묶음 저장한다. 판매자 API는 호출하지 않는다."""
     if not 1 <= limit <= MAX_LISTING_ITEMS:
         raise ValueError(f"limit는 1~{MAX_LISTING_ITEMS}여야 합니다.")
+    return _run_listing(
+        output_dir=output_dir,
+        per_page_limit=limit,
+        page_attempt_limit=1,
+        completed_event="listing_batch_completed",
+        control=control,
+        on_event=on_event,
+        state_root=state_root,
+        browser_scope_factory=browser_scope_factory,
+    )
+
+
+def run_listing_pages(
+    *,
+    output_dir: Path,
+    page_count: int = 3,
+    control: Control | None = None,
+    on_event: Callable[[dict], None] | None = None,
+    state_root: Path | None = None,
+    browser_scope_factory: Callable | None = None,
+) -> dict:
+    """한 Chrome에서 현재 위치부터 목록 페이지를 최대 page_count개 처리한다."""
+    if not 1 <= page_count <= 10:
+        raise ValueError("page_count는 1~10이어야 합니다.")
+    return _run_listing(
+        output_dir=output_dir,
+        per_page_limit=MAX_LISTING_ITEMS,
+        page_attempt_limit=page_count,
+        completed_event="listing_pages_completed",
+        control=control,
+        on_event=on_event,
+        state_root=state_root,
+        browser_scope_factory=browser_scope_factory,
+    )
+
+
+def _run_listing(
+    *,
+    output_dir: Path,
+    per_page_limit: int,
+    page_attempt_limit: int,
+    completed_event: str,
+    control: Control | None,
+    on_event: Callable[[dict], None] | None,
+    state_root: Path | None,
+    browser_scope_factory: Callable | None,
+) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     state = _read_state(output_dir)
     if state["status"] != "running" or state["phase"] != "products":
@@ -423,7 +471,7 @@ def run_listing_batch(
     category_id, category_name = FRUIT_CATEGORIES[state["category_index"]]
     page_number = state["page_number"]
     offset = state["next_offset"]
-    effective_limit = min(limit, MAX_LISTING_ITEMS - offset)
+    effective_limit = min(per_page_limit, MAX_LISTING_ITEMS - offset)
     result = {
         "mode": "full_fruit_products",
         "browser": "Patchright + installed Google Chrome",
@@ -434,12 +482,13 @@ def run_listing_batch(
         "limit": effective_limit,
         "document_navigations": 0,
         "api_calls": 0,
+        "requested_page_count": page_attempt_limit,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     if effective_limit == 0:
         _advance_listing_state(state, selected_count=0)
         result["state_path"] = _save_state(output_dir, state)
-        result["event"] = "listing_batch_completed"
+        result["event"] = completed_event
         return result
 
     allowed, reason = claim_live_attempt(state_root)
@@ -456,70 +505,129 @@ def run_listing_batch(
             page = context.pages[0] if context.pages else context.new_page()
             if on_event:
                 on_event({**result, "event": "browser_started"})
-            pages = (
-                ("home", HOME_URL, 1_500),
-                (
-                    "category",
-                    CATEGORY_URL.format(category_id=category_id).replace(
-                        "?page=1", f"?page={page_number}"
-                    ),
-                    2_000,
-                ),
+            blocked, status, reference = _navigate(
+                page, HOME_URL, 1_500, control, result
             )
-            for name, url, settle_ms in pages:
+            if blocked:
+                record_block(state_root, reference=reference)
+                result.update(
+                    event="blocked",
+                    blocked_at="home",
+                    reference=reference,
+                    home_status=status,
+                )
+                return result
+            result["home_status"] = status
+
+            page_results: list[dict] = []
+            total_product_count = 0
+            total_products_added = 0
+            for attempt in range(page_attempt_limit):
+                if state["status"] != "running" or state["phase"] != "products":
+                    break
+                category_id, category_name = FRUIT_CATEGORIES[
+                    state["category_index"]
+                ]
+                page_number = state["page_number"]
+                offset = state["next_offset"]
+                effective_limit = min(
+                    per_page_limit, MAX_LISTING_ITEMS - offset
+                )
+                category_url = CATEGORY_URL.format(
+                    category_id=category_id
+                ).replace("?page=1", f"?page={page_number}")
                 _checkpoint(control)
                 blocked, status, reference = _navigate(
-                    page, url, settle_ms, control, result
+                    page, category_url, 2_000, control, result
                 )
                 if blocked:
                     record_block(state_root, reference=reference)
                     result.update(
                         event="blocked",
-                        blocked_at=name,
+                        blocked_at="category",
+                        blocked_category_id=category_id,
+                        blocked_page_number=page_number,
                         reference=reference,
-                        **{f"{name}_status": status},
+                        category_status=status,
+                        completed_page_attempts=len(page_results),
+                        page_results=page_results,
                     )
                     return result
-                result[f"{name}_status"] = status
+                result["category_status"] = status
 
-            scan_limit = offset + effective_limit
-            rows = page.evaluate(EXTRACT_PRODUCTS_JS, scan_limit)
-            _checkpoint(control)
-            parsed = [
-                product for product in parse_extracted(rows) if product.vendor_item_id
-            ]
-            selected = parsed[offset:scan_limit]
-            collected_at = time.strftime("%Y-%m-%d %H:%M:%S")
-            product_rows = [
-                _product_row(
-                    product,
+                scan_limit = offset + effective_limit
+                rows = page.evaluate(EXTRACT_PRODUCTS_JS, scan_limit)
+                _checkpoint(control)
+                parsed = [
+                    product
+                    for product in parse_extracted(rows)
+                    if product.vendor_item_id
+                ]
+                selected = parsed[offset:scan_limit]
+                collected_at = time.strftime("%Y-%m-%d %H:%M:%S")
+                product_rows = [
+                    _product_row(
+                        product,
+                        category_id=category_id,
+                        category_name=category_name,
+                        page_number=page_number,
+                        collected_at=collected_at,
+                    )
+                    for product in parsed[: offset + len(selected)]
+                ]
+                unique_total, added_count = store.merge_products(product_rows)
+                state["raw_products_seen"] += len(selected)
+                state["unique_products"] = unique_total
+                _advance_listing_state(state, selected_count=len(selected))
+                if selected and len(selected) < effective_limit:
+                    _advance_listing_state(state, selected_count=0)
+                state_path = _save_state(output_dir, state)
+                store.update_summary(
+                    raw_products_seen=state["raw_products_seen"],
+                    unique_products=unique_total,
+                )
+                page_result = {
+                    "category_id": category_id,
+                    "category_name": category_name,
+                    "page_number": page_number,
+                    "offset": offset,
+                    "limit": effective_limit,
+                    "product_count": len(selected),
+                    "products_added": added_count,
+                    "scan_limit": scan_limit,
+                    "status": status,
+                }
+                page_results.append(page_result)
+                total_product_count += len(selected)
+                total_products_added += added_count
+                result.update(
                     category_id=category_id,
                     category_name=category_name,
                     page_number=page_number,
-                    collected_at=collected_at,
+                    offset=offset,
+                    limit=effective_limit,
+                    product_count=len(selected),
+                    products_added=added_count,
+                    unique_products=unique_total,
+                    scan_limit=scan_limit,
+                    next_offset=state["next_offset"],
+                    next_page_number=state["page_number"],
+                    job_status=state["status"],
+                    state_path=state_path,
+                    products_path=str(store.products_path),
                 )
-                for product in parsed[: offset + len(selected)]
-            ]
-            unique_total, added_count = store.merge_products(product_rows)
-            state["raw_products_seen"] += len(selected)
-            state["unique_products"] = unique_total
-            _advance_listing_state(state, selected_count=len(selected))
-            state_path = _save_state(output_dir, state)
-            store.update_summary(
-                raw_products_seen=state["raw_products_seen"],
-                unique_products=unique_total,
-            )
+                if on_event:
+                    on_event({**result, "event": "listing_page_saved"})
+                if attempt + 1 < page_attempt_limit:
+                    _wait(page, PAGE_DELAY_MS, control)
+                    _checkpoint(control)
+
             result.update(
-                event="listing_batch_completed",
-                product_count=len(selected),
-                products_added=added_count,
-                unique_products=unique_total,
-                scan_limit=scan_limit,
-                next_offset=state["next_offset"],
-                next_page_number=state["page_number"],
-                job_status=state["status"],
-                state_path=state_path,
-                products_path=str(store.products_path),
+                event=completed_event,
+                completed_page_attempts=len(page_results),
+                total_product_count=total_product_count,
+                total_products_added=total_products_added,
+                page_results=page_results,
             )
             return result
     except CancelledError:

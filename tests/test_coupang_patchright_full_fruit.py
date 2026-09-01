@@ -19,6 +19,7 @@ from app.core.coupang.patchright_full_fruit import (
     _advance_listing_state,
     _new_state,
     run_listing_batch,
+    run_listing_pages,
 )
 
 
@@ -27,11 +28,14 @@ class _Response:
 
 
 class _Page:
-    def __init__(self, *, product_count=60, blocked_at="") -> None:
+    def __init__(
+        self, *, product_count=60, blocked_at="", blocked_page_number=0
+    ) -> None:
         self.url = "about:blank"
         self.urls: list[str] = []
         self.product_count = product_count
         self.blocked_at = blocked_at
+        self.blocked_page_number = blocked_page_number
         self.extraction_limits: list[int] = []
 
     def goto(self, url, **_kwargs):
@@ -45,6 +49,11 @@ class _Page:
     def content(self):
         if self.blocked_at == "category" and "/np/categories/" in self.url:
             return "Access Denied Reference #18.full"
+        if (
+            self.blocked_page_number
+            and f"?page={self.blocked_page_number}" in self.url
+        ):
+            return "Access Denied Reference #18.full-page"
         return "<html><body>normal page content</body></html>"
 
     def evaluate(self, script, argument=None):
@@ -52,10 +61,15 @@ class _Page:
             raise AssertionError("unexpected script")
         limit = int(argument)
         self.extraction_limits.append(limit)
+        page_number = 1
+        if "?page=" in self.url:
+            page_number = int(self.url.rsplit("?page=", 1)[1])
+        page_base = (page_number - 1) * 100
         return [
             {
-                "href": f"/vp/products/{1000 + index}?itemId={2000 + index}"
-                f"&vendorItemId={3000 + index}",
+                "href": f"/vp/products/{1000 + page_base + index}"
+                f"?itemId={2000 + page_base + index}"
+                f"&vendorItemId={3000 + page_base + index}",
                 "title": f"상품 {index}",
                 "priceText": f"{index},000원",
             }
@@ -188,6 +202,69 @@ class PatchrightFullFruitTest(unittest.TestCase):
             "incomplete_limit_reached",
         )
         self.assertEqual(state["completed_categories"], [])
+
+    def test_three_pages_share_one_browser_and_checkpoint_each_page(self):
+        page = _Page()
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            state = _new_state(output_dir)
+            state["page_number"] = 2
+            (output_dir / STATE_FILENAME).write_text(
+                json.dumps(state), encoding="utf-8"
+            )
+            result = run_listing_pages(
+                output_dir=output_dir,
+                page_count=3,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            saved_state = json.loads(
+                (output_dir / STATE_FILENAME).read_text("utf-8")
+            )
+
+        self.assertEqual(result["event"], "listing_pages_completed")
+        self.assertEqual(result["completed_page_attempts"], 3)
+        self.assertEqual(result["total_product_count"], 180)
+        self.assertEqual(result["document_navigations"], 4)
+        self.assertEqual([item["page_number"] for item in result["page_results"]], [2, 3, 4])
+        self.assertEqual(saved_state["page_number"], 5)
+        self.assertEqual(saved_state["next_offset"], 0)
+        self.assertTrue(context.closed)
+
+    def test_block_on_second_page_preserves_first_page_checkpoint(self):
+        page = _Page(blocked_page_number=3)
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            state = _new_state(output_dir)
+            state["page_number"] = 2
+            (output_dir / STATE_FILENAME).write_text(
+                json.dumps(state), encoding="utf-8"
+            )
+            result = run_listing_pages(
+                output_dir=output_dir,
+                page_count=3,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            saved_state = json.loads(
+                (output_dir / STATE_FILENAME).read_text("utf-8")
+            )
+            with (output_dir / PRODUCTS_FILENAME).open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as handle:
+                products = list(csv.DictReader(handle))
+
+        self.assertEqual(result["event"], "blocked")
+        self.assertEqual(result["completed_page_attempts"], 1)
+        self.assertEqual(saved_state["page_number"], 3)
+        self.assertEqual(len(products), 60)
+        self.assertTrue(context.closed)
 
     def test_category_block_latches_guard_without_advancing_state(self):
         page = _Page(blocked_at="category")
