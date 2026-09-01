@@ -11,11 +11,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.coupang.patchright_full_fruit import run_listing_batch, run_listing_pages
+from app.core.coupang.patchright_full_fruit import (
+    run_listing_batch,
+    run_listing_category,
+    run_listing_pages,
+)
 
 EXIT_CODES = {
     "listing_batch_completed": 0,
     "listing_pages_completed": 0,
+    "listing_category_completed": 0,
     "blocked": 20,
     "guard_refused": 21,
     "cancelled": 22,
@@ -31,11 +36,17 @@ def _print_state(state: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Patchright 과일 상품 목록 단계")
     parser.add_argument("--limit", type=int, default=24)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--pages",
         type=int,
         default=1,
         help="한 Chrome에서 처리할 페이지 수(1~10)",
+    )
+    mode.add_argument(
+        "--category",
+        action="store_true",
+        help="한 Chrome에서 현재 하위 카테고리 종료 조건까지 처리",
     )
     parser.add_argument(
         "--output-dir",
@@ -44,7 +55,12 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        if args.pages == 1:
+        if args.category:
+            result = run_listing_category(
+                output_dir=args.output_dir,
+                on_event=_print_state,
+            )
+        elif args.pages == 1:
             result = run_listing_batch(
                 output_dir=args.output_dir,
                 limit=args.limit,

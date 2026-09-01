@@ -195,3 +195,14 @@ python scripts/prototypes/coupang_patchright_full_fruit.py \
 신호도 0회였고 상태는 15페이지 시작으로 이동했다. 다음 단계는 사과/배 카테고리의
 종료 조건까지 확인하는 검증이다. 현재 안전장치상 2026-09-01 19:40:52 KST 이후에만
 다음 실접속을 실행한다.
+
+현재 하위 카테고리 하나만 종료 조건까지 이어서 확인하는 명령은 다음과 같다.
+
+```bash
+python scripts/prototypes/coupang_patchright_full_fruit.py \
+  --category \
+  --output-dir ~/Desktop/PatchrightFruit
+```
+
+빈 페이지가 2번 연속이면 다음 하위 카테고리 위치를 저장하고 이번 실행은 끝난다.
+50페이지에도 상품이 계속 나오면 완료가 아니라 `incomplete_limit_reached`로 멈춘다.

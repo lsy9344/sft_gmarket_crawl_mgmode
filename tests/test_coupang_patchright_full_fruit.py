@@ -19,6 +19,7 @@ from app.core.coupang.patchright_full_fruit import (
     _advance_listing_state,
     _new_state,
     run_listing_batch,
+    run_listing_category,
     run_listing_pages,
 )
 
@@ -29,11 +30,17 @@ class _Response:
 
 class _Page:
     def __init__(
-        self, *, product_count=60, blocked_at="", blocked_page_number=0
+        self,
+        *,
+        product_count=60,
+        product_counts_by_page=None,
+        blocked_at="",
+        blocked_page_number=0,
     ) -> None:
         self.url = "about:blank"
         self.urls: list[str] = []
         self.product_count = product_count
+        self.product_counts_by_page = product_counts_by_page or {}
         self.blocked_at = blocked_at
         self.blocked_page_number = blocked_page_number
         self.extraction_limits: list[int] = []
@@ -64,6 +71,9 @@ class _Page:
         page_number = 1
         if "?page=" in self.url:
             page_number = int(self.url.rsplit("?page=", 1)[1])
+        product_count = self.product_counts_by_page.get(
+            page_number, self.product_count
+        )
         page_base = (page_number - 1) * 100
         return [
             {
@@ -73,7 +83,7 @@ class _Page:
                 "title": f"상품 {index}",
                 "priceText": f"{index},000원",
             }
-            for index in range(1, min(limit, self.product_count) + 1)
+            for index in range(1, min(limit, product_count) + 1)
         ]
 
 
@@ -264,6 +274,62 @@ class PatchrightFullFruitTest(unittest.TestCase):
         self.assertEqual(result["completed_page_attempts"], 1)
         self.assertEqual(saved_state["page_number"], 3)
         self.assertEqual(len(products), 60)
+        self.assertTrue(context.closed)
+
+    def test_category_run_stops_after_two_empty_pages(self):
+        page = _Page(product_counts_by_page={2: 0, 3: 0})
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            state = _new_state(output_dir)
+            state["page_number"] = 2
+            (output_dir / STATE_FILENAME).write_text(
+                json.dumps(state), encoding="utf-8"
+            )
+            result = run_listing_category(
+                output_dir=output_dir,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            saved_state = json.loads(
+                (output_dir / STATE_FILENAME).read_text("utf-8")
+            )
+
+        self.assertEqual(result["event"], "listing_category_completed")
+        self.assertEqual(result["completed_page_attempts"], 2)
+        self.assertEqual(saved_state["completed_categories"], ["194284"])
+        self.assertEqual(saved_state["category_index"], 1)
+        self.assertEqual(saved_state["page_number"], 1)
+        self.assertEqual(len(page.urls), 3)
+        self.assertTrue(context.closed)
+
+    def test_category_run_reports_page_limit_as_incomplete(self):
+        page = _Page()
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            state = _new_state(output_dir)
+            state["page_number"] = MAX_CATEGORY_PAGES
+            (output_dir / STATE_FILENAME).write_text(
+                json.dumps(state), encoding="utf-8"
+            )
+            result = run_listing_category(
+                output_dir=output_dir,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            saved_state = json.loads(
+                (output_dir / STATE_FILENAME).read_text("utf-8")
+            )
+
+        self.assertEqual(result["event"], "incomplete_limit_reached")
+        self.assertEqual(result["completed_page_attempts"], 1)
+        self.assertEqual(saved_state["status"], "incomplete_limit_reached")
+        self.assertEqual(saved_state["completed_categories"], [])
         self.assertTrue(context.closed)
 
     def test_category_block_latches_guard_without_advancing_state(self):

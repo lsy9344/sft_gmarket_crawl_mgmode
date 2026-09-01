@@ -418,6 +418,7 @@ def run_listing_batch(
         per_page_limit=limit,
         page_attempt_limit=1,
         completed_event="listing_batch_completed",
+        stop_after_category=False,
         control=control,
         on_event=on_event,
         state_root=state_root,
@@ -442,6 +443,29 @@ def run_listing_pages(
         per_page_limit=MAX_LISTING_ITEMS,
         page_attempt_limit=page_count,
         completed_event="listing_pages_completed",
+        stop_after_category=False,
+        control=control,
+        on_event=on_event,
+        state_root=state_root,
+        browser_scope_factory=browser_scope_factory,
+    )
+
+
+def run_listing_category(
+    *,
+    output_dir: Path,
+    control: Control | None = None,
+    on_event: Callable[[dict], None] | None = None,
+    state_root: Path | None = None,
+    browser_scope_factory: Callable | None = None,
+) -> dict:
+    """한 Chrome에서 현재 하위 카테고리의 종료 조건까지 처리한다."""
+    return _run_listing(
+        output_dir=output_dir,
+        per_page_limit=MAX_LISTING_ITEMS,
+        page_attempt_limit=MAX_CATEGORY_PAGES + EMPTY_PAGE_TOLERANCE,
+        completed_event="listing_category_completed",
+        stop_after_category=True,
         control=control,
         on_event=on_event,
         state_root=state_root,
@@ -455,6 +479,7 @@ def _run_listing(
     per_page_limit: int,
     page_attempt_limit: int,
     completed_event: str,
+    stop_after_category: bool,
     control: Control | None,
     on_event: Callable[[dict], None] | None,
     state_root: Path | None,
@@ -464,6 +489,7 @@ def _run_listing(
     state = _read_state(output_dir)
     if state["status"] != "running" or state["phase"] != "products":
         return {"event": state["status"], "phase": state["phase"]}
+    starting_category_index = state["category_index"]
     store = FullFruitStore(output_dir)
     store.ensure_files()
     store.validate()
@@ -523,6 +549,11 @@ def _run_listing(
             total_product_count = 0
             total_products_added = 0
             for attempt in range(page_attempt_limit):
+                if (
+                    stop_after_category
+                    and state["category_index"] != starting_category_index
+                ):
+                    break
                 if state["status"] != "running" or state["phase"] != "products":
                     break
                 category_id, category_name = FRUIT_CATEGORIES[
@@ -618,12 +649,25 @@ def _run_listing(
                 )
                 if on_event:
                     on_event({**result, "event": "listing_page_saved"})
-                if attempt + 1 < page_attempt_limit:
+                should_continue = (
+                    attempt + 1 < page_attempt_limit
+                    and state["status"] == "running"
+                    and state["phase"] == "products"
+                    and not (
+                        stop_after_category
+                        and state["category_index"] != starting_category_index
+                    )
+                )
+                if should_continue:
                     _wait(page, PAGE_DELAY_MS, control)
                     _checkpoint(control)
 
             result.update(
-                event=completed_event,
+                event=(
+                    state["status"]
+                    if state["status"] != "running"
+                    else completed_event
+                ),
                 completed_page_attempts=len(page_results),
                 total_product_count=total_product_count,
                 total_products_added=total_products_added,
