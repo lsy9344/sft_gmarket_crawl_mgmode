@@ -21,6 +21,7 @@ MIN_LIVE_INTERVAL_SECONDS = 3 * 60 * 60
 MAX_LIVE_SESSIONS_PER_DAY = 3
 MAX_DAILY_ITEMS = 1_500
 MAX_SESSION_ITEMS = 600
+RECOVERY_RAMP_LIMITS = (8, 24, 600)
 BLOCK_RECOVERY_INTERVAL_SECONDS = 60 * 60
 BLOCK_STATUSES = {403, 418, 429}
 BLOCK_MARKERS = (
@@ -148,6 +149,7 @@ def claim_live_attempt(
     daily_date = guard.get("daily_date")
     daily_sessions = guard.get("daily_sessions", 0)
     daily_items_reserved = guard.get("daily_items_reserved", 0)
+    recovery_ramp_limit = guard.get("recovery_ramp_limit")
     if guard and (
         not isinstance(guard.get("blocked"), bool)
         or not isinstance(last_attempt, (int, float))
@@ -161,8 +163,20 @@ def claim_live_attempt(
         or not isinstance(daily_items_reserved, int)
         or daily_sessions < 0
         or daily_items_reserved < 0
+        or (
+            recovery_ramp_limit is not None
+            and recovery_ramp_limit not in RECOVERY_RAMP_LIMITS
+        )
     ):
         return False, "안전 기록 형식이 잘못되어 실접속을 중단합니다."
+    if (
+        isinstance(recovery_ramp_limit, int)
+        and planned_items > recovery_ramp_limit
+    ):
+        return (
+            False,
+            f"복구 확대 단계는 최대 {recovery_ramp_limit}개까지만 허용합니다.",
+        )
     if isinstance(last_attempt, (int, float)):
         remaining = MIN_LIVE_INTERVAL_SECONDS - (current - last_attempt)
         if remaining > 0:
@@ -192,6 +206,8 @@ def claim_live_attempt(
         }
         if history is not None:
             next_guard["block_history"] = history
+        if recovery_ramp_limit is not None:
+            next_guard["recovery_ramp_limit"] = recovery_ramp_limit
         _write_guard(next_guard, root)
     except CanaryGuardError as error:
         return False, str(error)
@@ -283,6 +299,76 @@ def record_recovery_hold(
         recovery_hold_ts=current,
     )
     _write_guard(guard, root)
+
+
+def authorize_recovery_resume(
+    root: Path | None = None,
+    *,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """복구 확인 다음 날부터 8→24→600개 확대 검증을 시작한다."""
+    current = time.time() if now is None else now
+    try:
+        guard = _read_guard(root)
+    except CanaryGuardError as error:
+        return False, str(error)
+    if guard.get("blocked"):
+        return False, "차단 기록이 남아 있어 복구 확대를 시작하지 않습니다."
+    if not guard.get("recovery_hold"):
+        return False, "복구 확인 뒤 대기 기록이 없어 확대를 시작하지 않습니다."
+    hold_ts = guard.get("recovery_hold_ts")
+    last_attempt_ts = guard.get("last_attempt_ts")
+    if not isinstance(hold_ts, (int, float)) or not isinstance(
+        last_attempt_ts, (int, float)
+    ):
+        return False, "복구 대기 시각 형식이 잘못되어 잠금을 유지합니다."
+    hold_date = time.strftime("%Y-%m-%d", time.localtime(hold_ts))
+    current_date = time.strftime("%Y-%m-%d", time.localtime(current))
+    if current_date <= hold_date:
+        return False, "복구 확인 다음 날이 되기 전에는 확대하지 않습니다."
+    remaining = MIN_LIVE_INTERVAL_SECONDS - (current - last_attempt_ts)
+    if remaining > 0:
+        minutes = int(remaining // 60) + 1
+        return False, f"복구 확대 시작까지 {minutes}분 남았습니다."
+    guard.update(
+        recovery_hold=False,
+        recovery_ramp_limit=RECOVERY_RAMP_LIMITS[0],
+        recovery_resume_at=time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(current)
+        ),
+        recovery_resume_ts=current,
+    )
+    _write_guard(guard, root)
+    return True, ""
+
+
+def advance_recovery_ramp(
+    completed_limit: int,
+    root: Path | None = None,
+    *,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """성공한 복구 검증을 기록하고 다음 허용량으로 한 단계만 올린다."""
+    current = time.time() if now is None else now
+    try:
+        guard = _read_guard(root)
+    except CanaryGuardError as error:
+        return False, str(error)
+    ramp_limit = guard.get("recovery_ramp_limit")
+    if ramp_limit != completed_limit or ramp_limit not in RECOVERY_RAMP_LIMITS:
+        return False, "현재 복구 확대 단계와 완료한 단계가 맞지 않습니다."
+    index = RECOVERY_RAMP_LIMITS.index(ramp_limit)
+    guard["recovery_ramp_completed_at"] = time.strftime(
+        "%Y-%m-%d %H:%M:%S", time.localtime(current)
+    )
+    guard["recovery_ramp_completed_limit"] = ramp_limit
+    if index + 1 < len(RECOVERY_RAMP_LIMITS):
+        guard["recovery_ramp_limit"] = RECOVERY_RAMP_LIMITS[index + 1]
+    else:
+        guard.pop("recovery_ramp_limit", None)
+        guard["recovery_ramp_completed"] = True
+    _write_guard(guard, root)
+    return True, ""
 
 
 @contextmanager

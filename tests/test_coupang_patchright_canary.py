@@ -13,7 +13,9 @@ from unittest.mock import patch
 from app.core.coupang.patchright_canary import (
     CATEGORY_URL,
     HOME_URL,
+    advance_recovery_ramp,
     authorize_block_recovery,
+    authorize_recovery_resume,
     claim_live_attempt,
     record_block,
     record_recovery_hold,
@@ -203,6 +205,60 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertTrue(next_day_allowed)
         self.assertEqual(guard["daily_sessions"], 1)
         self.assertEqual(guard["daily_items_reserved"], 600)
+
+    def test_recovery_resume_requires_next_day_and_enforces_ramp(self):
+        attempt = time.mktime((2026, 9, 1, 21, 53, 51, 0, 0, -1))
+        hold = time.mktime((2026, 9, 1, 21, 56, 4, 0, 0, -1))
+        next_day = time.mktime((2026, 9, 2, 0, 55, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, _reason = claim_live_attempt(root, now=attempt)
+            record_recovery_hold(root, now=hold)
+            same_day, same_day_reason = authorize_recovery_resume(
+                root, now=hold + 60
+            )
+            resumed, _reason = authorize_recovery_resume(root, now=next_day)
+            too_large, too_large_reason = claim_live_attempt(
+                root, now=next_day, planned_items=24
+            )
+            allowed, _reason = claim_live_attempt(
+                root, now=next_day, planned_items=8
+            )
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertTrue(first)
+        self.assertFalse(same_day)
+        self.assertIn("다음 날", same_day_reason)
+        self.assertTrue(resumed)
+        self.assertFalse(too_large)
+        self.assertIn("최대 8개", too_large_reason)
+        self.assertTrue(allowed)
+        self.assertEqual(guard["recovery_ramp_limit"], 8)
+
+    def test_recovery_ramp_advances_only_in_order(self):
+        attempt = time.mktime((2026, 9, 1, 21, 53, 51, 0, 0, -1))
+        hold = time.mktime((2026, 9, 1, 21, 56, 4, 0, 0, -1))
+        next_day = time.mktime((2026, 9, 2, 0, 55, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            claim_live_attempt(root, now=attempt)
+            record_recovery_hold(root, now=hold)
+            authorize_recovery_resume(root, now=next_day)
+            wrong, wrong_reason = advance_recovery_ramp(24, root, now=next_day)
+            first, _reason = advance_recovery_ramp(8, root, now=next_day)
+            second, _reason = advance_recovery_ramp(
+                24, root, now=next_day + (3 * 60 * 60)
+            )
+            third, _reason = advance_recovery_ramp(
+                600, root, now=next_day + (6 * 60 * 60)
+            )
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertFalse(wrong)
+        self.assertIn("맞지 않습니다", wrong_reason)
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertTrue(third)
+        self.assertNotIn("recovery_ramp_limit", guard)
+        self.assertTrue(guard["recovery_ramp_completed"])
 
     def test_access_denied_stops_at_home_and_latches_guard(self):
         page = _Page(blocked=True)
