@@ -214,6 +214,30 @@ def claim_live_attempt(
     return True, ""
 
 
+def settle_live_attempt(
+    planned_items: int,
+    actual_items: int,
+    root: Path | None = None,
+) -> tuple[bool, str]:
+    """정상 종료한 세션의 미사용 예약량만 일일 한도에 돌려놓는다."""
+    if (
+        not isinstance(planned_items, int)
+        or not isinstance(actual_items, int)
+        or not 0 <= actual_items <= planned_items <= MAX_SESSION_ITEMS
+    ):
+        return False, "세션 예약량과 실제 처리량이 올바르지 않습니다."
+    try:
+        guard = _read_guard(root)
+    except CanaryGuardError as error:
+        return False, str(error)
+    reserved = guard.get("daily_items_reserved")
+    if not isinstance(reserved, int) or reserved < planned_items:
+        return False, "일일 예약 상품 기록이 실제 세션과 맞지 않습니다."
+    guard["daily_items_reserved"] = reserved - (planned_items - actual_items)
+    _write_guard(guard, root)
+    return True, ""
+
+
 def inspect_block(page, response=None) -> tuple[bool, int | None, str]:
     status = response.status if response else None
     html = page.content()

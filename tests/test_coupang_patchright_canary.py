@@ -20,6 +20,7 @@ from app.core.coupang.patchright_canary import (
     record_block,
     record_recovery_hold,
     run_canary,
+    settle_live_attempt,
 )
 
 
@@ -205,6 +206,19 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertTrue(next_day_allowed)
         self.assertEqual(guard["daily_sessions"], 1)
         self.assertEqual(guard["daily_items_reserved"], 600)
+
+    def test_clean_session_returns_only_unused_daily_reservation(self):
+        base = time.mktime((2026, 9, 3, 0, 10, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            allowed, _reason = claim_live_attempt(
+                root, now=base, planned_items=600
+            )
+            settled, _reason = settle_live_attempt(600, 180, root)
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertTrue(allowed)
+        self.assertTrue(settled)
+        self.assertEqual(guard["daily_items_reserved"], 180)
 
     def test_recovery_resume_requires_next_day_and_enforces_ramp(self):
         attempt = time.mktime((2026, 9, 1, 21, 53, 51, 0, 0, -1))

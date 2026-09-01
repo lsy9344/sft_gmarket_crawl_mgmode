@@ -20,6 +20,7 @@ from app.core.coupang.patchright_canary import (
     patchright_browser,
     profile_dir,
     record_block,
+    settle_live_attempt,
 )
 from app.core.coupang.patchright_fruit import FRUIT_CATEGORIES
 from app.core.coupang.patchright_sample import _checkpoint, _navigate, _wait
@@ -695,6 +696,11 @@ def _run_listing(
                 total_products_added=total_products_added,
                 page_results=page_results,
             )
+            settled, reason = settle_live_attempt(
+                planned_items, total_product_count, state_root
+            )
+            if not settled:
+                result.update(event="failed", reason=reason)
             return result
     except CancelledError:
         result["event"] = "cancelled"

@@ -328,6 +328,24 @@ class PatchrightFullFruitTest(unittest.TestCase):
         self.assertEqual(saved_state["category_index"], 0)
         self.assertTrue(context.closed)
 
+    def test_clean_partial_page_returns_unused_daily_reservation(self):
+        page = _Page(product_count=20)
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = run_listing_pages(
+                output_dir=root / "out",
+                page_count=1,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            guard = json.loads(
+                (root / "guard" / "canary_guard.json").read_text("utf-8")
+            )
+        self.assertEqual(result["event"], "listing_pages_completed")
+        self.assertEqual(result["total_product_count"], 20)
+        self.assertEqual(guard["daily_items_reserved"], 20)
+
     def test_page_run_does_not_cross_into_next_category(self):
         page = _Page(product_counts_by_page={2: 0, 3: 0})
         context = _Context(page)
