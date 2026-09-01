@@ -112,6 +112,7 @@ class PatchrightFullFruitTest(unittest.TestCase):
         self.assertEqual(result["document_navigations"], 2)
         self.assertEqual(page.extraction_limits, [44])
         self.assertEqual(len(products), 44)
+        self.assertEqual(products[0]["price"], "1000")
         self.assertEqual(state["next_offset"], 44)
         self.assertEqual(state["raw_products_seen"], 44)
         self.assertEqual(len(page.urls), 2)

@@ -44,10 +44,12 @@ EXTRACT_PRODUCTS_JS = r"""
     }
     if (!href || seen.has(key)) continue;
     seen.add(key);
+    const text = (a.innerText || a.getAttribute('aria-label') || '')
+      .replace(/\s+/g, ' ').trim().slice(0, 120);
     products.push({
       href,
-      title: (a.innerText || a.getAttribute('aria-label') || '')
-        .replace(/\s+/g, ' ').trim().slice(0, 120),
+      title: text,
+      priceText: text,
     });
     if (products.length >= limit) break;
   }
