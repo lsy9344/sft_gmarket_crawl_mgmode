@@ -178,26 +178,35 @@ def _progress_path(output_dir: Path, category_id: str) -> Path:
     return output_dir / f"patchright_progress_{category_id}.json"
 
 
-def _read_progress(output_dir: Path, category_id: str) -> tuple[int, list[str]]:
+def _read_progress(
+    output_dir: Path, category_id: str
+) -> tuple[int, list[str], list[str]]:
     path = _progress_path(output_dir, category_id)
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return 0, []
+        return 0, [], []
     except (OSError, ValueError) as error:
         raise ValueError(f"수집 위치 기록을 읽지 못했습니다: {error}") from error
     if not isinstance(value, dict) or value.get("category_id") != category_id:
         raise ValueError("수집 위치 기록 형식이 잘못됐습니다.")
     next_offset = value.get("next_offset")
-    seen = value.get("seen_vendor_item_ids")
+    seen_items = value.get("seen_vendor_item_ids")
+    seen_vendors = value.get("seen_vendor_ids", [])
     if (
         not isinstance(next_offset, int)
         or not 0 <= next_offset <= MAX_SAMPLE_SCAN_ITEMS
-        or not isinstance(seen, list)
-        or any(not isinstance(item, str) or not item for item in seen)
+        or not isinstance(seen_items, list)
+        or any(not isinstance(item, str) or not item for item in seen_items)
+        or not isinstance(seen_vendors, list)
+        or any(not isinstance(item, str) or not item for item in seen_vendors)
     ):
         raise ValueError("수집 위치 기록 형식이 잘못됐습니다.")
-    return next_offset, list(dict.fromkeys(seen))
+    return (
+        next_offset,
+        list(dict.fromkeys(seen_items)),
+        list(dict.fromkeys(seen_vendors)),
+    )
 
 
 def _save_progress(
@@ -205,6 +214,7 @@ def _save_progress(
     category_id: str,
     next_offset: int,
     seen_vendor_item_ids: list[str],
+    seen_vendor_ids: list[str],
 ) -> str:
     path = _progress_path(output_dir, category_id)
     temporary = path.with_name(f"{path.name}.tmp")
@@ -212,6 +222,7 @@ def _save_progress(
         "category_id": category_id,
         "next_offset": next_offset,
         "seen_vendor_item_ids": list(dict.fromkeys(seen_vendor_item_ids)),
+        "seen_vendor_ids": list(dict.fromkeys(seen_vendor_ids)),
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     try:
@@ -322,7 +333,9 @@ def run_sample(
         raise ValueError("category_id는 숫자여야 합니다.")
     if not 1 <= limit <= MAX_SAMPLE_ITEMS:
         raise ValueError(f"limit는 1~{MAX_SAMPLE_ITEMS}여야 합니다.")
-    saved_offset, seen_vendor_item_ids = _read_progress(output_dir, category_id)
+    saved_offset, seen_vendor_item_ids, seen_vendor_ids = _read_progress(
+        output_dir, category_id
+    )
     if offset is None:
         offset = saved_offset
     elif offset < saved_offset:
@@ -453,12 +466,64 @@ def run_sample(
             mapping_data, error = _decode_api(mapping_result, "판매자 연결")
             if mapping_data is None:
                 return _emit(state, "failed", on_event, error=error)
-            vendors = _parse_vendors(mapping_data, vendor_item_ids, limit)
-            if not vendors:
+            mapped_vendors = _parse_vendors(mapping_data, vendor_item_ids, limit)
+            if not mapped_vendors:
                 return _emit(
                     state, "failed", on_event, error="연결된 판매자를 찾지 못했습니다."
                 )
-            _emit(state, "vendors_mapped", on_event, vendor_count=len(vendors))
+            seen_vendor_set = set(seen_vendor_ids)
+            vendors = {
+                vendor_id: vendor
+                for vendor_id, vendor in mapped_vendors.items()
+                if vendor_id not in seen_vendor_set
+            }
+            _emit(
+                state,
+                "vendors_mapped",
+                on_event,
+                vendor_count=len(vendors),
+                mapped_vendor_count=len(mapped_vendors),
+                skipped_seen_vendor_count=len(mapped_vendors) - len(vendors),
+            )
+
+            selected_ids = [product.vendor_item_id for product in products]
+            if seen_vendor_item_ids:
+                updated_seen_items = [*seen_vendor_item_ids, *selected_ids]
+            else:
+                updated_seen_items = [
+                    product.vendor_item_id
+                    for product in parsed_products[: offset + len(products)]
+                ]
+            next_offset = offset + len(products)
+
+            if not vendors:
+                try:
+                    progress_path = _save_progress(
+                        output_dir,
+                        category_id,
+                        next_offset,
+                        updated_seen_items,
+                        seen_vendor_ids,
+                    )
+                except OSError as error:
+                    return _emit(
+                        state,
+                        "failed",
+                        on_event,
+                        error=f"수집 위치 기록에 실패했습니다: {error}",
+                    )
+                return _emit(
+                    state,
+                    "sample_completed",
+                    on_event,
+                    records=[],
+                    record_count=0,
+                    json_path="",
+                    csv_path="",
+                    next_offset=next_offset,
+                    progress_path=progress_path,
+                    reason="이번 묶음에는 새로운 판매자가 없습니다.",
+                )
 
             for vendor_id, vendor in list(vendors.items())[:limit]:
                 _checkpoint(control)
@@ -504,12 +569,34 @@ def run_sample(
                 _wait(page, 1_500, control)
                 _checkpoint(control)
 
+            updated_seen_vendors = [*seen_vendor_ids, *vendors]
             if not records:
+                try:
+                    progress_path = _save_progress(
+                        output_dir,
+                        category_id,
+                        next_offset,
+                        updated_seen_items,
+                        updated_seen_vendors,
+                    )
+                except OSError as error:
+                    return _emit(
+                        state,
+                        "failed",
+                        on_event,
+                        error=f"수집 위치 기록에 실패했습니다: {error}",
+                    )
                 return _emit(
                     state,
-                    "failed",
+                    "sample_completed",
                     on_event,
-                    error="공개 사업자정보를 가진 판매자를 찾지 못했습니다.",
+                    records=[],
+                    record_count=0,
+                    json_path="",
+                    csv_path="",
+                    next_offset=next_offset,
+                    progress_path=progress_path,
+                    reason="새 판매자의 공개 사업자정보가 없습니다.",
                 )
             _checkpoint(control)
             try:
@@ -525,21 +612,13 @@ def run_sample(
                     json_path=error.json_path,
                     csv_path="",
                 )
-            selected_ids = [product.vendor_item_id for product in products]
-            if seen_vendor_item_ids:
-                updated_seen = [*seen_vendor_item_ids, *selected_ids]
-            else:
-                updated_seen = [
-                    product.vendor_item_id
-                    for product in parsed_products[: offset + len(products)]
-                ]
-            next_offset = offset + len(products)
             try:
                 progress_path = _save_progress(
                     output_dir,
                     category_id,
                     next_offset,
-                    updated_seen,
+                    updated_seen_items,
+                    updated_seen_vendors,
                 )
             except OSError as error:
                 return _emit(

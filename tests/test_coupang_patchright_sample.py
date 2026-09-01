@@ -85,7 +85,8 @@ class _Page:
                     "body": "Access Denied Reference #18.mapping",
                 }
             products = []
-            for index, vendor_item_id in enumerate(argument, 1):
+            for vendor_item_id in argument:
+                index = int(vendor_item_id) - 3000
                 products.append(
                     {
                         "productId": f"P{index}",
@@ -274,10 +275,48 @@ class PatchrightSampleTest(unittest.TestCase):
             progress["seen_vendor_item_ids"],
             ["3001", "3002", "3003", "3004", "3005"],
         )
+        self.assertEqual(progress["seen_vendor_ids"], ["V4", "V5"])
         self.assertEqual(second["event"], "sample_completed")
         self.assertEqual(second_page.extraction_limits, [6])
         self.assertEqual(second_page.vendor_batches, [["3006"]])
         self.assertEqual(second["next_offset"], 6)
+
+    def test_seen_vendor_skips_business_request_and_advances_progress(self):
+        page = _Page()
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            progress_path = output_dir / "patchright_progress_176573.json"
+            progress_path.write_text(
+                json.dumps(
+                    {
+                        "category_id": "176573",
+                        "next_offset": 1,
+                        "seen_vendor_item_ids": ["3001"],
+                        "seen_vendor_ids": ["V2"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = run_sample(
+                category_id="176573",
+                output_dir=output_dir,
+                limit=1,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            progress = json.loads(progress_path.read_text("utf-8"))
+
+        self.assertEqual(result["event"], "sample_completed")
+        self.assertEqual(result["record_count"], 0)
+        self.assertEqual(result["api_calls"], 1)
+        self.assertEqual(result["skipped_seen_vendor_count"], 1)
+        self.assertEqual(page.review_ids, [])
+        self.assertEqual(result["next_offset"], 2)
+        self.assertEqual(progress["seen_vendor_item_ids"], ["3001", "3002"])
+        self.assertEqual(progress["seen_vendor_ids"], ["V2"])
 
     def test_rejects_offset_behind_saved_progress_before_browser(self):
         calls: list[tuple[Path, bool]] = []
