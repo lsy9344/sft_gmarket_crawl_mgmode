@@ -48,6 +48,25 @@ python scripts/prototypes/coupang_patchright_canary.py --live-category 176573
 
 이 시험은 장시간 수집, 로그인 계정, 전체 판매자정보 수집 성공 여부를 답하지 않는다.
 
+## 판매자 3건 표본 수집
+
+첫 관문이 성공한 뒤에는 별도 시험 명령으로 상품과 판매자를 최대 3건만 확인할 수
+있다. 페이지를 넘기거나 실패 요청을 재시도하지 않으며, 같은 30분 안전 기록을
+공유한다.
+
+```bash
+python scripts/prototypes/coupang_patchright_sample.py \
+  --category 176573 \
+  --limit 3 \
+  --output-dir ~/Desktop/PatchrightSample
+```
+
+이 시험은 홈, 목록 1페이지, 상점 세션 페이지를 각각 한 번 열고 API는 판매자 연결
+1회와 판매자정보 최대 3회만 호출한다. 결과는 JSON과 CSV로 저장한다. 차단 신호를
+발견하면 즉시 멈추고 이후 실접속을 잠근다. 페이지를 화면에 그리는 그림·스크립트
+같은 보조 파일은 일반 브라우저와 마찬가지로 함께 내려받는다. 아직 앱 버튼에는
+연결하지 않는다.
+
 ## 확인된 결과
 
 - 2026-09-01 11:25:08, Windows 실제 Chrome
