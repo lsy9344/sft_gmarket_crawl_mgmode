@@ -305,6 +305,29 @@ class PatchrightFullFruitTest(unittest.TestCase):
         self.assertEqual(len(page.urls), 3)
         self.assertTrue(context.closed)
 
+    def test_category_run_stops_at_ten_page_session_envelope(self):
+        page = _Page()
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            result = run_listing_category(
+                output_dir=output_dir,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            saved_state = json.loads(
+                (output_dir / STATE_FILENAME).read_text("utf-8")
+            )
+
+        self.assertEqual(result["event"], "listing_session_limit_reached")
+        self.assertEqual(result["completed_page_attempts"], 10)
+        self.assertEqual(result["total_product_count"], 600)
+        self.assertEqual(saved_state["status"], "running")
+        self.assertEqual(saved_state["page_number"], 11)
+        self.assertEqual(saved_state["category_index"], 0)
+        self.assertTrue(context.closed)
+
     def test_page_run_does_not_cross_into_next_category(self):
         page = _Page(product_counts_by_page={2: 0, 3: 0})
         context = _Context(page)

@@ -399,7 +399,7 @@ def run_sample(
             extracted_product_count=MAX_SAMPLE_SCAN_ITEMS,
             reason="이 페이지의 안전 확인 범위를 모두 처리했습니다.",
         )
-    allowed, reason = claim_live_attempt(state_root)
+    allowed, reason = claim_live_attempt(state_root, planned_items=limit)
     if not allowed:
         return _emit(state, "guard_refused", on_event, reason=reason)
 

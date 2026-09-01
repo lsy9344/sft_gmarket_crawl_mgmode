@@ -25,6 +25,7 @@ EXIT_CODES = {
     "listing_batch_completed": 0,
     "listing_pages_completed": 0,
     "listing_category_completed": 0,
+    "listing_session_limit_reached": 0,
     "blocked": 20,
     "guard_refused": 21,
     "cancelled": 22,
@@ -50,7 +51,7 @@ def main() -> int:
     mode.add_argument(
         "--category",
         action="store_true",
-        help="한 Chrome에서 현재 하위 카테고리 종료 조건까지 처리",
+        help="현재 하위 카테고리를 최대 10페이지까지 처리",
     )
     mode.add_argument(
         "--recovery-probe",

@@ -63,6 +63,8 @@ MAX_LISTING_ITEMS = 60
 MAX_CATEGORY_PAGES = 50
 EMPTY_PAGE_TOLERANCE = 2
 PAGE_DELAY_MS = 15_000
+MAX_SESSION_PAGES = 10
+MAX_SESSION_PRODUCTS = MAX_SESSION_PAGES * MAX_LISTING_ITEMS
 
 
 def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
@@ -418,6 +420,7 @@ def run_listing_batch(
         per_page_limit=limit,
         page_attempt_limit=1,
         completed_event="listing_batch_completed",
+        session_limit_event=None,
         stop_after_category=False,
         control=control,
         on_event=on_event,
@@ -436,13 +439,14 @@ def run_listing_pages(
     browser_scope_factory: Callable | None = None,
 ) -> dict:
     """한 Chrome에서 현재 위치부터 목록 페이지를 최대 page_count개 처리한다."""
-    if not 1 <= page_count <= 10:
-        raise ValueError("page_count는 1~10이어야 합니다.")
+    if not 1 <= page_count <= MAX_SESSION_PAGES:
+        raise ValueError(f"page_count는 1~{MAX_SESSION_PAGES}이어야 합니다.")
     return _run_listing(
         output_dir=output_dir,
         per_page_limit=MAX_LISTING_ITEMS,
         page_attempt_limit=page_count,
         completed_event="listing_pages_completed",
+        session_limit_event=None,
         stop_after_category=True,
         control=control,
         on_event=on_event,
@@ -459,12 +463,13 @@ def run_listing_category(
     state_root: Path | None = None,
     browser_scope_factory: Callable | None = None,
 ) -> dict:
-    """한 Chrome에서 현재 하위 카테고리의 종료 조건까지 처리한다."""
+    """현재 하위 카테고리를 세션 상한 안에서 처리한다."""
     return _run_listing(
         output_dir=output_dir,
         per_page_limit=MAX_LISTING_ITEMS,
-        page_attempt_limit=MAX_CATEGORY_PAGES + EMPTY_PAGE_TOLERANCE,
+        page_attempt_limit=MAX_SESSION_PAGES,
         completed_event="listing_category_completed",
+        session_limit_event="listing_session_limit_reached",
         stop_after_category=True,
         control=control,
         on_event=on_event,
@@ -479,6 +484,7 @@ def _run_listing(
     per_page_limit: int,
     page_attempt_limit: int,
     completed_event: str,
+    session_limit_event: str | None,
     stop_after_category: bool,
     control: Control | None,
     on_event: Callable[[dict], None] | None,
@@ -517,7 +523,14 @@ def _run_listing(
         result["event"] = completed_event
         return result
 
-    allowed, reason = claim_live_attempt(state_root)
+    planned_items = min(
+        effective_limit
+        + max(0, page_attempt_limit - 1) * per_page_limit,
+        MAX_SESSION_PRODUCTS,
+    )
+    allowed, reason = claim_live_attempt(
+        state_root, planned_items=planned_items
+    )
     if not allowed:
         result.update(event="guard_refused", reason=reason)
         return result
@@ -662,12 +675,21 @@ def _run_listing(
                     _wait(page, PAGE_DELAY_MS, control)
                     _checkpoint(control)
 
+            final_event = (
+                state["status"]
+                if state["status"] != "running"
+                else completed_event
+            )
+            if (
+                session_limit_event is not None
+                and state["status"] == "running"
+                and state["phase"] == "products"
+                and state["category_index"] == starting_category_index
+                and len(page_results) == page_attempt_limit
+            ):
+                final_event = session_limit_event
             result.update(
-                event=(
-                    state["status"]
-                    if state["status"] != "running"
-                    else completed_event
-                ),
+                event=final_event,
                 completed_page_attempts=len(page_results),
                 total_product_count=total_product_count,
                 total_products_added=total_products_added,

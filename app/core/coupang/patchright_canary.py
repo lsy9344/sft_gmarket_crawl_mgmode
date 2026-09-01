@@ -17,7 +17,10 @@ from app.core.config import PROJECT_ROOT
 HOME_URL = "https://www.coupang.com/"
 CATEGORY_URL = "https://www.coupang.com/np/categories/{category_id}?page=1"
 MAX_ITEMS = 10
-MIN_LIVE_INTERVAL_SECONDS = 30 * 60
+MIN_LIVE_INTERVAL_SECONDS = 3 * 60 * 60
+MAX_LIVE_SESSIONS_PER_DAY = 3
+MAX_DAILY_ITEMS = 1_500
+MAX_SESSION_ITEMS = 600
 BLOCK_RECOVERY_INTERVAL_SECONDS = 60 * 60
 BLOCK_STATUSES = {403, 418, 429}
 BLOCK_MARKERS = (
@@ -120,9 +123,17 @@ def _write_guard(value: dict, root: Path | None = None) -> None:
 
 
 def claim_live_attempt(
-    root: Path | None = None, *, now: float | None = None
+    root: Path | None = None,
+    *,
+    now: float | None = None,
+    planned_items: int = 0,
 ) -> tuple[bool, str]:
-    """실접속 1회를 예약한다. 차단 기록·30분 간격을 어기면 거절한다."""
+    """실접속 1회를 예약한다. 차단·세션·일일 상한을 어기면 거절한다."""
+    if (
+        not isinstance(planned_items, int)
+        or not 0 <= planned_items <= MAX_SESSION_ITEMS
+    ):
+        return False, f"세션 예정 상품 수는 0~{MAX_SESSION_ITEMS}개여야 합니다."
     current = time.time() if now is None else now
     try:
         guard = _read_guard(root)
@@ -134,6 +145,9 @@ def claim_live_attempt(
         return False, "이전 시험에서 차단되어 Patchright 실접속이 잠겼습니다."
     last_attempt = guard.get("last_attempt_ts")
     history = guard.get("block_history")
+    daily_date = guard.get("daily_date")
+    daily_sessions = guard.get("daily_sessions", 0)
+    daily_items_reserved = guard.get("daily_items_reserved", 0)
     if guard and (
         not isinstance(guard.get("blocked"), bool)
         or not isinstance(last_attempt, (int, float))
@@ -142,6 +156,11 @@ def claim_live_attempt(
             "recovery_hold" in guard
             and not isinstance(guard.get("recovery_hold"), bool)
         )
+        or (daily_date is not None and not isinstance(daily_date, str))
+        or not isinstance(daily_sessions, int)
+        or not isinstance(daily_items_reserved, int)
+        or daily_sessions < 0
+        or daily_items_reserved < 0
     ):
         return False, "안전 기록 형식이 잘못되어 실접속을 중단합니다."
     if isinstance(last_attempt, (int, float)):
@@ -149,6 +168,17 @@ def claim_live_attempt(
         if remaining > 0:
             minutes = int(remaining // 60) + 1
             return False, f"다음 Patchright 시험까지 {minutes}분 남았습니다."
+    current_date = time.strftime("%Y-%m-%d", time.localtime(current))
+    if daily_date != current_date:
+        daily_sessions = 0
+        daily_items_reserved = 0
+    if daily_sessions >= MAX_LIVE_SESSIONS_PER_DAY:
+        return (
+            False,
+            f"오늘 Patchright 세션 상한 {MAX_LIVE_SESSIONS_PER_DAY}회에 도달했습니다.",
+        )
+    if daily_items_reserved + planned_items > MAX_DAILY_ITEMS:
+        return False, f"오늘 예약 상품 상한 {MAX_DAILY_ITEMS:,}개를 넘습니다."
     try:
         next_guard = {
             "last_attempt_at": time.strftime(
@@ -156,6 +186,9 @@ def claim_live_attempt(
             ),
             "last_attempt_ts": current,
             "blocked": False,
+            "daily_date": current_date,
+            "daily_sessions": daily_sessions + 1,
+            "daily_items_reserved": daily_items_reserved + planned_items,
         }
         if history is not None:
             next_guard["block_history"] = history
@@ -307,7 +340,7 @@ def run_canary(
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     if live:
-        allowed, reason = claim_live_attempt(state_root)
+        allowed, reason = claim_live_attempt(state_root, planned_items=limit)
         if not allowed:
             return _emit(state, "guard_refused", on_event, reason=reason)
 

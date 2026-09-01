@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -135,6 +136,73 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertEqual(first["event"], "live_completed")
         self.assertEqual(second["event"], "guard_refused")
         self.assertEqual(len(calls), 1)
+
+    def test_three_hour_interval_is_enforced(self):
+        base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, _reason = claim_live_attempt(root, now=base)
+            second, reason = claim_live_attempt(
+                root, now=base + (3 * 60 * 60) - 1
+            )
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertIn("1분", reason)
+
+    def test_daily_product_envelope_refuses_more_than_fifteen_hundred(self):
+        base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, _reason = claim_live_attempt(
+                root, now=base, planned_items=600
+            )
+            second, _reason = claim_live_attempt(
+                root, now=base + (3 * 60 * 60), planned_items=600
+            )
+            third, reason = claim_live_attempt(
+                root, now=base + (6 * 60 * 60), planned_items=600
+            )
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertFalse(third)
+        self.assertIn("1,500", reason)
+        self.assertEqual(guard["daily_items_reserved"], 1_200)
+
+    def test_daily_session_envelope_refuses_fourth_session(self):
+        base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            attempts = [
+                claim_live_attempt(root, now=base + (index * 3 * 60 * 60))
+                for index in range(4)
+            ]
+        self.assertEqual(
+            [allowed for allowed, _reason in attempts],
+            [True, True, True, False],
+        )
+        self.assertIn("3회", attempts[-1][1])
+
+    def test_daily_envelope_resets_on_next_calendar_day(self):
+        first_day = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+        next_day = time.mktime((2026, 9, 3, 1, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, _reason = claim_live_attempt(
+                root, now=first_day, planned_items=600
+            )
+            second, _reason = claim_live_attempt(
+                root, now=first_day + (3 * 60 * 60), planned_items=600
+            )
+            next_day_allowed, _reason = claim_live_attempt(
+                root, now=next_day, planned_items=600
+            )
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertTrue(next_day_allowed)
+        self.assertEqual(guard["daily_sessions"], 1)
+        self.assertEqual(guard["daily_items_reserved"], 600)
 
     def test_access_denied_stops_at_home_and_latches_guard(self):
         page = _Page(blocked=True)
