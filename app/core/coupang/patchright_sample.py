@@ -27,7 +27,7 @@ from app.core.coupang.patchright_canary import (
 from app.core.coupang.search_parser import parse_extracted
 from app.models.coupang_records import CoupangRecord, CoupangRunConfig
 
-MAX_SAMPLE_ITEMS = 5
+MAX_SAMPLE_ITEMS = 8
 MAX_SAMPLE_SCAN_ITEMS = 20
 SHOP_SESSION_URL = "https://shop.coupang.com/A00067881"
 

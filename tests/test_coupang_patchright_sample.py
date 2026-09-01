@@ -221,14 +221,14 @@ class PatchrightSampleTest(unittest.TestCase):
         self.assertFalse(calls[0][1])
         self.assertTrue(context.closed)
 
-    def test_rejects_limit_above_five_before_browser(self):
+    def test_rejects_limit_above_eight_before_browser(self):
         calls: list[tuple[Path, bool]] = []
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 run_sample(
                     category_id="176573",
                     output_dir=Path(tmp),
-                    limit=6,
+                    limit=9,
                     state_root=Path(tmp),
                     browser_scope_factory=_factory(_Page(), calls, _Context(_Page())),
                 )
