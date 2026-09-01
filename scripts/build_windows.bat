@@ -6,7 +6,7 @@ REM ============================================================
 REM  SellerCollector (Gmarket + Coupang) - Windows 빌드 스크립트
 REM  Windows에서 이 파일을 더블클릭하거나 터미널에서 실행하세요.
 REM  수행: Windows용 venv 생성 -> 의존성 설치 -> PyInstaller 빌드
-REM  결과: dist\SellerCollector.exe 단일 실행 파일
+REM  결과: dist\SellerCollector.exe + dist\CoupangRuntimeSetup.exe
 REM ============================================================
 
 REM --- 프로젝트 루트로 이동 (이 스크립트는 scripts\ 안에 있음) ---
@@ -94,9 +94,15 @@ if exist "dist\SellerCollector.exe" (
     echo [오류] dist\SellerCollector.exe 를 찾지 못했습니다. 위 로그를 확인하세요.
     goto :error
 )
-powershell -NoProfile -Command "$files = @(Get-ChildItem 'dist' -File -Filter '*.exe'); if ($files.Count -ne 1 -or $files[0].Name -cne 'SellerCollector.exe') { Write-Error 'dist must contain exactly one EXE named SellerCollector.exe'; exit 1 }"
+if exist "dist\CoupangRuntimeSetup.exe" (
+    echo [성공] 런타임 설치 파일:     %CD%\dist\CoupangRuntimeSetup.exe
+) else (
+    echo [오류] dist\CoupangRuntimeSetup.exe 를 찾지 못했습니다. 위 로그를 확인하세요.
+    goto :error
+)
+powershell -NoProfile -Command "$expected = @('CoupangRuntimeSetup.exe', 'SellerCollector.exe'); $actual = @(Get-ChildItem 'dist' -File -Filter '*.exe' | Sort-Object Name | ForEach-Object Name); if (Compare-Object $expected $actual) { Write-Error 'dist EXE set mismatch'; exit 1 }"
 if errorlevel 1 goto :error
-powershell -NoProfile -Command "$file = Get-Item 'dist\SellerCollector.exe'; $h = Get-FileHash -Algorithm SHA256 $file.FullName; '{0}  {1}' -f $h.Hash,$file.Name | Set-Content -Encoding ASCII 'dist\SHA256SUMS.txt'"
+powershell -NoProfile -Command "$lines = Get-ChildItem 'dist' -File -Filter '*.exe' | Sort-Object Name | ForEach-Object { $h = Get-FileHash -Algorithm SHA256 $_.FullName; '{0}  {1}' -f $h.Hash.ToLower(),$_.Name }; $lines | Set-Content -Encoding ASCII 'dist\SHA256SUMS.txt'"
 if errorlevel 1 goto :error
 echo [성공] SHA-256 목록:         %CD%\dist\SHA256SUMS.txt
 echo ============================================================
