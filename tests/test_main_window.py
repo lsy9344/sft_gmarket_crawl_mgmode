@@ -19,6 +19,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app.core.base import Control
+
 try:
     from PyQt6.QtGui import QCloseEvent
     from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -51,6 +53,9 @@ class _MainWindowTestCase(unittest.TestCase):
         self.win.prescan_worker = None
         self.win.crawl_worker = None
         self.win.coupang_worker = None
+        self.win.category_worker = None
+        self.win.categories_worker = None
+        self.win.category_login_worker = None
         self.win._closing = False
         self.win._close_prompt_active = False
         self.win.close()
@@ -166,6 +171,65 @@ class CloseEventRaceTest(_MainWindowTestCase):
 
         self.assertTrue(event.isAccepted())
         self.assertFalse(self.win._closing)  # 완전히 닫혔으므로 원상 복귀
+
+
+class CoupangLoginCoordinationTest(_MainWindowTestCase):
+    def _start_fake_login(self) -> Control:
+        control = Control()
+        worker = MagicMock()
+        worker.isRunning.return_value = True
+        self.win.category_login_control = control
+        self.win.category_login_worker = worker
+        return control
+
+    def test_close_requests_login_cancel(self) -> None:
+        control = self._start_fake_login()
+
+        with patch.object(
+            QMessageBox,
+            "question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            event = QCloseEvent()
+            self.win.closeEvent(event)
+
+        self.assertTrue(control.is_cancelled())
+        self.assertFalse(event.isAccepted())
+
+    def test_login_start_disables_other_tabs(self) -> None:
+        from app.core.coupang.preflight import PreflightResult, PreflightStatus
+
+        ready = PreflightResult(PreflightStatus.OK, "ok")
+        with (
+            patch("app.core.coupang.preflight.check_runtime", return_value=ready),
+            patch("app.ui.main_window.CoupangLoginWorker") as worker_cls,
+        ):
+            worker_cls.return_value.isRunning.return_value = True
+            self.win.on_category_login()
+
+        self.assertFalse(self.win.btn_prescan.isEnabled())
+        self.assertFalse(self.win.coupang_panel.btn_start.isEnabled())
+        self.assertFalse(self.win.foodspring_panel.btn_start.isEnabled())
+        self.assertTrue(self.win.category_panel.btn_cancel.isEnabled())
+
+    def test_login_start_failure_restores_other_tabs(self) -> None:
+        from app.core.coupang.preflight import PreflightResult, PreflightStatus
+
+        ready = PreflightResult(PreflightStatus.OK, "ok")
+        with (
+            patch("app.core.coupang.preflight.check_runtime", return_value=ready),
+            patch("app.ui.main_window.CoupangLoginWorker") as worker_cls,
+            patch.object(QMessageBox, "critical") as critical,
+        ):
+            worker_cls.return_value.start.side_effect = RuntimeError("start failed")
+            self.win.on_category_login()
+
+        critical.assert_called_once()
+        self.assertIsNone(self.win.category_login_worker)
+        self.assertTrue(self.win.btn_prescan.isEnabled())
+        self.assertTrue(self.win.coupang_panel.btn_start.isEnabled())
+        self.assertTrue(self.win.foodspring_panel.btn_start.isEnabled())
+        self.assertEqual(self.win.category_panel._state, "failed")
 
 
 class OnStartReconcileBlockingTest(_MainWindowTestCase):

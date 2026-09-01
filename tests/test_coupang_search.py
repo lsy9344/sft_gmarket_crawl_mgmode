@@ -110,9 +110,23 @@ class FakeSearchPage:
         pass
 
     def evaluate(self, script, *args):
-        if "login.coupang.com" in script:
+        if "getClientRects" in script:
             # 로그인 상태 판별 JS — login_state 로 시뮬레이션
-            return self._login_state
+            if self._login_state is None:
+                return None
+            if self._login_state:
+                return [{
+                    "text": "로그아웃",
+                    "title": "로그아웃",
+                    "href": "https://login.coupang.com/login/logout.pang",
+                    "visible": True,
+                }]
+            return [{
+                "text": "로그인",
+                "title": "로그인",
+                "href": "https://login.coupang.com/login/login.pang?rtnUrl=home",
+                "visible": True,
+            }]
         if "ProductUnit_productUnit" in script:
             if self._dom_call < len(self._sorter_rows):
                 rows = self._sorter_rows[self._dom_call]
@@ -417,6 +431,19 @@ class LoginPolicyTest(unittest.TestCase):
             # 홈만 로드 — PLP 진행 없음
             self.assertEqual(len(page.goto_urls), 1)
 
+    def test_login_required_aborts_when_state_check_fails(self):
+        class UnknownLoginPage(FakeSearchPage):
+            def evaluate(self, script, *args):
+                if "getClientRects" in script:
+                    raise RuntimeError("DOM not ready")
+                return super().evaluate(script, *args)
+
+        page = UnknownLoginPage(sorter_rows=[[_row("11")]])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, require_login=True)
+            self.assertEqual(summary.termination_reason, "login_required")
+            self.assertEqual(len(page.goto_urls), 1)
+
     def test_login_required_proceeds_logged_in(self):
         """require_login + 로그인 세션 → 정상 수집."""
         rows_seq = [[_row("11")], [], []]
@@ -435,9 +462,8 @@ class LoginPolicyTest(unittest.TestCase):
             self.assertIsNone(summary.error)
 
     def test_require_login_type_validation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(ValueError):
-                SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", require_login="yes")
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+            SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", require_login="yes")
 
 
 class SearchParserTest(unittest.TestCase):

@@ -376,8 +376,8 @@ class SearchCrawler(CoupangCrawler):
         """홈에서 로그인 세션 여부를 확인하고 require_login 정책을 적용한다.
 
         로그인 세션은 Akamai 신뢰 한도가 비로그인보다 높다(외부 실운영 도구
-        OpenCLI 도 로그인 세션을 전제). 판별 불가(None)는 정책 위반이 아니므로
-        그대로 진행한다 — 홈 DOM 변형 등으로 오탐해 수집을 막지 않는다.
+        OpenCLI 도 로그인 세션을 전제). require_login 이 켜져 있으면 판별
+        불가(None)도 로그인 세션을 보장할 수 없으므로 안전하게 중단한다.
         """
         from app.core.coupang.login import evaluate_login_state
 
@@ -385,14 +385,15 @@ class SearchCrawler(CoupangCrawler):
         if state is True:
             self._log("  로그인 세션 확인 — 계정 신뢰 등급으로 수집합니다.")
             return
-        if state is None:
-            self._log("  로그인 상태 확인 불가 — 세션 정책 검사 없이 진행합니다.")
-            return
-        self._log("  비로그인 세션입니다 — 익명 신뢰 등급으로 수집합니다.")
         require_login = bool(getattr(self.config, "require_login", False))
+        if state is None:
+            self._log("  로그인 상태를 확인할 수 없습니다.")
+        else:
+            self._log("  비로그인 세션입니다 — 익명 신뢰 등급으로 수집합니다.")
         if require_login:
             raise _RunError(
-                "쿠팡 로그인 세션이 없습니다. '쿠팡 로그인' 버튼으로 1회 로그인한 뒤 "
+                "쿠팡 로그인 세션을 확인할 수 없습니다. '쿠팡 로그인' 버튼으로 "
+                "1회 로그인한 뒤 "
                 "다시 실행하세요. (로그인 세션은 차단 임계가 높지만, 전용 계정을 "
                 "사용하고 하루 볼륨 상한을 지키세요)",
                 reason="login_required",

@@ -37,10 +37,10 @@ from app.ui.widgets.settings_panel import SettingsPanel
 from app.workers.category_worker import CategoryWorker
 from app.workers.coupang_login_worker import CoupangLoginWorker
 from app.workers.coupang_worker import CoupangWorker
-from app.workers.search_worker import SearchWorker
 from app.workers.crawl_worker import CrawlWorker
 from app.workers.foodspring_worker import FoodSpringWorker
 from app.workers.prescan_worker import PrescanWorker
+from app.workers.search_worker import SearchWorker
 
 
 class MainWindow(QMainWindow):
@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
         self.category_control: Control | None = None
         self.category_worker: SearchWorker | None = None
         self.category_login_control: Control | None = None
-        self.category_login_worker = None
+        self.category_login_worker: CoupangLoginWorker | None = None
         self.categories_control: Control | None = None
         self.categories_worker: CategoryWorker | None = None
         self.category_cache = CategoryTreeCache(
@@ -225,7 +225,33 @@ class MainWindow(QMainWindow):
             return self.category_control
         if self.categories_worker is not None and self.categories_worker.isRunning():
             return self.categories_control
+        if self.category_login_worker is not None and self.category_login_worker.isRunning():
+            return self.category_login_control
         return self.control
+
+    def _coupang_runtime_ready(self) -> bool:
+        """쿠팡 런타임을 확인하고 실패 내용을 사용자에게 알린다."""
+        from app.core.coupang.preflight import PreflightStatus, check_runtime
+
+        try:
+            result = check_runtime()
+        except Exception as e:  # noqa: BLE001 - preflight 경계 격리
+            QMessageBox.critical(
+                self,
+                "Coupang 런타임 확인 실패",
+                f"런타임 준비 상태를 확인하는 중 예기치 못한 오류가 발생했습니다:\n{e}",
+            )
+            return False
+        if result.status != PreflightStatus.OK:
+            QMessageBox.critical(self, "Coupang 런타임 미준비", result.message)
+            return False
+        return True
+
+    def _set_category_login_busy(self, busy: bool) -> None:
+        """로그인 중에는 현재 탭의 취소 버튼만 남기고 다른 탭을 잠근다."""
+        self._set_gmarket_busy(busy)
+        self.coupang_panel.set_external_busy(busy)
+        self.foodspring_panel.set_external_busy(busy)
 
     # ── Gmarket: 사전 조사 ─────────────────────────────────────────
     def _make_storage(self) -> Storage | None:
@@ -583,22 +609,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Runtime preflight
-        from app.core.coupang.preflight import PreflightStatus, check_runtime
-
-        try:
-            pf = check_runtime()
-        except Exception as e:  # noqa: BLE001
-            # 방어선: preflight 는 알려진 실패를 구조화된 결과로 반환하지만,
-            # 예기치 못한 예외가 나더라도 Qt 슬롯 밖으로 새어 나가지 않도록
-            # critical 대화상자로 변환한다.
-            QMessageBox.critical(
-                self, "Coupang 런타임 확인 실패",
-                f"런타임 준비 상태를 확인하는 중 예기치 못한 오류가 발생했습니다:\n{e}",
-            )
-            return
-        if pf.status != PreflightStatus.OK:
-            QMessageBox.critical(self, "Coupang 런타임 미준비", pf.message)
+        if not self._coupang_runtime_ready():
             return
 
         self.coupang_control = Control()
@@ -1006,18 +1017,7 @@ class MainWindow(QMainWindow):
         if self._active_worker() is not None:
             return
 
-        from app.core.coupang.preflight import PreflightStatus, check_runtime
-
-        try:
-            pf = check_runtime()
-        except Exception as e:  # noqa: BLE001 - preflight 경계 격리
-            QMessageBox.critical(
-                self, "Coupang 런타임 확인 실패",
-                f"런타임 준비 상태를 확인하는 중 예기치 못한 오류가 발생했습니다:\n{e}",
-            )
-            return
-        if pf.status != PreflightStatus.OK:
-            QMessageBox.critical(self, "Coupang 런타임 미준비", pf.message)
+        if not self._coupang_runtime_ready():
             return
 
         self.category_login_control = Control()
@@ -1030,10 +1030,20 @@ class MainWindow(QMainWindow):
         self.category_login_worker = worker
 
         self.category_panel.set_state("logging_in")
+        self._set_category_login_busy(True)
         self._show_status("쿠팡 로그인 대기 중 — 브라우저에서 로그인을 완료하세요.")
         self.category_panel.append_log(
             "[로그인] 브라우저를 열고 로그인을 진행하세요 (최대 5분 대기).")
-        worker.start()
+        try:
+            worker.start()
+        except Exception as e:  # noqa: BLE001 - QThread 시작 경계 복구
+            self.category_login_worker = None
+            self.category_login_control = None
+            self.category_panel.set_state("failed")
+            self._set_category_login_busy(False)
+            self.category_panel.append_log(f"[오류] 로그인 작업 시작 실패: {e}")
+            self._show_status("쿠팡 로그인 시작 실패")
+            QMessageBox.critical(self, "쿠팡 로그인 시작 실패", str(e))
 
     def _on_category_login_result(self, completed: bool) -> None:
         if completed:
@@ -1051,8 +1061,9 @@ class MainWindow(QMainWindow):
 
     def _on_category_login_thread_done(self) -> None:
         self.category_login_worker = None
-        if self.category_panel._state == "logging_in":
-            self.category_panel.set_state("idle")
+        self.category_login_control = None
+        self.category_panel.set_state("idle")
+        self._set_category_login_busy(False)
 
     def on_category_start(self) -> None:
         if self._closing or self._close_prompt_active:
@@ -1101,18 +1112,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        from app.core.coupang.preflight import PreflightStatus, check_runtime
-
-        try:
-            pf = check_runtime()
-        except Exception as e:  # noqa: BLE001 - preflight 경계 격리
-            QMessageBox.critical(
-                self, "Coupang 런타임 확인 실패",
-                f"런타임 준비 상태를 확인하는 중 예기치 못한 오류가 발생했습니다:\n{e}",
-            )
-            return
-        if pf.status != PreflightStatus.OK:
-            QMessageBox.critical(self, "Coupang 런타임 미준비", pf.message)
+        if not self._coupang_runtime_ready():
             return
 
         self.category_control = Control()
@@ -1152,6 +1152,9 @@ class MainWindow(QMainWindow):
         if self.category_login_worker is not None and self.category_login_worker.isRunning():
             if self.category_login_control:
                 self.category_login_control.request_cancel()
+            self.category_panel.set_state("cancelling")
+            self.category_panel.append_log("[로그인] 취소 요청 — 브라우저를 닫는 중입니다.")
+            self._show_status("쿠팡 로그인 취소 중...")
             return
         if self.category_control:
             self.category_control.request_cancel()
