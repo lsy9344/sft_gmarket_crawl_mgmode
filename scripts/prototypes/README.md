@@ -212,3 +212,14 @@ python scripts/prototypes/coupang_patchright_full_fruit.py \
 완료했다. 누적 고유 상품은 833개이며 중복, 필수 열 누락, 가격 누락은 0개다. 다음
 위치는 귤/한라봉/감귤류 1페이지다. 현재 안전장치상 2026-09-01 20:34:55 KST
 이후에만 다음 실접속을 실행한다.
+
+남은 하위 카테고리를 순서대로 모두 처리하는 명령은 다음과 같다.
+
+```bash
+python scripts/prototypes/coupang_patchright_full_fruit.py \
+  --all-categories \
+  --output-dir ~/Desktop/PatchrightFruit
+```
+
+페이지 사이는 15초, 카테고리가 바뀔 때는 60초를 기다린다. 차단 신호가 보이면 즉시
+멈추고, 어느 카테고리든 50페이지 상한에 도달하면 완료로 표시하지 않는다.
