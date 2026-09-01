@@ -11,7 +11,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.coupang.patchright_canary import authorize_block_recovery
+from app.core.coupang.patchright_canary import (
+    authorize_block_recovery,
+    record_recovery_hold,
+)
 from app.core.coupang.patchright_full_fruit import (
     run_listing_batch,
     run_listing_category,
@@ -71,6 +74,7 @@ def main() -> int:
                     limit=8,
                     on_event=_print_state,
                 )
+                record_recovery_hold()
         elif args.category:
             result = run_listing_category(
                 output_dir=args.output_dir,

@@ -128,6 +128,8 @@ def claim_live_attempt(
         guard = _read_guard(root)
     except CanaryGuardError as error:
         return False, str(error)
+    if guard.get("recovery_hold"):
+        return False, "차단 뒤 소량 확인을 마쳐 추가 실접속을 잠갔습니다."
     if guard.get("blocked"):
         return False, "이전 시험에서 차단되어 Patchright 실접속이 잠겼습니다."
     last_attempt = guard.get("last_attempt_ts")
@@ -136,6 +138,10 @@ def claim_live_attempt(
         not isinstance(guard.get("blocked"), bool)
         or not isinstance(last_attempt, (int, float))
         or (history is not None and not isinstance(history, list))
+        or (
+            "recovery_hold" in guard
+            and not isinstance(guard.get("recovery_hold"), bool)
+        )
     ):
         return False, "안전 기록 형식이 잘못되어 실접속을 중단합니다."
     if isinstance(last_attempt, (int, float)):
@@ -226,6 +232,24 @@ def authorize_block_recovery(
     guard.update(blocked=False, block_history=history)
     _write_guard(guard, root)
     return True, ""
+
+
+def record_recovery_hold(
+    root: Path | None = None,
+    *,
+    now: float | None = None,
+) -> None:
+    """차단 뒤 소량 확인을 마친 뒤 추가 실접속을 다시 잠근다."""
+    current = time.time() if now is None else now
+    guard = _read_guard(root)
+    guard.update(
+        recovery_hold=True,
+        recovery_hold_at=time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(current)
+        ),
+        recovery_hold_ts=current,
+    )
+    _write_guard(guard, root)
 
 
 @contextmanager

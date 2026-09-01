@@ -13,7 +13,9 @@ from app.core.coupang.patchright_canary import (
     CATEGORY_URL,
     HOME_URL,
     authorize_block_recovery,
+    claim_live_attempt,
     record_block,
+    record_recovery_hold,
     run_canary,
 )
 
@@ -185,6 +187,19 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertEqual(reason, "")
         self.assertFalse(guard["blocked"])
         self.assertEqual(guard["block_history"][0]["reference"], "Reference #18.kept")
+
+    def test_recovery_hold_refuses_another_live_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record_block(root, reference="Reference #18.once", now=1_000.0)
+            allowed, _reason = authorize_block_recovery(root, now=4_600.0)
+            self.assertTrue(allowed)
+            record_recovery_hold(root, now=4_700.0)
+            allowed, reason = claim_live_attempt(root, now=10_000.0)
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertFalse(allowed)
+        self.assertIn("소량 확인", reason)
+        self.assertTrue(guard["recovery_hold"])
 
     def test_corrupt_guard_fails_closed(self):
         calls: list[tuple[Path, bool]] = []
