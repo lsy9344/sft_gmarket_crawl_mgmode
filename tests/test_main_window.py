@@ -51,6 +51,8 @@ class _MainWindowTestCase(unittest.TestCase):
         self.win.prescan_worker = None
         self.win.crawl_worker = None
         self.win.coupang_worker = None
+        self.win.category_login_worker = None
+        self.win.category_patchright_worker = None
         self.win._closing = False
         self.win._close_prompt_active = False
         self.win.close()
@@ -69,6 +71,36 @@ class InitialStateTest(_MainWindowTestCase):
         event = QCloseEvent()
         self.win.closeEvent(event)
         self.assertTrue(event.isAccepted())
+
+    def test_patchright_worker_uses_single_worker_and_cancel_control(self) -> None:
+        from app.core.base import Control
+
+        worker = MagicMock()
+        worker.isRunning.return_value = True
+        control = Control()
+        self.win.category_patchright_worker = worker
+        self.win.category_patchright_control = control
+
+        self.assertIs(self.win._active_worker(), worker)
+        self.assertIs(self.win._active_control(), control)
+
+    def test_login_worker_uses_its_own_cancel_control(self) -> None:
+        from app.core.base import Control
+
+        worker = MagicMock()
+        worker.isRunning.return_value = True
+        control = Control()
+        self.win.category_login_worker = worker
+        self.win.category_login_control = control
+
+        self.assertIs(self.win._active_control(), control)
+
+    def test_patchright_success_does_not_start_collection(self) -> None:
+        with patch.object(self.win, "on_category_start") as start:
+            self.win._on_category_patchright_result(
+                {"event": "live_completed", "products": [{"href": "/vp/products/1"}]}
+            )
+        start.assert_not_called()
 
 
 class GmarketRuntimePreflightTest(_MainWindowTestCase):

@@ -156,13 +156,18 @@ class CategoryPanel(QWidget):
         self.btn_login.setToolTip(
             "영속 프로필 브라우저를 열어 직접 로그인합니다.\n"
             "캡차·보안 알림은 직접 통과하면 되고, 완료를 감지하면 세션이 저장됩니다.")
+        self.btn_patchright_test = QPushButton("Patchright 접속 시험")
+        self.btn_patchright_test.setToolTip(
+            "시험용 실제 Chrome으로 홈과 목록 1페이지만 확인합니다.\n"
+            "로그인하거나 상품 상세를 열지 않으며, 기존 수집 엔진은 바꾸지 않습니다.")
         self.btn_start = QPushButton("수집 시작")
         self.btn_pause = QPushButton("일시정지")
         self.btn_resume = QPushButton("재개")
         self.btn_cancel = QPushButton("취소")
         self.btn_open_result = QPushButton("결과 열기")
-        for b in (self.btn_login, self.btn_start, self.btn_pause, self.btn_resume,
-                  self.btn_cancel, self.btn_open_result):
+        for b in (self.btn_login, self.btn_patchright_test, self.btn_start,
+                  self.btn_pause, self.btn_resume, self.btn_cancel,
+                  self.btn_open_result):
             btn_row.addWidget(b)
         layout.addLayout(btn_row)
 
@@ -274,7 +279,9 @@ class CategoryPanel(QWidget):
         self.btn_start.setEnabled(s in ("idle", "finished", "failed"))
         self.btn_pause.setEnabled(s == "running")
         self.btn_resume.setEnabled(s == "paused")
-        self.btn_cancel.setEnabled(s in ("running", "paused", "logging_in"))
+        self.btn_cancel.setEnabled(
+            s in ("running", "paused", "logging_in", "patchright_testing")
+        )
         self.btn_open_result.setEnabled(s in ("idle", "finished", "failed"))
         settings_enabled = s in ("idle", "finished", "failed")
         for w in (self.output_dir_edit, self.chk_exclude_rocket, self.chk_include_subs,
@@ -286,6 +293,9 @@ class CategoryPanel(QWidget):
         self.btn_refresh_categories.setEnabled(settings_enabled and s != "loading_categories")
         # 로그인 세션은 수집 실행 중(프로필 락)에 열 수 없다
         self.btn_login.setEnabled(settings_enabled and s != "logging_in")
+        self.btn_patchright_test.setEnabled(
+            settings_enabled and s != "patchright_testing"
+        )
 
     def set_loading_categories(self, loading: bool) -> None:
         self.btn_refresh_categories.setEnabled(not loading)
@@ -296,7 +306,8 @@ class CategoryPanel(QWidget):
     def set_external_busy(self, busy: bool) -> None:
         if busy:
             for b in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_cancel,
-                      self.btn_refresh_categories, self.btn_login):
+                      self.btn_refresh_categories, self.btn_login,
+                      self.btn_patchright_test):
                 b.setEnabled(False)
             for w in (self.output_dir_edit, self.chk_exclude_rocket, self.chk_include_subs,
                       self.chk_login, self.spin_max_pages, self.spin_delay_min,

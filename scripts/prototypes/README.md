@@ -1,7 +1,8 @@
 # Patchright Coupang canary — PROTOTYPE
 
 이 코드는 **Patchright가 Camoufox와 다른 첫 진입 결과를 내는지**만 확인하는
-버려도 되는 시험판이다. 본 프로그램의 Coupang 엔진에는 연결하지 않았다.
+버려도 되는 시험판이다. 앱의 `Coupang 카테고리` 탭에는 같은 시험을 실행하는
+`Patchright 접속 시험` 버튼만 연결했다. 기존 로그인·수집 엔진은 바꾸지 않았다.
 
 ## 범위
 
@@ -24,6 +25,11 @@ python scripts/prototypes/coupang_patchright_canary.py
 정상이라면 마지막 JSON 줄에 `"event": "offline_completed"`와 상품 2개가
 표시된다.
 
+앱에서는 `Coupang 카테고리` 탭의 `Patchright 접속 시험`을 누른다. 이 버튼도
+아래 명령과 같은 프로필 및 안전 기록을 사용하며, 비교 조건을 고정하기 위해
+카테고리 `176573`만 연다. Windows 상태는
+`%LOCALAPPDATA%\SellerCollectorPatchrightCanary`에 저장된다.
+
 실제 비교가 허용되고 기존 차단 상태가 완전히 정리된 뒤에만 카테고리 ID 하나를
 명시한다.
 
@@ -41,3 +47,12 @@ python scripts/prototypes/coupang_patchright_canary.py --live-category 176573
 > 내는가?
 
 이 시험은 장시간 수집, 로그인 계정, 전체 판매자정보 수집 성공 여부를 답하지 않는다.
+
+## 확인된 결과
+
+- 2026-09-01 11:25:08, Windows 실제 Chrome
+- 홈 HTTP 200, 카테고리 HTTP 200
+- 상품 링크 5개 확인, 차단 없음
+
+이 결과는 첫 관문 성공만 뜻한다. 앱 버튼과 CLI를 연달아 누르는 것은 독립 시험이
+아니며, 공통 안전장치가 최소 30분 간격을 강제한다.

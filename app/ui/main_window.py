@@ -36,6 +36,9 @@ from app.ui.widgets.result_table import ResultTable
 from app.ui.widgets.settings_panel import SettingsPanel
 from app.workers.category_worker import CategoryWorker
 from app.workers.coupang_login_worker import CoupangLoginWorker
+from app.workers.coupang_patchright_canary_worker import (
+    CoupangPatchrightCanaryWorker,
+)
 from app.workers.coupang_worker import CoupangWorker
 from app.workers.search_worker import SearchWorker
 from app.workers.crawl_worker import CrawlWorker
@@ -46,7 +49,7 @@ from app.workers.prescan_worker import PrescanWorker
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("판매자 정보 수집기 v3.0")
+        self.setWindowTitle("판매자 정보 수집기 v3.0 — Patchright 시험")
         self.resize(1100, 900)
 
         # Gmarket 상태
@@ -74,6 +77,8 @@ class MainWindow(QMainWindow):
         self.category_worker: SearchWorker | None = None
         self.category_login_control: Control | None = None
         self.category_login_worker = None
+        self.category_patchright_control: Control | None = None
+        self.category_patchright_worker = None
         self.categories_control: Control | None = None
         self.categories_worker: CategoryWorker | None = None
         self.category_cache = CategoryTreeCache(
@@ -168,6 +173,9 @@ class MainWindow(QMainWindow):
 
         self.category_panel.btn_refresh_categories.clicked.connect(self.on_categories_refresh)
         self.category_panel.btn_login.clicked.connect(self.on_category_login)
+        self.category_panel.btn_patchright_test.clicked.connect(
+            self.on_category_patchright_test
+        )
         self.category_panel.btn_start.clicked.connect(self.on_category_start)
         self.category_panel.btn_pause.clicked.connect(self.on_category_pause)
         self.category_panel.btn_resume.clicked.connect(self.on_category_resume)
@@ -211,7 +219,7 @@ class MainWindow(QMainWindow):
     def _active_worker(self):
         for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker,
                        self.foodspring_worker, self.category_worker, self.categories_worker,
-                       self.category_login_worker):
+                       self.category_login_worker, self.category_patchright_worker):
             if worker is not None and worker.isRunning():
                 return worker
         return None
@@ -225,6 +233,11 @@ class MainWindow(QMainWindow):
             return self.category_control
         if self.categories_worker is not None and self.categories_worker.isRunning():
             return self.categories_control
+        if self.category_login_worker is not None and self.category_login_worker.isRunning():
+            return self.category_login_control
+        if (self.category_patchright_worker is not None
+                and self.category_patchright_worker.isRunning()):
+            return self.category_patchright_control
         return self.control
 
     # ── Gmarket: 사전 조사 ─────────────────────────────────────────
@@ -1054,6 +1067,58 @@ class MainWindow(QMainWindow):
         if self.category_panel._state == "logging_in":
             self.category_panel.set_state("idle")
 
+    def on_category_patchright_test(self) -> None:
+        """실제 Chrome으로 홈과 고정 카테고리 1페이지만 확인한다."""
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            return
+
+        self.category_patchright_control = Control()
+        worker = CoupangPatchrightCanaryWorker(self.category_patchright_control)
+        worker.log_message.connect(self.category_panel.append_log)
+        worker.result_ready.connect(self._on_category_patchright_result)
+        worker.error_occurred.connect(self._on_category_patchright_error)
+        worker.finished.connect(self._on_category_patchright_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.category_patchright_worker = worker
+
+        self.category_panel.set_state("patchright_testing")
+        self._show_status("Patchright 접속 시험 중 — 홈과 목록 1페이지만 확인합니다.")
+        self.category_panel.append_log(
+            "[Patchright] 시험 시작 — 로그인·상품 상세·수집은 하지 않습니다."
+        )
+        worker.start()
+
+    def _on_category_patchright_result(self, result: dict) -> None:
+        event = result.get("event")
+        if event == "live_completed":
+            count = len(result.get("products", []))
+            self._show_status(f"Patchright 접속 시험 성공 — 상품 {count}개 확인")
+        elif event == "blocked":
+            self._show_status("Patchright 접근 거부 — 추가 시험 잠김")
+            QMessageBox.warning(
+                self,
+                "Patchright 접근 거부",
+                "쿠팡 접근 거부가 확인되어 추가 시험을 잠갔습니다.\n"
+                "다른 버튼으로 연속 재시도하지 마세요.",
+            )
+        elif event == "guard_refused":
+            self._show_status("Patchright 안전장치가 접속을 중단했습니다.")
+        elif event == "cancelled":
+            self._show_status("Patchright 접속 시험 취소됨")
+        else:
+            self._show_status("Patchright 접속 시험 실패")
+
+    def _on_category_patchright_error(self, msg: str) -> None:
+        self.category_panel.append_log(f"[Patchright 오류] {msg}")
+        self._show_status("Patchright 접속 시험 오류")
+
+    def _on_category_patchright_thread_done(self) -> None:
+        self.category_patchright_worker = None
+        if self.category_panel._state == "patchright_testing":
+            self.category_panel.set_state("idle")
+
     def on_category_start(self) -> None:
         if self._closing or self._close_prompt_active:
             return
@@ -1149,6 +1214,14 @@ class MainWindow(QMainWindow):
             self._show_status("Coupang 카테고리 수집 진행 중...")
 
     def on_category_cancel(self) -> None:
+        if (self.category_patchright_worker is not None
+                and self.category_patchright_worker.isRunning()):
+            if self.category_patchright_control:
+                self.category_patchright_control.request_cancel()
+            self.category_panel.append_log(
+                "[Patchright] 취소 요청 — 현재 페이지가 끝나면 닫습니다."
+            )
+            return
         if self.category_login_worker is not None and self.category_login_worker.isRunning():
             if self.category_login_control:
                 self.category_login_control.request_cancel()

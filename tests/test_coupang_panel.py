@@ -105,6 +105,7 @@ class MainWindowTabTest(unittest.TestCase):
     def test_window_title_platform_neutral(self):
         """AC-02: platform-neutral title."""
         self.assertIn("판매자 정보 수집기", self.win.windowTitle())
+        self.assertIn("Patchright 시험", self.win.windowTitle())
 
     def test_gmarket_buttons_exist(self):
         """AC-03: existing Gmarket buttons preserved."""

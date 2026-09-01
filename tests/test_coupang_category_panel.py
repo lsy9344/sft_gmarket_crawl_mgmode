@@ -96,6 +96,23 @@ class CategoryPanelTest(unittest.TestCase):
         self._select("310655")
         self.assertEqual(self.panel.selected_subcategories(), [])
 
+    def test_patchright_test_button_has_separate_busy_state(self):
+        self.assertTrue(self.panel.btn_login.isEnabled())
+        self.assertTrue(self.panel.btn_patchright_test.isEnabled())
+
+        self.panel.set_state("patchright_testing")
+        self.assertFalse(self.panel.btn_login.isEnabled())
+        self.assertFalse(self.panel.btn_patchright_test.isEnabled())
+        self.assertTrue(self.panel.btn_cancel.isEnabled())
+
+        self.panel.set_state("idle")
+        self.assertTrue(self.panel.btn_login.isEnabled())
+        self.assertTrue(self.panel.btn_patchright_test.isEnabled())
+
+    def test_external_busy_disables_patchright_test_button(self):
+        self.panel.set_external_busy(True)
+        self.assertFalse(self.panel.btn_patchright_test.isEnabled())
+
 
 if __name__ == "__main__":
     unittest.main()
