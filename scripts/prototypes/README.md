@@ -53,6 +53,9 @@ python scripts/prototypes/coupang_patchright_canary.py --live-category 176573
 - 2026-09-01 11:25:08, Windows 실제 Chrome
 - 홈 HTTP 200, 카테고리 HTTP 200
 - 상품 링크 5개 확인, 차단 없음
+- 2026-09-01 11:55:12, 빌드된 `SellerCollector.exe`의 앱 버튼
+- 홈 HTTP 200, 카테고리 HTTP 200, 상품 링크 5개 확인, 차단 없음
+- 시험이 끝난 뒤 Chrome이 닫히고 앱 버튼이 다시 활성화됨
 
 이 결과는 첫 관문 성공만 뜻한다. 앱 버튼과 CLI를 연달아 누르는 것은 독립 시험이
 아니며, 공통 안전장치가 최소 30분 간격을 강제한다.
