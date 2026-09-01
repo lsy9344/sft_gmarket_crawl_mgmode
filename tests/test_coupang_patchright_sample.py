@@ -235,6 +235,22 @@ class PatchrightSampleTest(unittest.TestCase):
                 )
         self.assertEqual(calls, [])
 
+    def test_rejects_scan_beyond_twenty_four_before_browser(self):
+        calls: list[tuple[Path, bool]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                run_sample(
+                    category_id="176573",
+                    output_dir=Path(tmp),
+                    limit=8,
+                    offset=17,
+                    state_root=Path(tmp),
+                    browser_scope_factory=_factory(
+                        _Page(), calls, _Context(_Page())
+                    ),
+                )
+        self.assertEqual(calls, [])
+
     def test_offset_skips_previous_items_and_next_run_resumes(self):
         first_page = _Page()
         first_context = _Context(first_page)
