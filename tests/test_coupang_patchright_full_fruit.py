@@ -18,7 +18,6 @@ from app.core.coupang.patchright_full_fruit import (
     FullFruitStore,
     _advance_listing_state,
     _new_state,
-    run_listing_all_categories,
     run_listing_batch,
     run_listing_category,
     run_listing_pages,
@@ -306,6 +305,35 @@ class PatchrightFullFruitTest(unittest.TestCase):
         self.assertEqual(len(page.urls), 3)
         self.assertTrue(context.closed)
 
+    def test_page_run_does_not_cross_into_next_category(self):
+        page = _Page(product_counts_by_page={2: 0, 3: 0})
+        context = _Context(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            output_dir.mkdir()
+            state = _new_state(output_dir)
+            state["page_number"] = 2
+            (output_dir / STATE_FILENAME).write_text(
+                json.dumps(state), encoding="utf-8"
+            )
+            result = run_listing_pages(
+                output_dir=output_dir,
+                page_count=10,
+                state_root=root / "state",
+                browser_scope_factory=_factory(page, [], context),
+            )
+            saved_state = json.loads(
+                (output_dir / STATE_FILENAME).read_text("utf-8")
+            )
+
+        self.assertEqual(result["event"], "listing_pages_completed")
+        self.assertEqual(result["completed_page_attempts"], 2)
+        self.assertEqual(saved_state["category_index"], 1)
+        self.assertEqual(saved_state["page_number"], 1)
+        self.assertEqual(len(page.urls), 3)
+        self.assertTrue(context.closed)
+
     def test_category_run_reports_page_limit_as_incomplete(self):
         page = _Page()
         context = _Context(page)
@@ -331,31 +359,6 @@ class PatchrightFullFruitTest(unittest.TestCase):
         self.assertEqual(result["completed_page_attempts"], 1)
         self.assertEqual(saved_state["status"], "incomplete_limit_reached")
         self.assertEqual(saved_state["completed_categories"], [])
-        self.assertTrue(context.closed)
-
-    def test_all_categories_run_finishes_product_phase(self):
-        page = _Page(product_count=0)
-        context = _Context(page)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            output_dir = root / "out"
-            result = run_listing_all_categories(
-                output_dir=output_dir,
-                state_root=root / "state",
-                browser_scope_factory=_factory(page, [], context),
-            )
-            saved_state = json.loads(
-                (output_dir / STATE_FILENAME).read_text("utf-8")
-            )
-
-        self.assertEqual(result["event"], "listing_all_categories_completed")
-        self.assertEqual(result["completed_page_attempts"], 24)
-        self.assertEqual(saved_state["phase"], "sellers")
-        self.assertEqual(
-            saved_state["completed_categories"],
-            [category_id for category_id, _name in FRUIT_CATEGORIES],
-        )
-        self.assertEqual(len(page.urls), 25)
         self.assertTrue(context.closed)
 
     def test_category_block_latches_guard_without_advancing_state(self):

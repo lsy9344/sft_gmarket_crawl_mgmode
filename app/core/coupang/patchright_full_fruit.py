@@ -63,7 +63,6 @@ MAX_LISTING_ITEMS = 60
 MAX_CATEGORY_PAGES = 50
 EMPTY_PAGE_TOLERANCE = 2
 PAGE_DELAY_MS = 15_000
-CATEGORY_DELAY_MS = 60_000
 
 
 def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
@@ -444,7 +443,7 @@ def run_listing_pages(
         per_page_limit=MAX_LISTING_ITEMS,
         page_attempt_limit=page_count,
         completed_event="listing_pages_completed",
-        stop_after_category=False,
+        stop_after_category=True,
         control=control,
         on_event=on_event,
         state_root=state_root,
@@ -467,29 +466,6 @@ def run_listing_category(
         page_attempt_limit=MAX_CATEGORY_PAGES + EMPTY_PAGE_TOLERANCE,
         completed_event="listing_category_completed",
         stop_after_category=True,
-        control=control,
-        on_event=on_event,
-        state_root=state_root,
-        browser_scope_factory=browser_scope_factory,
-    )
-
-
-def run_listing_all_categories(
-    *,
-    output_dir: Path,
-    control: Control | None = None,
-    on_event: Callable[[dict], None] | None = None,
-    state_root: Path | None = None,
-    browser_scope_factory: Callable | None = None,
-) -> dict:
-    """한 Chrome에서 남은 모든 하위 카테고리의 상품 목록을 처리한다."""
-    return _run_listing(
-        output_dir=output_dir,
-        per_page_limit=MAX_LISTING_ITEMS,
-        page_attempt_limit=len(FRUIT_CATEGORIES)
-        * (MAX_CATEGORY_PAGES + EMPTY_PAGE_TOLERANCE),
-        completed_event="listing_all_categories_completed",
-        stop_after_category=False,
         control=control,
         on_event=on_event,
         state_root=state_root,
@@ -580,8 +556,9 @@ def _run_listing(
                     break
                 if state["status"] != "running" or state["phase"] != "products":
                     break
-                category_index = state["category_index"]
-                category_id, category_name = FRUIT_CATEGORIES[category_index]
+                category_id, category_name = FRUIT_CATEGORIES[
+                    state["category_index"]
+                ]
                 page_number = state["page_number"]
                 offset = state["next_offset"]
                 effective_limit = min(
@@ -682,12 +659,7 @@ def _run_listing(
                     )
                 )
                 if should_continue:
-                    delay_ms = (
-                        CATEGORY_DELAY_MS
-                        if state["category_index"] != category_index
-                        else PAGE_DELAY_MS
-                    )
-                    _wait(page, delay_ms, control)
+                    _wait(page, PAGE_DELAY_MS, control)
                     _checkpoint(control)
 
             result.update(
