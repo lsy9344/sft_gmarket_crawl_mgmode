@@ -156,7 +156,7 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertIn("1분", reason)
         self.assertTrue(on_time)
 
-    def test_daily_product_envelope_refuses_more_than_twenty_two_eighty(self):
+    def test_daily_product_envelope_refuses_more_than_twenty_four_sixty(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -172,29 +172,33 @@ class PatchrightCanaryTest(unittest.TestCase):
             fourth, reason = claim_live_attempt(
                 root, now=base + (8 * 60 * 60), planned_items=600
             )
+            fifth, reason = claim_live_attempt(
+                root, now=base + (10 * 60 * 60), planned_items=600
+            )
             guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
         self.assertTrue(first)
         self.assertTrue(second)
         self.assertTrue(third)
-        self.assertFalse(fourth)
-        self.assertIn("2,280", reason)
-        self.assertEqual(guard["daily_items_reserved"], 1_800)
+        self.assertTrue(fourth)
+        self.assertFalse(fifth)
+        self.assertIn("2,460", reason)
+        self.assertEqual(guard["daily_items_reserved"], 2_400)
 
-    def test_daily_session_envelope_refuses_eighth_session(self):
+    def test_daily_session_envelope_refuses_ninth_session(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             attempts = [
-                claim_live_attempt(root, now=base + (index * 3 * 60 * 60))
-                for index in range(8)
+                claim_live_attempt(root, now=base + (index * 2 * 60 * 60))
+                for index in range(9)
             ]
         self.assertEqual(
             [allowed for allowed, _reason in attempts],
-            [True, True, True, True, True, True, True, False],
+            [True, True, True, True, True, True, True, True, False],
         )
-        self.assertIn("7회", attempts[-1][1])
+        self.assertIn("8회", attempts[-1][1])
 
-    def test_rolling_page_envelope_refuses_forty_second_page(self):
+    def test_rolling_page_envelope_refuses_forty_seventh_page(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -216,17 +220,23 @@ class PatchrightCanaryTest(unittest.TestCase):
                 now=base + (6 * 60 * 60),
                 planned_pages=10,
             )
-            too_many, reason = claim_live_attempt(
+            fifth, _reason = claim_live_attempt(
                 root,
                 now=base + (8 * 60 * 60),
-                planned_pages=2,
+                planned_pages=6,
+            )
+            too_many, reason = claim_live_attempt(
+                root,
+                now=base + (10 * 60 * 60),
+                planned_pages=1,
             )
         self.assertTrue(first)
         self.assertTrue(second)
         self.assertTrue(third)
         self.assertTrue(fourth)
+        self.assertTrue(fifth)
         self.assertFalse(too_many)
-        self.assertIn("41쪽", reason)
+        self.assertIn("46쪽", reason)
 
     def test_rolling_item_envelope_crosses_calendar_boundary(self):
         base = time.mktime((2026, 9, 2, 23, 0, 0, 0, 0, -1))
@@ -250,10 +260,16 @@ class PatchrightCanaryTest(unittest.TestCase):
                 now=base + (6 * 60 * 60),
                 planned_items=600,
             )
+            fifth, reason = claim_live_attempt(
+                root,
+                now=base + (8 * 60 * 60),
+                planned_items=600,
+            )
         self.assertTrue(first)
         self.assertTrue(second)
         self.assertTrue(too_many)
-        self.assertFalse(fourth)
+        self.assertTrue(fourth)
+        self.assertFalse(fifth)
         self.assertIn("최근 24시간", reason)
 
     def test_rolling_envelope_expires_after_twenty_four_hours(self):
