@@ -46,7 +46,7 @@ class PatchrightDailyScheduleTest(unittest.TestCase):
             _remaining_page_count(
                 {"daily_date": "2026-09-03", "daily_items_reserved": 1_200}
             ),
-            5,
+            10,
         )
         self.assertEqual(
             _remaining_page_count(
