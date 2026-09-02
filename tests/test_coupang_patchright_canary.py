@@ -176,19 +176,111 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertIn("1,500", reason)
         self.assertEqual(guard["daily_items_reserved"], 1_200)
 
-    def test_daily_session_envelope_refuses_fourth_session(self):
+    def test_daily_session_envelope_refuses_sixth_session(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             attempts = [
                 claim_live_attempt(root, now=base + (index * 3 * 60 * 60))
-                for index in range(4)
+                for index in range(6)
             ]
         self.assertEqual(
             [allowed for allowed, _reason in attempts],
-            [True, True, True, False],
+            [True, True, True, True, True, False],
         )
-        self.assertIn("3회", attempts[-1][1])
+        self.assertIn("5회", attempts[-1][1])
+
+    def test_rolling_page_envelope_refuses_twenty_sixth_page(self):
+        base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, _reason = claim_live_attempt(
+                root, now=base, planned_pages=10
+            )
+            second, _reason = claim_live_attempt(
+                root,
+                now=base + (2 * 60 * 60),
+                planned_pages=10,
+            )
+            too_many, reason = claim_live_attempt(
+                root,
+                now=base + (4 * 60 * 60),
+                planned_pages=6,
+            )
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertFalse(too_many)
+        self.assertIn("25쪽", reason)
+
+    def test_rolling_item_envelope_crosses_calendar_boundary(self):
+        base = time.mktime((2026, 9, 2, 23, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, _reason = claim_live_attempt(
+                root, now=base, planned_items=600
+            )
+            second, _reason = claim_live_attempt(
+                root,
+                now=base + (2 * 60 * 60),
+                planned_items=600,
+            )
+            too_many, reason = claim_live_attempt(
+                root,
+                now=base + (4 * 60 * 60),
+                planned_items=600,
+            )
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertFalse(too_many)
+        self.assertIn("최근 24시간", reason)
+
+    def test_rolling_envelope_expires_after_twenty_four_hours(self):
+        base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, _reason = claim_live_attempt(
+                root,
+                now=base,
+                planned_items=600,
+                planned_pages=10,
+            )
+            next_day, _reason = claim_live_attempt(
+                root,
+                now=base + (24 * 60 * 60),
+                planned_items=600,
+                planned_pages=10,
+            )
+            guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
+        self.assertTrue(first)
+        self.assertTrue(next_day)
+        self.assertEqual(len(guard["attempt_history"]), 1)
+
+    def test_clean_session_returns_unused_rolling_reservation(self):
+        base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            allowed, _reason = claim_live_attempt(
+                root,
+                now=base,
+                planned_items=600,
+                planned_pages=10,
+            )
+            settled, _reason = settle_live_attempt(
+                600,
+                120,
+                root,
+                planned_pages=10,
+                actual_pages=4,
+            )
+            next_allowed, _reason = claim_live_attempt(
+                root,
+                now=base + (2 * 60 * 60),
+                planned_items=600,
+                planned_pages=10,
+            )
+        self.assertTrue(allowed)
+        self.assertTrue(settled)
+        self.assertTrue(next_allowed)
 
     def test_daily_envelope_resets_on_next_calendar_day(self):
         first_day = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))

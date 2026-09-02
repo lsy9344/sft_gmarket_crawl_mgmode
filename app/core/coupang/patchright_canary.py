@@ -18,9 +18,12 @@ HOME_URL = "https://www.coupang.com/"
 CATEGORY_URL = "https://www.coupang.com/np/categories/{category_id}?page=1"
 MAX_ITEMS = 10
 MIN_LIVE_INTERVAL_SECONDS = 2 * 60 * 60
-MAX_LIVE_SESSIONS_PER_DAY = 3
+MAX_LIVE_SESSIONS_PER_DAY = 5
 MAX_DAILY_ITEMS = 1_500
 MAX_SESSION_ITEMS = 600
+ROLLING_WINDOW_SECONDS = 24 * 60 * 60
+MAX_ROLLING_PAGES = 25
+MAX_ROLLING_ITEMS = 1_500
 RECOVERY_RAMP_LIMITS = (60, 180, 600)
 BLOCK_RECOVERY_INTERVAL_SECONDS = 60 * 60
 BLOCK_STATUSES = {403, 418, 429}
@@ -128,13 +131,16 @@ def claim_live_attempt(
     *,
     now: float | None = None,
     planned_items: int = 0,
+    planned_pages: int = 0,
 ) -> tuple[bool, str]:
-    """실접속 1회를 예약한다. 차단·세션·일일 상한을 어기면 거절한다."""
+    """실접속 1회를 예약한다. 차단·간격·수량 상한을 어기면 거절한다."""
     if (
         not isinstance(planned_items, int)
         or not 0 <= planned_items <= MAX_SESSION_ITEMS
     ):
         return False, f"세션 예정 상품 수는 0~{MAX_SESSION_ITEMS}개여야 합니다."
+    if not isinstance(planned_pages, int) or not 0 <= planned_pages <= 10:
+        return False, "세션 예정 페이지 수는 0~10쪽이어야 합니다."
     current = time.time() if now is None else now
     try:
         guard = _read_guard(root)
@@ -149,6 +155,7 @@ def claim_live_attempt(
     daily_date = guard.get("daily_date")
     daily_sessions = guard.get("daily_sessions", 0)
     daily_items_reserved = guard.get("daily_items_reserved", 0)
+    attempt_history = guard.get("attempt_history")
     recovery_ramp_limit = guard.get("recovery_ramp_limit")
     if guard and (
         not isinstance(guard.get("blocked"), bool)
@@ -163,6 +170,22 @@ def claim_live_attempt(
         or not isinstance(daily_items_reserved, int)
         or daily_sessions < 0
         or daily_items_reserved < 0
+        or (
+            attempt_history is not None
+            and (
+                not isinstance(attempt_history, list)
+                or any(
+                    not isinstance(attempt, dict)
+                    or not isinstance(attempt.get("attempt_ts"), (int, float))
+                    or not isinstance(attempt.get("items"), int)
+                    or not 0 <= attempt["items"] <= MAX_ROLLING_ITEMS
+                    or not isinstance(attempt.get("pages"), int)
+                    or not 0 <= attempt["pages"] <= MAX_ROLLING_PAGES
+                    or not isinstance(attempt.get("settled"), bool)
+                    for attempt in attempt_history
+                )
+            )
+        )
         or (
             recovery_ramp_limit is not None
             and recovery_ramp_limit not in RECOVERY_RAMP_LIMITS
@@ -182,6 +205,34 @@ def claim_live_attempt(
         if remaining > 0:
             minutes = int(remaining // 60) + 1
             return False, f"다음 Patchright 시험까지 {minutes}분 남았습니다."
+    if attempt_history is None:
+        attempt_history = []
+        if isinstance(last_attempt, (int, float)):
+            legacy_items = daily_items_reserved
+            legacy_pages = max(
+                1,
+                min(MAX_ROLLING_PAGES, (legacy_items + 59) // 60),
+            )
+            attempt_history.append(
+                {
+                    "attempt_ts": last_attempt,
+                    "items": legacy_items,
+                    "pages": legacy_pages,
+                    "settled": True,
+                }
+            )
+    cutoff = current - ROLLING_WINDOW_SECONDS
+    recent_attempts = [
+        dict(attempt)
+        for attempt in attempt_history
+        if attempt["attempt_ts"] > cutoff
+    ]
+    rolling_items = sum(attempt["items"] for attempt in recent_attempts)
+    rolling_pages = sum(attempt["pages"] for attempt in recent_attempts)
+    if rolling_items + planned_items > MAX_ROLLING_ITEMS:
+        return False, f"최근 24시간 상품 상한 {MAX_ROLLING_ITEMS:,}개를 넘습니다."
+    if rolling_pages + planned_pages > MAX_ROLLING_PAGES:
+        return False, f"최근 24시간 페이지 상한 {MAX_ROLLING_PAGES}쪽을 넘습니다."
     current_date = time.strftime("%Y-%m-%d", time.localtime(current))
     if daily_date != current_date:
         daily_sessions = 0
@@ -194,6 +245,14 @@ def claim_live_attempt(
     if daily_items_reserved + planned_items > MAX_DAILY_ITEMS:
         return False, f"오늘 예약 상품 상한 {MAX_DAILY_ITEMS:,}개를 넘습니다."
     try:
+        recent_attempts.append(
+            {
+                "attempt_ts": current,
+                "items": planned_items,
+                "pages": planned_pages,
+                "settled": False,
+            }
+        )
         next_guard = {
             "last_attempt_at": time.strftime(
                 "%Y-%m-%d %H:%M:%S", time.localtime(current)
@@ -203,6 +262,7 @@ def claim_live_attempt(
             "daily_date": current_date,
             "daily_sessions": daily_sessions + 1,
             "daily_items_reserved": daily_items_reserved + planned_items,
+            "attempt_history": recent_attempts,
         }
         if history is not None:
             next_guard["block_history"] = history
@@ -218,14 +278,23 @@ def settle_live_attempt(
     planned_items: int,
     actual_items: int,
     root: Path | None = None,
+    *,
+    planned_pages: int = 0,
+    actual_pages: int = 0,
 ) -> tuple[bool, str]:
-    """정상 종료한 세션의 미사용 예약량만 일일 한도에 돌려놓는다."""
+    """정상 종료한 세션의 미사용 예약량만 수량 상한에 돌려놓는다."""
     if (
         not isinstance(planned_items, int)
         or not isinstance(actual_items, int)
         or not 0 <= actual_items <= planned_items <= MAX_SESSION_ITEMS
     ):
         return False, "세션 예약량과 실제 처리량이 올바르지 않습니다."
+    if (
+        not isinstance(planned_pages, int)
+        or not isinstance(actual_pages, int)
+        or not 0 <= actual_pages <= planned_pages <= 10
+    ):
+        return False, "세션 예약 페이지와 실제 처리 페이지가 올바르지 않습니다."
     try:
         guard = _read_guard(root)
     except CanaryGuardError as error:
@@ -233,7 +302,19 @@ def settle_live_attempt(
     reserved = guard.get("daily_items_reserved")
     if not isinstance(reserved, int) or reserved < planned_items:
         return False, "일일 예약 상품 기록이 실제 세션과 맞지 않습니다."
+    attempt_history = guard.get("attempt_history")
+    if not isinstance(attempt_history, list) or not attempt_history:
+        return False, "최근 24시간 예약 기록이 실제 세션과 맞지 않습니다."
+    attempt = attempt_history[-1]
+    if (
+        not isinstance(attempt, dict)
+        or attempt.get("settled") is not False
+        or attempt.get("items") != planned_items
+        or attempt.get("pages") != planned_pages
+    ):
+        return False, "최근 24시간 예약 기록이 실제 세션과 맞지 않습니다."
     guard["daily_items_reserved"] = reserved - (planned_items - actual_items)
+    attempt.update(items=actual_items, pages=actual_pages, settled=True)
     _write_guard(guard, root)
     return True, ""
 
@@ -450,7 +531,9 @@ def run_canary(
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     if live:
-        allowed, reason = claim_live_attempt(state_root, planned_items=limit)
+        allowed, reason = claim_live_attempt(
+            state_root, planned_items=limit, planned_pages=1
+        )
         if not allowed:
             return _emit(state, "guard_refused", on_event, reason=reason)
 

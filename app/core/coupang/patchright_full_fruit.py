@@ -530,7 +530,9 @@ def _run_listing(
         MAX_SESSION_PRODUCTS,
     )
     allowed, reason = claim_live_attempt(
-        state_root, planned_items=planned_items
+        state_root,
+        planned_items=planned_items,
+        planned_pages=page_attempt_limit,
     )
     if not allowed:
         result.update(event="guard_refused", reason=reason)
@@ -697,7 +699,11 @@ def _run_listing(
                 page_results=page_results,
             )
             settled, reason = settle_live_attempt(
-                planned_items, total_product_count, state_root
+                planned_items,
+                total_product_count,
+                state_root,
+                planned_pages=page_attempt_limit,
+                actual_pages=len(page_results),
             )
             if not settled:
                 result.update(event="failed", reason=reason)
