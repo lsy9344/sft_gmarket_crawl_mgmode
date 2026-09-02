@@ -156,7 +156,7 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertIn("1분", reason)
         self.assertTrue(on_time)
 
-    def test_daily_product_envelope_refuses_more_than_eighteen_hundred(self):
+    def test_daily_product_envelope_refuses_more_than_twenty_two_eighty(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -177,24 +177,24 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertTrue(second)
         self.assertTrue(third)
         self.assertFalse(fourth)
-        self.assertIn("1,800", reason)
+        self.assertIn("2,280", reason)
         self.assertEqual(guard["daily_items_reserved"], 1_800)
 
-    def test_daily_session_envelope_refuses_seventh_session(self):
+    def test_daily_session_envelope_refuses_eighth_session(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             attempts = [
                 claim_live_attempt(root, now=base + (index * 3 * 60 * 60))
-                for index in range(7)
+                for index in range(8)
             ]
         self.assertEqual(
             [allowed for allowed, _reason in attempts],
-            [True, True, True, True, True, True, False],
+            [True, True, True, True, True, True, True, False],
         )
-        self.assertIn("6회", attempts[-1][1])
+        self.assertIn("7회", attempts[-1][1])
 
-    def test_rolling_page_envelope_refuses_thirty_fourth_page(self):
+    def test_rolling_page_envelope_refuses_forty_second_page(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -211,16 +211,22 @@ class PatchrightCanaryTest(unittest.TestCase):
                 now=base + (4 * 60 * 60),
                 planned_pages=10,
             )
-            too_many, reason = claim_live_attempt(
+            fourth, _reason = claim_live_attempt(
                 root,
                 now=base + (6 * 60 * 60),
-                planned_pages=4,
+                planned_pages=10,
+            )
+            too_many, reason = claim_live_attempt(
+                root,
+                now=base + (8 * 60 * 60),
+                planned_pages=2,
             )
         self.assertTrue(first)
         self.assertTrue(second)
         self.assertTrue(third)
+        self.assertTrue(fourth)
         self.assertFalse(too_many)
-        self.assertIn("33쪽", reason)
+        self.assertIn("41쪽", reason)
 
     def test_rolling_item_envelope_crosses_calendar_boundary(self):
         base = time.mktime((2026, 9, 2, 23, 0, 0, 0, 0, -1))
