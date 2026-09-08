@@ -19,6 +19,8 @@ STATUS_BLOCKED = "blocked"
 # 카테고리 출처 상수
 SOURCE_BEST = "best"
 SOURCE_SUPERDEAL = "superdeal"
+# 전체 카테고리 탭(대/중/소 카테고리 선택 수집) 출처 — PrescanResult.source 로 사용
+SOURCE_CATEGORY = "category"
 
 
 @dataclass

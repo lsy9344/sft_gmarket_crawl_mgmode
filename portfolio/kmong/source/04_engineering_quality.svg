@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1000" viewBox="0 0 1200 1000">
+  <defs>
+    <linearGradient id="header" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071522"/>
+      <stop offset="1" stop-color="#123a58"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="1000" fill="#f6f8fa"/>
+  <rect width="1200" height="340" fill="url(#header)"/>
+  <text x="70" y="70" font-family="Noto Sans CJK KR, sans-serif" font-size="18" font-weight="700" letter-spacing="2" fill="#63e4cd">CORE FEATURES</text>
+  <text x="70" y="142" font-family="Noto Sans CJK KR, sans-serif" font-size="58" font-weight="800" letter-spacing="-2" fill="#ffffff">중단해도, 다시 이어서.</text>
+  <text x="72" y="225" font-family="Noto Sans CJK KR, sans-serif" font-size="24" fill="#c8dae7">장시간 수집 업무를 위한 데이터 내구성 중심 설계</text>
+  <g transform="translate(70 410)">
+    <rect width="510" height="190" rx="26" fill="#e4f7f2"/>
+    <text x="34" y="62" font-family="Noto Sans CJK KR, sans-serif" font-size="27" font-weight="800" fill="#0a2035">체크포인트 복구</text>
+    <text x="34" y="108" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">중간 결과를 먼저 저장하고</text>
+    <text x="34" y="142" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">다음 실행에서 이어서 수집</text>
+    <rect x="550" width="510" height="190" rx="26" fill="#e8f0fb"/>
+    <text x="584" y="62" font-family="Noto Sans CJK KR, sans-serif" font-size="27" font-weight="800" fill="#0a2035">중복 수집 방지</text>
+    <text x="584" y="108" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">수집 이력과 실행 계획을 분리해</text>
+    <text x="584" y="142" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">같은 대상은 한 번만 처리</text>
+    <rect y="230" width="510" height="190" rx="26" fill="#edf1f4"/>
+    <text x="34" y="292" font-family="Noto Sans CJK KR, sans-serif" font-size="27" font-weight="800" fill="#0a2035">실시간 제어</text>
+    <text x="34" y="338" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">일시정지 · 재개 · 취소</text>
+    <text x="34" y="372" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">UI 응답성을 유지하는 QThread 구조</text>
+    <rect x="550" y="230" width="510" height="190" rx="26" fill="#fff1d8"/>
+    <text x="584" y="292" font-family="Noto Sans CJK KR, sans-serif" font-size="27" font-weight="800" fill="#0a2035">240 passed</text>
+    <text x="584" y="338" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">Linux · Windows 자동화 테스트</text>
+    <text x="584" y="372" font-family="Noto Sans CJK KR, sans-serif" font-size="19" fill="#567082">단일 EXE 배포 검증</text>
+  </g>
+  <text x="70" y="930" font-family="Noto Sans CJK KR, sans-serif" font-size="16" fill="#71899a">실제 운영은 대상 사이트 정책과 데이터 이용 권한을 확인한 범위에서 진행합니다.</text>
+</svg>

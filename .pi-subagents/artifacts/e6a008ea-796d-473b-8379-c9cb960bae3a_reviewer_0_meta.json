@@ -1,0 +1,143 @@
+{
+  "runId": "e6a008ea-796d-473b-8379-c9cb960bae3a",
+  "agent": "reviewer",
+  "task": "[Read from: /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/plan.md, /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/progress.md]\n\nReview the completed Windows release packaging in /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode. Scope: dist/SellerCollector.exe, dist/SHA256SUMS.txt, the external CSV/JSON in coupang_crawl/output, and build staging at /mnt/c/Users/dltnd/Desktop/SellerCollector_build_20260826. Confirm the evidence supports a usable single Windows EXE containing the latest Coupang category tab while data remains external. Inspect files/commands/artifacts directly. Do not modify project/source files. Report only concrete blockers or fixes worth doing now, plus a pass/fail verdict and residual risks.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 141060,
+        "output": 10693,
+        "cacheRead": 294400,
+        "cacheWrite": 0,
+        "cost": 1.1732900000000002,
+        "turns": 10
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "No blockers. Exact artifact hashes, Windows PE format, valid signature/runtime verification, bundled category modules, external 9,852-row CSV/JSON, and residual risks were verified with concrete paths."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "(cd dist && sha256sum -c SHA256SUMS.txt) and staging equivalent",
+          "result": "passed",
+          "summary": "Both SellerCollector.exe checksum manifests verified OK."
+        },
+        {
+          "command": "sha256sum dist/SellerCollector.exe staging/dist/SellerCollector.exe external CSV external JSON",
+          "result": "passed",
+          "summary": "Both EXEs matched 75851aea...cfe7; data hashes matched BUILD_INPUTS.txt."
+        },
+        {
+          "command": "powershell.exe ... SellerCollector.exe --verify-runtime",
+          "result": "passed",
+          "summary": "EXE ran on Windows and verified Camoufox, browser, GeoIP, and Patchright Chromium."
+        },
+        {
+          "command": "powershell.exe Get-AuthenticodeSignature/Get-FileHash",
+          "result": "passed",
+          "summary": "Signature status Valid; signer CN=SellerCollector Internal Release; hash and size matched."
+        },
+        {
+          "command": "python -m unittest discover -s tests -v against build staging",
+          "result": "passed",
+          "summary": "274 tests passed, including three-tab UI and Coupang category tests."
+        },
+        {
+          "command": "sha256sum -c SOURCE_SHA256SUMS.txt",
+          "result": "passed",
+          "summary": "All staged source inputs matched the recorded manifest."
+        },
+        {
+          "command": "Python CSV/JSON structural and equality validation",
+          "result": "passed",
+          "summary": "9,852 rows in each file; CSV and JSON values matched; all vendor IDs were unique."
+        }
+      ],
+      "validationOutput": [
+        "dist/SellerCollector.exe is PE32+ x86-64 for Microsoft Windows, 141752080 bytes.",
+        "Project and staging EXE SHA-256: 75851aea347f18be7dfa6e0539c67ab3a29b3c9b2a3750ec293b05c31653cfe7.",
+        "PyInstaller PYZ includes app.core.coupang.categories, app.ui.category_panel, and app.workers.category_worker.",
+        "Build metadata records category_head=bb57fe83f0c10b1e2bc1cb72131b33a0cd7eb622.",
+        "External CSV/JSON contain 9,852 matching seller records and are absent from the PyInstaller build list."
+      ],
+      "residualRisks": [
+        "Full EXE GUI launch and a new live collection were not rerun during this review.",
+        "The internal self-signed certificate may not be trusted outside configured organization machines.",
+        "The inspected GeoIP runtime is 29 days old and close to its 30-day expiry.",
+        "Project dist contains legacy artifacts; publish only the clean staging EXE and checksum file.",
+        "Requested plan.md and progress.md were absent."
+      ],
+      "noStagedFiles": false,
+      "diffSummary": "Review-only; no files were modified. The working tree already contained staged and untracked changes.",
+      "reviewFindings": [
+        "no blockers",
+        "low: /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/dist - legacy non-release artifacts remain; distribute only SellerCollector.exe and SHA256SUMS.txt from the clean staging dist",
+        "operational: Windows runtime GeoIP is 29 days old; refresh with SellerCollector.exe --setup-runtime before expiry"
+      ],
+      "manualNotes": "PASS. Evidence supports a usable single Windows EXE with the latest Coupang category tab and external CSV/JSON data."
+    }
+  },
+  "transcriptPath": "/home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/.pi-subagents/artifacts/e6a008ea-796d-473b-8379-c9cb960bae3a_reviewer_0_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1787707524996
+}

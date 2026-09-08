@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face{font-family:'Pretendard';src:url('fonts/PretendardVariable.woff2') format('woff2-variations');font-weight:45 920;font-display:block;}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:1200px;height:1200px;overflow:hidden;}
+body{
+  font-family:'Pretendard','Noto Sans CJK KR',sans-serif;
+  background:#0B1220;color:#F8FAFC;position:relative;
+  -webkit-font-smoothing:antialiased;
+}
+/* backdrop */
+.bg-grad{position:absolute;inset:0;background:
+  radial-gradient(900px 620px at 82% -10%, rgba(3,105,161,.42), transparent 62%),
+  radial-gradient(760px 560px at -12% 32%, rgba(14,116,144,.25), transparent 60%),
+  linear-gradient(158deg,#0E1A2F 0%,#0B1220 52%,#0A0F1C 100%);}
+.bg-grid{position:absolute;inset:0;
+  background-image:linear-gradient(rgba(148,163,184,.06) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(148,163,184,.06) 1px,transparent 1px);
+  background-size:48px 48px;
+  -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.25) 55%,transparent 85%);}
+.wrap{position:absolute;inset:0;padding:72px 76px 0;}
+
+/* header */
+.badge{display:inline-flex;align-items:center;gap:10px;padding:10px 18px;border-radius:999px;
+  background:rgba(56,189,248,.10);border:1px solid rgba(56,189,248,.35);
+  font-size:19px;font-weight:600;color:#7DD3FC;letter-spacing:.01em;}
+.badge svg{width:20px;height:20px;}
+h1{margin-top:30px;font-size:78px;line-height:1.16;font-weight:850;letter-spacing:-.022em;}
+h1 .accent{color:#38BDF8;}
+.sub{margin-top:22px;font-size:27px;font-weight:450;color:#B6C2D4;letter-spacing:-.005em;line-height:1.5;}
+.sub b{color:#E2E8F0;font-weight:700;}
+
+/* stats */
+.stats{display:flex;gap:14px;margin-top:34px;}
+.stat{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:14px;
+  background:rgba(255,255,255,.05);border:1px solid rgba(148,163,184,.22);}
+.stat svg{width:22px;height:22px;flex:none;}
+.stat .n{font-size:21px;font-weight:750;color:#F1F5F9;}
+.stat .l{font-size:21px;font-weight:450;color:#94A3B8;}
+
+/* app window */
+.window{position:absolute;left:76px;right:76px;top:596px;height:700px;border-radius:18px 18px 0 0;
+  background:#F7F9FC;box-shadow:0 -8px 80px rgba(2,6,23,.55),0 0 0 1px rgba(148,163,184,.25);
+  overflow:hidden;color:#0F172A;}
+.titlebar{height:52px;background:#FFFFFF;border-bottom:1px solid #E5EAF1;display:flex;align-items:center;padding:0 22px;gap:9px;}
+.dot{width:13px;height:13px;border-radius:50%;}
+.titlebar .t{margin-left:12px;font-size:18px;font-weight:650;color:#334155;}
+.tabs{display:flex;gap:6px;padding:14px 22px 0;background:#FFFFFF;}
+.tab{padding:11px 26px;border-radius:10px 10px 0 0;font-size:19px;font-weight:600;color:#64748B;background:#EEF2F7;border:1px solid #E5EAF1;border-bottom:none;}
+.tab.on{background:#0369A1;color:#fff;border-color:#0369A1;font-weight:700;}
+.appbody{padding:20px 22px;background:#F7F9FC;border-top:1px solid #E5EAF1;}
+
+.panel{background:#fff;border:1px solid #E5EAF1;border-radius:12px;padding:16px 20px;}
+.panel + .panel{margin-top:14px;}
+.ptitle{font-size:16px;font-weight:700;color:#475569;letter-spacing:.02em;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.ptitle svg{width:17px;height:17px;}
+
+.prog-row{display:flex;align-items:center;gap:16px;}
+.prog-track{flex:1;height:16px;border-radius:999px;background:#E8EEF5;overflow:hidden;}
+.prog-fill{width:62%;height:100%;border-radius:999px;background:linear-gradient(90deg,#0369A1,#38BDF8);}
+.prog-num{font-size:22px;font-weight:800;color:#0369A1;font-variant-numeric:tabular-nums;}
+.prog-meta{display:flex;gap:22px;margin-top:12px;font-size:17px;color:#64748B;font-variant-numeric:tabular-nums;}
+.prog-meta b{color:#0F172A;font-weight:700;}
+.ok{color:#059669;font-weight:700;}
+
+table{width:100%;border-collapse:collapse;font-size:17px;}
+th{text-align:left;font-weight:650;color:#64748B;padding:9px 12px;background:#F1F5F9;border-bottom:1px solid #E5EAF1;}
+td{padding:10px 12px;border-bottom:1px solid #EEF2F7;color:#1E293B;font-variant-numeric:tabular-nums;}
+tr:last-child td{border-bottom:none;}
+.chip-ok{display:inline-block;padding:3px 12px;border-radius:999px;background:#ECFDF5;color:#059669;font-size:15px;font-weight:700;}
+
+/* floating cards */
+.float{position:absolute;display:flex;align-items:center;gap:12px;padding:16px 22px;border-radius:16px;
+  background:#FFFFFF;color:#0F172A;box-shadow:0 18px 50px rgba(2,6,23,.45);border:1px solid #E5EAF1;}
+.float .icon{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex:none;}
+.float .icon svg{width:23px;height:23px;}
+.float .tt{font-size:19px;font-weight:750;letter-spacing:-.01em;}
+.float .dd{font-size:16px;color:#64748B;margin-top:2px;font-weight:500;}
+</style>
+</head>
+<body>
+<div class="bg-grad"></div>
+<div class="bg-grid"></div>
+
+<div class="wrap">
+  <span class="badge">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#7DD3FC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg>
+    Windows 데스크톱 자동화 프로그램
+  </span>
+  <h1>쇼핑몰 판매자 정보,<br><span class="accent">클릭 한 번</span>으로 수집</h1>
+  <div class="sub"><b>Gmarket · Coupang · 식봄</b> — 서로 다른 3개 플랫폼을 하나의 프로그램으로.<br>수집 전 예상 시간 확인부터 Excel 저장까지 자동으로 끝냅니다.</div>
+
+  <div class="stats">
+    <div class="stat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
+      <span class="n">3개</span><span class="l">플랫폼 통합</span>
+    </div>
+    <div class="stat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+      <span class="n">22개</span><span class="l">카테고리</span>
+    </div>
+    <div class="stat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
+      <span class="n">240개</span><span class="l">자동 테스트 통과</span>
+    </div>
+    <div class="stat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 9.4 7.55 4.24M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
+      <span class="n">단일 EXE</span><span class="l">간편 배포</span>
+    </div>
+  </div>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <span class="dot" style="background:#FF5F57"></span>
+    <span class="dot" style="background:#FEBC2E"></span>
+    <span class="dot" style="background:#28C840"></span>
+    <span class="t">판매자 정보 수집기 v3.0</span>
+  </div>
+  <div class="tabs">
+    <span class="tab on">Gmarket</span><span class="tab">Coupang</span><span class="tab">식봄</span>
+  </div>
+  <div class="appbody">
+    <div class="panel">
+      <div class="ptitle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#0369A1" stroke-width="2" stroke-linecap="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        진행 상황 — 베스트 · 신선식품
+      </div>
+      <div class="prog-row">
+        <div class="prog-track"><div class="prog-fill"></div></div>
+        <span class="prog-num">62%</span>
+      </div>
+      <div class="prog-meta">
+        <span>경과 <b>12:40</b></span>
+        <span>남은 시간 <b>07:36</b></span>
+        <span>속도 <b>9.8건/분</b></span>
+        <span class="ok">성공 124</span>
+        <span style="color:#94A3B8">실패 0</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ptitle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#0369A1" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="m7 13 4-4 4 3 5-6"/></svg>
+        수집 결과 미리보기
+      </div>
+      <table>
+        <tr><th>스토어명</th><th>상호명</th><th>대표자</th><th>사업자번호</th><th>상태</th></tr>
+        <tr><td>한아름유통</td><td>주식회사 한아름</td><td>김○○</td><td>123-45-*****</td><td><span class="chip-ok">수집 완료</span></td></tr>
+        <tr><td>바른먹거리</td><td>바른먹거리(주)</td><td>이○○</td><td>456-78-*****</td><td><span class="chip-ok">수집 완료</span></td></tr>
+        <tr><td>도담상회</td><td>도담상회</td><td>박○○</td><td>789-01-*****</td><td><span class="chip-ok">수집 완료</span></td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="float" style="right:44px;top:548px;">
+  <div class="icon" style="background:#E0F2FE;">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#0369A1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+  </div>
+  <div><div class="tt">사전 조사</div><div class="dd">수집 전에 예상 시간 미리 확인</div></div>
+</div>
+<div class="float" style="left:44px;bottom:96px;">
+  <div class="icon" style="background:#ECFDF5;">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>
+  </div>
+  <div><div class="tt">Excel 바로 열기</div><div class="dd">CSV · JSON 동시 저장</div></div>
+</div>
+<div class="float" style="right:64px;bottom:180px;">
+  <div class="icon" style="background:#FEF3C7;">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+  </div>
+  <div><div class="tt">멈춰도 안전</div><div class="dd">일시정지 · 이어서 수집</div></div>
+</div>
+</body>
+</html>

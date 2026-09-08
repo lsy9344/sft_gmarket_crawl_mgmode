@@ -23,12 +23,18 @@ from app.core.coupang.categories import (
     count_nodes,
 )
 from app.core.crawler import reconcile_leftover_checkpoints
+from app.core.gmarket_categories import (
+    DEFAULT_SEED_CACHE_PATH as GMARKET_SEED_CACHE_PATH,
+    GmarketCategoryTreeCache,
+    count_nodes as gmcat_count_nodes,
+)
 from app.core.plan import build_crawl_plan
 from app.core.storage import LoadStatus, Storage
 from app.models.records import PrescanResult
 from app.ui.category_panel import CategoryPanel
 from app.ui.coupang_panel import CoupangPanel
 from app.ui.foodspring_panel import FoodSpringPanel
+from app.ui.gmarket_category_panel import GmarketCategoryPanel
 from app.ui.widgets.log_panel import LogPanel
 from app.ui.widgets.prescan_table import PrescanTable
 from app.ui.widgets.progress_panel import ProgressPanel
@@ -39,6 +45,8 @@ from app.workers.coupang_login_worker import CoupangLoginWorker
 from app.workers.coupang_worker import CoupangWorker
 from app.workers.crawl_worker import CrawlWorker
 from app.workers.foodspring_worker import FoodSpringWorker
+from app.workers.gmarket_category_crawl_worker import GmarketCategoryCrawlWorker
+from app.workers.gmarket_category_worker import GmarketCategoryWorker
 from app.workers.prescan_worker import PrescanWorker
 from app.workers.search_worker import SearchWorker
 
@@ -81,9 +89,20 @@ class MainWindow(QMainWindow):
             seed_path=DEFAULT_SEED_CACHE_PATH,
         )
 
+        # Gmarket 카테고리 상태
+        self.gmcat_control: Control | None = None
+        self.gmcat_worker: GmarketCategoryWorker | None = None      # 트리 로드
+        self.gmcat_crawl_worker: GmarketCategoryCrawlWorker | None = None
+        self.gmcat_cache = GmarketCategoryTreeCache(
+            DEFAULT_OUTPUT_DIR / "gmarket_category_tree.json",
+            seed_path=GMARKET_SEED_CACHE_PATH,
+        )
+        self._gmcat_had_error = False
+
         self._build_ui()
         self._set_ui_state("idle")
         self._load_category_cache()
+        self._load_gmcat_category_cache()
 
     # ── UI 구성 ────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -174,6 +193,21 @@ class MainWindow(QMainWindow):
         self.category_panel.btn_cancel.clicked.connect(self.on_category_cancel)
         self.category_panel.btn_open_result.clicked.connect(self._on_category_open_result)
 
+        # Gmarket 카테고리 탭 (2026-09-08 신규: 전체 대/중/소 카테고리 선택 수집)
+        self.gmarket_category_panel = GmarketCategoryPanel()
+        self.tab_widget.addTab(self.gmarket_category_panel, "Gmarket 카테고리")
+
+        self.gmarket_category_panel.btn_refresh_categories.clicked.connect(
+            self.on_gmcat_refresh
+        )
+        self.gmarket_category_panel.btn_start.clicked.connect(self.on_gmcat_start)
+        self.gmarket_category_panel.btn_pause.clicked.connect(self.on_gmcat_pause)
+        self.gmarket_category_panel.btn_resume.clicked.connect(self.on_gmcat_resume)
+        self.gmarket_category_panel.btn_cancel.clicked.connect(self.on_gmcat_cancel)
+        self.gmarket_category_panel.btn_open_result.clicked.connect(
+            self._on_gmcat_open_result
+        )
+
         self.setCentralWidget(self.tab_widget)
         self._show_status("준비됨")
 
@@ -206,12 +240,14 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(gmarket_busy)
         self.foodspring_panel.set_external_busy(gmarket_busy)
         self.category_panel.set_external_busy(gmarket_busy)
+        self.gmarket_category_panel.set_external_busy(gmarket_busy)
 
     # ── 전역 단일 워커 ─────────────────────────────────────────────
     def _active_worker(self):
         for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker,
                        self.foodspring_worker, self.category_worker, self.categories_worker,
-                       self.category_login_worker):
+                       self.category_login_worker, self.gmcat_worker,
+                       self.gmcat_crawl_worker):
             if worker is not None and worker.isRunning():
                 return worker
         return None
@@ -227,6 +263,10 @@ class MainWindow(QMainWindow):
             return self.categories_control
         if self.category_login_worker is not None and self.category_login_worker.isRunning():
             return self.category_login_control
+        if self.gmcat_worker is not None and self.gmcat_worker.isRunning():
+            return self.gmcat_control
+        if self.gmcat_crawl_worker is not None and self.gmcat_crawl_worker.isRunning():
+            return self.gmcat_control
         return self.control
 
     def _coupang_runtime_ready(self) -> bool:
@@ -252,6 +292,7 @@ class MainWindow(QMainWindow):
         self._set_gmarket_busy(busy)
         self.coupang_panel.set_external_busy(busy)
         self.foodspring_panel.set_external_busy(busy)
+        self.gmarket_category_panel.set_external_busy(busy)
 
     # ── Gmarket: 사전 조사 ─────────────────────────────────────────
     def _make_storage(self) -> Storage | None:
@@ -630,6 +671,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_state("running")
         self._set_gmarket_busy(True)
         self.foodspring_panel.set_external_busy(True)
+        self.gmarket_category_panel.set_external_busy(True)
         self._show_status("Coupang 수집 진행 중...")
         worker.start()
 
@@ -740,6 +782,7 @@ class MainWindow(QMainWindow):
 
         self._set_gmarket_busy(False)
         self.foodspring_panel.set_external_busy(False)
+        self.gmarket_category_panel.set_external_busy(False)
         self._set_ui_state("prescanned" if self.prescan_results else "idle")
         summary = self.coupang_worker.summary if self.coupang_worker else None
         if summary is None:
@@ -826,6 +869,7 @@ class MainWindow(QMainWindow):
         self.foodspring_panel.set_state("running")
         self._set_gmarket_busy(True)
         self.coupang_panel.set_external_busy(True)
+        self.gmarket_category_panel.set_external_busy(True)
         self._show_status("Foodspring 수집 진행 중...")
         try:
             worker.start()
@@ -938,6 +982,7 @@ class MainWindow(QMainWindow):
 
         self._set_gmarket_busy(False)
         self.coupang_panel.set_external_busy(False)
+        self.gmarket_category_panel.set_external_busy(False)
         summary = self.foodspring_worker.summary if self.foodspring_worker else None
         if summary is None:
             self.foodspring_panel.set_state("failed")
@@ -955,6 +1000,238 @@ class MainWindow(QMainWindow):
     def _maybe_close_after_worker(self) -> None:
         if self._closing:
             self.close()
+
+    # ── Gmarket 카테고리 탭 ───────────────────────────────────────────
+
+    def _load_gmcat_category_cache(self) -> None:
+        roots = self.gmcat_cache.load()
+        if roots is None:
+            return
+        self.gmarket_category_panel.set_category_roots(roots)
+        total = gmcat_count_nodes(roots)
+        source = "로컬 캐시" if (self.gmcat_cache.path.exists()) else "기본 목록"
+        self.gmarket_category_panel.set_cache_label(
+            f"대분류 {len(roots)} · 전체 {total:,}개 — {source} 사용 중 "
+            "(새로고침으로 최신화 가능)"
+        )
+
+    def on_gmcat_refresh(self) -> None:
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            return
+        self.gmcat_control = Control()
+        self.gmarket_category_panel.set_loading_categories(True)
+        self.gmarket_category_panel.append_log(
+            "[카테고리] Gmarket 에서 전체 카테고리 목록을 불러옵니다 (약 1분)..."
+        )
+        worker = GmarketCategoryWorker(self.gmcat_cache, self.gmcat_control)
+        worker.log_message.connect(self.gmarket_category_panel.append_log)
+        worker.tree_loaded.connect(self._on_gmcat_loaded)
+        worker.error_occurred.connect(self._on_gmcat_error)
+        worker.finished.connect(self._on_gmcat_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.gmcat_worker = worker
+        worker.start()
+
+    def _on_gmcat_loaded(self, roots, fetched_at: str, total: int) -> None:
+        self.gmarket_category_panel.set_category_roots(roots, fetched_at, total)
+        self.gmarket_category_panel.append_log(
+            f"[카테고리] {len(roots)}개 대분류, {total:,}개 카테고리 로드 완료"
+        )
+        self._show_status(f"Gmarket 카테고리 {total:,}개 로드 완료")
+
+    def _on_gmcat_error(self, msg: str) -> None:
+        self.gmarket_category_panel.append_log(f"[카테고리 오류] {msg}")
+        roots = self.gmcat_cache.load()
+        if roots is not None:
+            self.gmarket_category_panel.set_category_roots(roots)
+            self.gmarket_category_panel.append_log(
+                "[로컬 목록] 새로고침 대신 저장된 카테고리 목록을 사용합니다."
+            )
+            self._show_status("Gmarket 카테고리 로컬 목록 사용 중")
+            return
+        self.gmarket_category_panel.set_cache_label(
+            "카테고리 로드 실패 — 사용 가능한 로컬 목록 없음"
+        )
+        QMessageBox.warning(self, "카테고리 로드 실패", msg)
+
+    def _on_gmcat_thread_done(self) -> None:
+        self.gmcat_worker = None
+        self.gmarket_category_panel.set_loading_categories(False)
+
+    # ── Gmarket 카테고리: 수집 ─────────────────────────────────────────
+    def on_gmcat_start(self) -> None:
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            return
+
+        config_run = self.gmarket_category_panel.build_config()
+        if config_run is None:
+            QMessageBox.warning(
+                self, "설정 오류",
+                "카테고리를 선택하고 출력 폴더를 지정한 뒤 설정 값을 확인하세요.",
+            )
+            return
+
+        # 리스팅은 브라우저(StealthySession) 사용 → 런타임 preflight
+        from app.core.gmarket_preflight import check_gmarket_runtime
+
+        runtime = check_gmarket_runtime()
+        if not runtime.ok:
+            QMessageBox.critical(self, "Gmarket 런타임 미준비", runtime.message)
+            return
+
+        try:
+            config_run.output_dir.mkdir(parents=True, exist_ok=True)
+            import tempfile as _tf
+
+            fd, tmp_path = _tf.mkstemp(dir=str(config_run.output_dir), prefix=".preflight_")
+            os.close(fd)
+            os.unlink(tmp_path)
+        except OSError as e:
+            QMessageBox.critical(
+                self, "출력 경로 오류",
+                f"출력 폴더에 쓸 수 없습니다:\n{config_run.output_dir}\n\n{e}",
+            )
+            return
+
+        # 하위 포함 시 규모 안내 (확인 후 진행)
+        n_targets = len(config_run.targets)
+        if n_targets > 1:
+            reply = QMessageBox.question(
+                self, "하위 카테고리 포함 수집",
+                f"선택 카테고리 + 하위 총 {n_targets}개를 수집합니다.\n"
+                f"(카테고리당 최대 {config_run.max_pages}페이지 리스팅 후 판매자정보 수집)\n"
+                f"오래 걸릴 수 있습니다 — 중간에 취소해도 모은 결과는 저장됩니다.\n\n"
+                f"진행할까요?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self.gmcat_control = Control()
+        self._gmcat_had_error = False
+        self.gmarket_category_panel.clear_results()
+
+        worker = GmarketCategoryCrawlWorker(config_run, self.gmcat_control)
+        worker.phase_changed.connect(self.gmarket_category_panel.set_phase)
+        worker.progress_changed.connect(self._on_gmcat_progress)
+        worker.log_message.connect(self.gmarket_category_panel.append_log)
+        worker.item_collected.connect(self.gmarket_category_panel.add_record)
+        worker.stats_changed.connect(self._on_gmcat_stats)
+        worker.error_occurred.connect(self._on_gmcat_error_line)
+        worker.finished_crawl.connect(self._on_gmcat_finished)
+        worker.finished.connect(self._on_gmcat_crawl_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.gmcat_crawl_worker = worker
+
+        self.gmarket_category_panel.set_state("running")
+        self._set_gmarket_busy(True)
+        self.coupang_panel.set_external_busy(True)
+        self.foodspring_panel.set_external_busy(True)
+        self.category_panel.set_external_busy(True)
+        self._show_status("Gmarket 카테고리 수집 진행 중...")
+        worker.start()
+
+    def on_gmcat_pause(self) -> None:
+        if self.gmcat_control and not self.gmcat_control.is_paused():
+            self.gmcat_control.pause()
+            self.gmarket_category_panel.set_state("paused")
+            self.gmarket_category_panel.append_log("[제어] 일시정지 (현재 건 완료 후 대기)")
+            self._show_status("Gmarket 카테고리 수집 일시정지됨")
+
+    def on_gmcat_resume(self) -> None:
+        if self.gmcat_control and self.gmcat_control.is_paused():
+            self.gmcat_control.resume()
+            self.gmarket_category_panel.set_state("running")
+            self.gmarket_category_panel.append_log("[제어] 재개")
+            self._show_status("Gmarket 카테고리 수집 진행 중...")
+
+    def on_gmcat_cancel(self) -> None:
+        if self.gmcat_worker is not None and self.gmcat_worker.isRunning():
+            if self.gmcat_control:
+                self.gmcat_control.request_cancel()
+            self.gmarket_category_panel.append_log("[카테고리] 목록 로드 취소 요청")
+            self._show_status("Gmarket 카테고리 목록 로드 취소 중...")
+            return
+        if self.gmcat_control:
+            self.gmcat_control.request_cancel()
+            self.gmarket_category_panel.set_state("cancelling")
+            self.gmarket_category_panel.append_log("[제어] 취소 요청 — 현재 건 완료 후 중지합니다.")
+            self._show_status("Gmarket 카테고리 수집 취소 중...")
+
+    def _on_gmcat_progress(self, kind: str, current: int, total: int) -> None:
+        # Phase A 는 kind=카테고리명, Phase B 는 kind=goodscode(숫자)
+        label = "판매자정보 수집" if kind.isdigit() else str(kind)
+        self.gmarket_category_panel.set_progress_text(f"{label}: {current}/{total}")
+
+    def _on_gmcat_stats(self, summary) -> None:
+        stats = (
+            f"성공 {getattr(summary, 'total_success', 0):,}건 / "
+            f"실패 {getattr(summary, 'total_failed', 0):,}건"
+        )
+        self.gmarket_category_panel.set_stats_text(stats)
+
+    def _on_gmcat_error_line(self, msg: str) -> None:
+        self._gmcat_had_error = True
+        self.gmarket_category_panel.append_log(f"[오류] {msg}")
+
+    def _on_gmcat_finished(self, summary) -> None:
+        panel = self.gmarket_category_panel
+        if summary is None:
+            panel.set_state("finished")
+            panel.set_stats_text("")
+            if self._gmcat_had_error:
+                panel.append_log("[종료] 오류로 중단되었습니다 — 로그를 확인하세요.")
+                self._show_status("Gmarket 카테고리 수집 실패(오류)")
+            else:
+                panel.append_log("[종료] 수집할 대상이 없거나 취소되어 중단되었습니다.")
+                self._show_status("Gmarket 카테고리 수집 종료")
+            return
+
+        crashed = bool(getattr(summary, "error", None))
+        cancelled = bool(getattr(summary, "cancelled", False))
+        head = "수집 취소됨" if cancelled else ("수집 실패" if crashed else "수집 완료")
+        saved = ""
+        if summary.all_files:
+            saved = f" | 저장: {summary.all_files[0]}"
+            panel.append_log(f"[완료] 통합 저장: {summary.all_files[0]}")
+        panel.append_log(
+            f"[{head}] 성공 {summary.total_success:,}건 / "
+            f"실패 {summary.total_failed:,}건{saved}"
+        )
+        if crashed:
+            panel.set_state("failed")
+            self._show_status(f"Gmarket 카테고리 수집 실패: {summary.error}")
+            QMessageBox.critical(
+                self, "Gmarket 카테고리 수집 실패",
+                f"{summary.error}\n\n그때까지의 부분 결과는 저장되었습니다.",
+            )
+        else:
+            panel.set_state("finished")
+            self._show_status(f"Gmarket 카테고리 수집 {head}({summary.total_success:,}건)")
+
+    def _on_gmcat_crawl_thread_done(self) -> None:
+        self.gmcat_crawl_worker = None
+        self._set_gmarket_busy(False)
+        self.coupang_panel.set_external_busy(False)
+        self.foodspring_panel.set_external_busy(False)
+        self.category_panel.set_external_busy(False)
+
+    def _on_gmcat_open_result(self) -> None:
+        path = self.gmarket_category_panel.output_dir()
+        if not path:
+            self.gmarket_category_panel.append_log("[결과 열기] 저장된 결과가 없습니다.")
+            return
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            os.startfile(path)
+        else:
+            subprocess.Popen(["xdg-open", path])
 
     # ── Coupang 검색 탭 ──────────────────────────────────────────
 

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#0b263d" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <rect x="54" y="306" width="1092" height="894" rx="30" fill="#ffffff" filter="url(#shadow)"/>
+  <rect x="54" y="306" width="1092" height="894" rx="30" fill="none" stroke="#d8e4eb" stroke-width="2"/>
+  <g transform="translate(70 64)">
+    <rect width="244" height="44" rx="22" fill="#0a2035"/>
+    <circle cx="25" cy="22" r="6" fill="#21cdb1"/>
+    <text x="44" y="29" font-family="Noto Sans CJK KR, sans-serif" font-size="17" font-weight="700" fill="#ffffff">실제 프로그램 화면</text>
+  </g>
+  <text x="70" y="170" font-family="Noto Sans CJK KR, sans-serif" font-size="64" font-weight="800" letter-spacing="-2.5" fill="#0a2035">쇼핑몰 판매자 정보 수집기</text>
+  <text x="72" y="235" font-family="Noto Sans CJK KR, sans-serif" font-size="26" font-weight="500" fill="#526d80">Gmarket · Coupang 통합 Windows 프로그램</text>
+  <g transform="translate(70 272)">
+    <rect width="118" height="30" rx="15" fill="#e1f8f3"/>
+    <text x="59" y="21" text-anchor="middle" font-family="Noto Sans CJK KR, sans-serif" font-size="14" font-weight="700" fill="#117d6b">Python</text>
+    <rect x="128" width="118" height="30" rx="15" fill="#e8f0fb"/>
+    <text x="187" y="21" text-anchor="middle" font-family="Noto Sans CJK KR, sans-serif" font-size="14" font-weight="700" fill="#2c6fae">PyQt6</text>
+    <rect x="256" width="150" height="30" rx="15" fill="#edf1f4"/>
+    <text x="331" y="21" text-anchor="middle" font-family="Noto Sans CJK KR, sans-serif" font-size="14" font-weight="700" fill="#365166">JSON · CSV</text>
+  </g>
+</svg>

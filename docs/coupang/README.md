@@ -16,6 +16,7 @@
 
 | File | Content | rev |
 |------|---------|-----|
+| **`LOGIN_ACCESS_DENIED_INCIDENT_20260831.md`** | **★ 2026-08-31 개발·배포 PC 로그인 단계 Akamai Access Denied 사고 기록 — 현재 HOLD, 재개 조건과 필수 보완사항** | **1** |
 | **`WORK_ORDER.md`** | **Gmarket PyQt6 앱에 Coupang v3를 2탭으로 통합하기 위한 구현 작업지시서 — 문서 우선순위, 변경 파일, 스레드/종료/저장 계약, 테스트와 완료 기준** | **1.0** |
 | **`CATEGORY_CONCEPT.md`** | **★ 컨셉 전환(2026-08-24): 키워드 검색 → 카테고리 선택 수집 — 카테고리 트리 데이터 소스·수집 파이프라인·변경 파일** | **1** |
 | `SEARCH_POC_FINDINGS.md` | 검색/페이지네이션 실측 연대기 rev.1~25 — SRP page≥2 비로그인 기각 확정, 카테고리 PLP 돌파 경로 발견 | 25 |

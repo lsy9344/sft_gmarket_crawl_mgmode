@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1400" viewBox="0 0 1200 1400">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#17334a" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="1400" fill="#f6f8fa"/>
+  <text x="60" y="66" font-family="Noto Sans CJK KR, sans-serif" font-size="18" font-weight="700" letter-spacing="2" fill="#2f77b5">COUPANG · ACTUAL UI</text>
+  <text x="60" y="127" font-family="Noto Sans CJK KR, sans-serif" font-size="48" font-weight="800" letter-spacing="-2" fill="#0a2035">마켓별 설정은 분리하고, 결과는 통합합니다.</text>
+  <text x="62" y="188" font-family="Noto Sans CJK KR, sans-serif" font-size="22" fill="#61798b">피드 범위 · 배치 크기 · 요청 간격을 작업 환경에 맞게 설정</text>
+  <rect x="45" y="246" width="1110" height="925" rx="28" fill="#ffffff" filter="url(#shadow)"/>
+  <rect x="45" y="246" width="1110" height="925" rx="28" fill="none" stroke="#d9e4eb" stroke-width="2"/>
+  <g transform="translate(60 1222)">
+    <rect width="330" height="104" rx="20" fill="#e8f0fb"/>
+    <text x="24" y="42" font-family="Noto Sans CJK KR, sans-serif" font-size="21" font-weight="800" fill="#0a2035">별도 실행 설정</text>
+    <text x="24" y="74" font-family="Noto Sans CJK KR, sans-serif" font-size="17" fill="#567082">피드 · 배치 · 지연 시간</text>
+    <rect x="375" width="330" height="104" rx="20" fill="#e5f7f3"/>
+    <text x="399" y="42" font-family="Noto Sans CJK KR, sans-serif" font-size="21" font-weight="800" fill="#0a2035">일시정지 · 재개</text>
+    <text x="399" y="74" font-family="Noto Sans CJK KR, sans-serif" font-size="17" fill="#567082">작업 상태에 맞춰 제어</text>
+    <rect x="750" width="330" height="104" rx="20" fill="#edf1f4"/>
+    <text x="774" y="42" font-family="Noto Sans CJK KR, sans-serif" font-size="21" font-weight="800" fill="#0a2035">JSON · CSV</text>
+    <text x="774" y="74" font-family="Noto Sans CJK KR, sans-serif" font-size="17" fill="#567082">동일한 저장 경험</text>
+  </g>
+</svg>

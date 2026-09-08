@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face{font-family:'Pretendard';src:url('fonts/PretendardVariable.woff2') format('woff2-variations');font-weight:45 920;font-display:block;}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:1200px;height:1330px;overflow:hidden;}
+body{font-family:'Pretendard','Noto Sans CJK KR',sans-serif;background:#0B1220;color:#0F172A;-webkit-font-smoothing:antialiased;position:relative;}
+.bg{position:absolute;inset:0;background:
+  radial-gradient(800px 500px at 90% -8%,rgba(3,105,161,.4),transparent 62%),
+  linear-gradient(160deg,#0E1A2F,#0B1220 55%);}
+
+.head{position:relative;padding:60px 76px 40px;}
+.eyebrow{font-size:18px;font-weight:750;letter-spacing:.22em;color:#38BDF8;}
+.head h1{margin-top:14px;font-size:50px;font-weight:830;letter-spacing:-.02em;color:#F8FAFC;}
+.head p{margin-top:12px;font-size:23px;color:#AAB8CC;font-weight:450;}
+
+/* app window */
+.window{position:relative;margin:8px 76px 0;border-radius:18px;background:#F7F9FC;overflow:hidden;
+  box-shadow:0 30px 90px rgba(2,6,23,.6),0 0 0 1px rgba(148,163,184,.25);}
+.titlebar{height:48px;background:#fff;border-bottom:1px solid #E5EAF1;display:flex;align-items:center;padding:0 20px;gap:8px;}
+.dot{width:12px;height:12px;border-radius:50%;}
+.titlebar .t{margin-left:10px;font-size:17px;font-weight:650;color:#334155;}
+.tabs{display:flex;gap:6px;padding:12px 20px 0;background:#fff;}
+.tab{padding:9px 24px;border-radius:9px 9px 0 0;font-size:17px;font-weight:600;color:#64748B;background:#EEF2F7;border:1px solid #E5EAF1;border-bottom:none;}
+.tab.on{background:#0369A1;color:#fff;border-color:#0369A1;font-weight:700;}
+.appbody{padding:16px 20px 20px;background:#F7F9FC;border-top:1px solid #E5EAF1;}
+.panel{background:#fff;border:1px solid #E5EAF1;border-radius:12px;padding:14px 18px;position:relative;}
+.panel + .panel{margin-top:12px;}
+.ptitle{font-size:15px;font-weight:700;color:#475569;margin-bottom:10px;}
+
+/* settings row */
+.cats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px 14px;}
+.cat{display:flex;align-items:center;gap:8px;font-size:15px;color:#334155;font-weight:520;}
+.cb{width:17px;height:17px;border-radius:4px;background:#0369A1;flex:none;display:flex;align-items:center;justify-content:center;}
+.cb svg{width:12px;height:12px;}
+.setrow{display:flex;gap:12px;margin-top:14px;}
+.field{display:flex;align-items:center;gap:9px;font-size:15px;color:#475569;font-weight:550;}
+.field .box{padding:7px 13px;border:1px solid #DDE4EC;border-radius:8px;background:#fff;color:#0F172A;font-weight:650;font-variant-numeric:tabular-nums;}
+.btnrow{display:flex;gap:9px;margin-top:14px;}
+.btn{flex:1;text-align:center;padding:11px 0;border-radius:9px;font-size:15px;font-weight:700;border:1px solid #DDE4EC;background:#fff;color:#334155;}
+.btn.primary{background:#0369A1;border-color:#0369A1;color:#fff;}
+.btn.ghost{color:#94A3B8;}
+
+table{width:100%;border-collapse:collapse;font-size:15px;font-variant-numeric:tabular-nums;}
+th{text-align:left;font-weight:650;color:#64748B;padding:7px 10px;background:#F1F5F9;border-bottom:1px solid #E5EAF1;font-size:14px;}
+td{padding:8px 10px;border-bottom:1px solid #EEF2F7;color:#1E293B;}
+tr:last-child td{border-bottom:none;}
+.chip{display:inline-block;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:700;}
+.chip.done{background:#ECFDF5;color:#059669;}
+.chip.run{background:#E0F2FE;color:#0369A1;}
+.chip.wait{background:#F1F5F9;color:#94A3B8;}
+
+.bar{height:14px;border-radius:999px;background:#E8EEF5;overflow:hidden;}
+.bar i{display:block;height:100%;width:62%;border-radius:999px;background:linear-gradient(90deg,#0369A1,#38BDF8);}
+.meta{display:flex;gap:18px;margin-top:10px;font-size:15px;color:#64748B;font-variant-numeric:tabular-nums;}
+.meta b{color:#0F172A;}
+.g{color:#059669;font-weight:700;}
+
+.log{background:#0F172A;border-radius:10px;padding:12px 16px;font-family:'Pretendard',monospace;font-size:14px;line-height:1.75;color:#94A3B8;font-variant-numeric:tabular-nums;}
+.log .t{color:#475569;}
+.log .ok{color:#34D399;}
+.log .info{color:#7DD3FC;}
+
+/* callout markers */
+.mark{position:absolute;width:34px;height:34px;border-radius:50%;background:#0369A1;color:#fff;display:flex;align-items:center;justify-content:center;
+  font-size:17px;font-weight:800;box-shadow:0 0 0 5px rgba(56,189,248,.28);z-index:5;}
+
+/* legend */
+.legend{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;margin:30px 76px 0;}
+.leg{display:flex;gap:13px;align-items:flex-start;}
+.leg .n{width:30px;height:30px;border-radius:50%;background:#0369A1;color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;flex:none;margin-top:2px;}
+.leg .tt{font-size:20px;font-weight:750;color:#F1F5F9;}
+.leg .dd{font-size:17px;color:#93A3B8;margin-top:3px;font-weight:450;line-height:1.45;}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+
+<div class="head">
+  <div class="eyebrow">PRODUCT</div>
+  <h1>실제 프로그램 화면 구성</h1>
+  <p>설정 → 사전 조사 → 수집 → 결과까지, 한 화면에서 전부 관리합니다.</p>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <span class="dot" style="background:#FF5F57"></span>
+    <span class="dot" style="background:#FEBC2E"></span>
+    <span class="dot" style="background:#28C840"></span>
+    <span class="t">판매자 정보 수집기 v3.0</span>
+  </div>
+  <div class="tabs"><span class="tab on">Gmarket</span><span class="tab">Coupang</span><span class="tab">식봄</span></div>
+  <div class="appbody">
+
+    <div class="panel">
+      <div class="mark" style="top:-12px;left:-14px;">1</div>
+      <div class="ptitle">수집 설정 — 베스트 10 + 슈퍼딜 12 카테고리</div>
+      <div class="cats">
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>신선식품</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>가공식품</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>생필품/육아</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>패션/잡화</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>뷰티</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>디지털/가전</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>가구/홈</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>스포츠/건강</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>유아동</span>
+        <span class="cat"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>브랜드패션</span>
+      </div>
+      <div class="setrow">
+        <span class="field">수집 수량 <span class="box">200</span></span>
+        <span class="field">요청 간격 <span class="box">0.5초</span></span>
+        <span class="field">저장 경로 <span class="box">출력 폴더 선택됨</span></span>
+      </div>
+      <div class="btnrow">
+        <span class="btn">사전 조사</span><span class="btn primary">수집 시작</span><span class="btn">일시정지</span><span class="btn ghost">취소</span><span class="btn">이어서 수집</span><span class="btn ghost">초기화</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="mark" style="top:-12px;left:-14px;">2</div>
+      <div class="ptitle">사전 조사 결과</div>
+      <table>
+        <tr><th>#</th><th>카테고리</th><th>전체 상품</th><th>신규 대상</th><th>이미 수집</th><th>예상 시간</th><th>상태</th></tr>
+        <tr><td>1</td><td>베스트 · 신선식품</td><td>200</td><td>176</td><td>24</td><td>18분</td><td><span class="chip run">수집 중</span></td></tr>
+        <tr><td>2</td><td>베스트 · 뷰티</td><td>200</td><td>132</td><td>68</td><td>14분</td><td><span class="chip wait">대기</span></td></tr>
+        <tr><td>3</td><td>슈퍼딜 · 식품</td><td>184</td><td>95</td><td>89</td><td>10분</td><td><span class="chip wait">대기</span></td></tr>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="mark" style="top:-12px;left:-14px;">3</div>
+      <div class="ptitle">진행 상황</div>
+      <div class="bar"><i></i></div>
+      <div class="meta"><span>진행 <b>62%</b></span><span>경과 <b>12:40</b></span><span>남은 시간 <b>07:36</b></span><span>속도 <b>9.8건/분</b></span><span class="g">성공 124</span><span>실패 0</span></div>
+    </div>
+
+    <div class="panel">
+      <div class="mark" style="top:-12px;left:-14px;">4</div>
+      <div class="ptitle">실시간 로그</div>
+      <div class="log">
+        <div><span class="t">[14:02:11]</span> <span class="info">[사전조사]</span> 22개 카테고리 조사 완료 — 신규 403건, 예상 42분</div>
+        <div><span class="t">[14:03:05]</span> <span class="ok">[수집]</span> 베스트 · 신선식품 124/176 — 판매자 정보 저장 완료</div>
+        <div><span class="t">[14:03:06]</span> <span class="ok">[저장]</span> 체크포인트 기록 — 중복 24건 자동 제외</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="legend">
+  <div class="leg"><span class="n">1</span><div><div class="tt">카테고리 선택과 수집 조건</div><div class="dd">수량 · 요청 간격 · 저장 위치를 직접 설정</div></div></div>
+  <div class="leg"><span class="n">2</span><div><div class="tt">수집 전에 작업량 확인</div><div class="dd">신규 대상과 예상 시간을 보고 실행 결정</div></div></div>
+  <div class="leg"><span class="n">3</span><div><div class="tt">실시간 진행 현황</div><div class="dd">진행률 · 속도 · 성공/실패를 한눈에</div></div></div>
+  <div class="leg"><span class="n">4</span><div><div class="tt">투명한 작업 기록</div><div class="dd">무엇을 했는지 로그로 전부 남깁니다</div></div></div>
+</div>
+</body>
+</html>

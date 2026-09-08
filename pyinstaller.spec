@@ -59,6 +59,8 @@ a = Analysis(
         (str(project_root / "app" / "core" / "foodspring" / "goods_list_query.graphql"), "app/core/foodspring"),
         (str(project_root / "app" / "resources" / "coupang_category_tree.json"),
          "app/resources"),
+        (str(project_root / "app" / "resources" / "gmarket_category_tree.json"),
+         "app/resources"),
     ] + _pkg_datas + _patchright_datas + _playwright_datas,
     hiddenimports=[
         "PyQt6.QtCore",

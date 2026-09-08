@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face{font-family:'Pretendard';src:url('fonts/PretendardVariable.woff2') format('woff2-variations');font-weight:45 920;font-display:block;}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:1200px;height:1200px;overflow:hidden;}
+body{font-family:'Pretendard','Noto Sans CJK KR',sans-serif;background:#F5F8FB;color:#0F172A;-webkit-font-smoothing:antialiased;position:relative;}
+
+.head{background:linear-gradient(150deg,#0E1A2F,#0B1220);padding:60px 76px 52px;position:relative;overflow:hidden;}
+.head::after{content:'';position:absolute;inset:0;background:radial-gradient(700px 400px at 85% -20%,rgba(3,105,161,.45),transparent 65%);}
+.eyebrow{font-size:18px;font-weight:750;letter-spacing:.22em;color:#38BDF8;}
+.head h1{position:relative;z-index:1;margin-top:16px;font-size:52px;font-weight:830;letter-spacing:-.02em;color:#F8FAFC;line-height:1.28;}
+.head p{position:relative;z-index:1;margin-top:14px;font-size:23px;color:#AAB8CC;font-weight:450;}
+
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;padding:42px 76px 0;}
+.card{background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:30px 32px;box-shadow:0 6px 24px rgba(15,23,42,.05);}
+.icon{width:56px;height:56px;border-radius:15px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;}
+.icon svg{width:29px;height:29px;}
+.card h2{font-size:26px;font-weight:780;letter-spacing:-.015em;}
+.card p{margin-top:10px;font-size:19px;line-height:1.6;color:#54657D;font-weight:450;}
+.card p b{color:#0F172A;font-weight:700;}
+
+/* delivery band */
+.deliver{margin:34px 76px 0;background:#0F172A;border-radius:20px;padding:30px 36px;color:#F1F5F9;}
+.deliver .dt{font-size:17px;font-weight:750;letter-spacing:.18em;color:#38BDF8;margin-bottom:18px;}
+.items{display:flex;gap:14px;}
+.item{flex:1;display:flex;align-items:center;gap:13px;background:rgba(255,255,255,.06);border:1px solid rgba(148,163,184,.22);border-radius:14px;padding:16px 18px;}
+.item svg{width:26px;height:26px;flex:none;}
+.item .tt{font-size:19px;font-weight:720;}
+.item .dd{font-size:15px;color:#94A3B8;margin-top:2px;font-weight:480;}
+
+.foot{position:absolute;left:0;right:0;bottom:0;padding:0 76px 34px;display:flex;align-items:center;gap:10px;color:#7C8BA1;font-size:17px;font-weight:480;}
+.foot svg{width:19px;height:19px;flex:none;}
+</style>
+</head>
+<body>
+<div class="head">
+  <div class="eyebrow">RELIABILITY</div>
+  <h1>몇 시간을 돌려도,<br>데이터는 사라지지 않습니다</h1>
+  <p>장시간 수집 업무를 버티도록 설계한 4중 안전장치</p>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <div class="icon" style="background:#E0F2FE;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#0369A1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 3"/></svg>
+    </div>
+    <h2>체크포인트 복구</h2>
+    <p>수집 중간마다 결과를 먼저 저장합니다. 프로그램이 갑자기 꺼져도 <b>다음 실행에서 멈춘 지점부터</b> 이어서 수집합니다.</p>
+  </div>
+  <div class="card">
+    <div class="icon" style="background:#ECFDF5;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg>
+    </div>
+    <h2>중복 수집 방지</h2>
+    <p>이미 수집한 판매자는 자동으로 건너뜁니다. <b>같은 대상을 두 번 수집하지 않아</b> 시간과 요청을 아낍니다.</p>
+  </div>
+  <div class="card">
+    <div class="icon" style="background:#FEF3C7;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+    </div>
+    <h2>파일 손상 방지 저장</h2>
+    <p>저장이 중간에 끊겨도 기존 파일이 깨지지 않는 <b>안전 저장 방식</b>을 사용합니다. 결과 파일은 언제나 열 수 있습니다.</p>
+  </div>
+  <div class="card">
+    <div class="icon" style="background:#EEF2FF;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/><path d="m7 11 2 2 3-4 2 3 3-2" opacity=".9"/></svg>
+    </div>
+    <h2>멈추지 않는 화면</h2>
+    <p>수집 작업과 화면을 분리해 몇 시간짜리 작업 중에도 <b>버튼이 즉시 반응</b>합니다. 언제든 일시정지 · 취소할 수 있습니다.</p>
+  </div>
+</div>
+
+<div class="deliver">
+  <div class="dt">DELIVERABLES — 이렇게 납품합니다</div>
+  <div class="items">
+    <div class="item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 9.4 7.55 4.24M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
+      <div><div class="tt">단일 실행 파일</div><div class="dd">설치 부담 없는 EXE 1개</div></div>
+    </div>
+    <div class="item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
+      <div><div class="tt">240개 자동 테스트</div><div class="dd">Linux · Windows 전부 통과</div></div>
+    </div>
+    <div class="item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg>
+      <div><div class="tt">사용자 매뉴얼</div><div class="dd">설치 · 검증 절차 포함</div></div>
+    </div>
+    <div class="item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.18a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <div><div class="tt">런타임 설치 도구</div><div class="dd">환경 점검까지 자동화</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#7C8BA1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  실제 수집은 대상 사이트 정책과 데이터 이용 권한을 확인한 범위에서 진행합니다.
+</div>
+</body>
+</html>

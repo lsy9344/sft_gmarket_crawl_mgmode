@@ -1,0 +1,84 @@
+# Code Context
+
+## Files Retrieved
+1. `pyinstaller.spec` (1-120) - 현재 단일 `SellerCollector` EXE 스펙. Camoufox/browserforge/scrapling/patchright/playwright 데이터·바이너리·hidden import를 수집하고 `theme.qss`를 포함한다.
+2. `scripts/build_windows.bat` (1-132) - Windows Python 3.12 venv 생성, requirements/PyInstaller 설치, unittest, clean build, EXE 1개 및 SHA-256 manifest 검사까지 자동화한다.
+3. `app/main.py` (14-95) - `--setup-runtime`/`--verify-runtime`를 같은 EXE 안에서 처리하고, frozen 실행 시 브라우저 cache 경로와 stylesheet를 설정한다.
+4. `app/core/config.py` (15-32) - frozen 상태에서는 `sys.executable` 옆을 프로젝트 루트로 사용하므로 one-file 임시 추출 폴더에 사용자 데이터를 저장하지 않는다.
+5. `app/core/coupang/exporter.py` (73-145) - JSON/CSV를 원자적으로 저장하며 CSV는 UTF-8 BOM, 결과 쌍은 기존 파일을 덮어쓰지 않는다.
+6. `app/models/coupang_records.py` (1-99) - Coupang 14필드 계약과 Windows 파일명 검증.
+7. `scripts/setup_coupang_runtime.py` (1-245) - Camoufox/GeoIP와 patchright Chromium을 per-user cache에 설치·검증한다.
+8. `docs/RELEASE_READINESS.md` (1-79) - 문서상 Windows clean VM 단일 EXE 검증·해시 증적과 운영 HOLD 판정.
+9. `docs/coupang/WORK_ORDER.md` (661-685, 833-862) - browser cache는 EXE 외부에 두고, clean Windows 실패→setup→성공 순서를 요구한다.
+10. `../sft_gmarket_crawl_mgmode-search/coupang_crawl/output/coupang_category_헬스_건강식품_20260824_153133.{json,csv}` - 승인된 9,852행 후보 산출물.
+
+## Key Code
+
+- PyInstaller entrypoint는 `app/main.py`이며 `pyinstaller.spec:53-85`가 `app/main.py` 분석과 runtime package 수집을 정의한다. `pyinstaller.spec:98-120`은 `console=True`지만 GUI 시작 후 Windows 콘솔을 숨긴다; setup/verify CLI 로그에는 콘솔이 필요하다.
+- 런타임 설치는 별도 EXE가 아니다. `app/main.py:18-45`가 동일한 `SellerCollector.exe`의 플래그를 `scripts.setup_coupang_runtime.main()`으로 연결한다. `scripts/build_windows.bat:79-109`도 단일 EXE만 기대한다.
+- 외부 데이터 정책은 `app/core/config.py:15-32`: frozen one-file의 `_MEIPASS`가 아닌 실행파일 디렉터리의 `output`을 기본값으로 한다. 사용자가 Coupang UI에서 다른 폴더를 선택할 수도 있다.
+- 9,852행 후보를 `.venv/bin/python`으로 읽어 확인했다.
+  - JSON: 9,852 rows, 14 fields, 5,738,461 bytes, SHA-256 `523aed7328b61c52e8c60401efd5644357a4107fa926b40d436a7ee00d1637b8`
+  - CSV: 9,852 data rows(헤더 제외), 동일 14 headers, 2,704,086 bytes, SHA-256 `c61a456b6660584c59d982a2688c61f55c7356d85a8e3da903488a808e18209d`
+  - 필드 순서: `vendor_id,url,store_name,company_name,ceo_name,business_number,phone,email,address,ecommerce_report_number,power_seller,power_seller_title,rating_count,thumb_up_ratio`
+
+## Architecture
+
+`app/main.py` → `MainWindow`/PyQt6 UI → Coupang worker/core crawler → `CoupangExporter`로 JSON/CSV 저장. one-file EXE에는 Python/Qt/브라우저 드라이버와 패키지 데이터만 넣고, 실제 Camoufox browser·GeoIP·patchright Chromium은 `%LOCALAPPDATA%` cache에 설치한다. frozen 실행 때 `_set_browsers_path()`가 `%LOCALAPPDATA%\\ms-playwright` 또는 `patchright`를 `PLAYWRIGHT_BROWSERS_PATH`로 지정한다.
+
+Sibling `coupang-search`는 `coupang-search` 브랜치 HEAD `bb57fe8`이며 카테고리 수집 코드와 9,852행 결과가 있다. 그러나 sibling의 `docs/coupang/HANDOFF_20260825.md`는 Windows 배포 빌드가 아직 후속 과제라고 기록한다. Main `main` HEAD는 `51d6ad0`이고, 현재 작업 트리는 staged 변경 29개 파일 + untracked POC/docs/portfolio 및 `.pi-subagents`가 있다. Main `git status --short --branch`: `main...origin/main [ahead 12]`; sibling은 clean(`## coupang-search`)이다.
+
+WSL에서는 `python`/`pyinstaller`/`wine`/`wine64` 명령이 PATH에 없지만 main의 `.venv/bin/python`은 존재하고, 이미 `dist/`에 Linux ELF 산출물(`SellerCollector`, `CoupangRuntimeSetup`, `GmarketSellerCollector`)이 있다. Linux PyInstaller 산출물은 Windows EXE가 아니므로 WSL에서 Windows 빌드를 완료할 수 없다. PyInstaller 자체도 cross-compile을 지원하지 않는다고 `pyinstaller.spec:8-12`에 명시되어 있다.
+
+## Start Here
+
+Windows 호스트에서 `scripts/build_windows.bat`를 먼저 실행한다. 단, 사용자 지시상 이번 점검에서는 파일을 수정하거나 산출물을 복사하지 않았다.
+
+### Recommended commands (Windows)
+
+```bat
+cd C:\path\to\sft_gmarket_crawl_mgmode
+scripts\build_windows.bat
+```
+
+결과 검증:
+
+```powershell
+Get-ChildItem dist -File *.exe
+Get-FileHash dist\SellerCollector.exe -Algorithm SHA256
+.\dist\SellerCollector.exe --verify-runtime   # 설치 전 exit 1이 정상
+.\dist\SellerCollector.exe --setup-runtime
+.\dist\SellerCollector.exe --verify-runtime   # 설치 후 exit 0
+```
+
+9,852행 파일을 main의 `coupang_crawl/output`으로 복사할 때(실행하지 않음):
+
+```bash
+mkdir -p /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/coupang_crawl/output
+cp ../sft_gmarket_crawl_mgmode-search/coupang_crawl/output/coupang_category_헬스_건강식품_20260824_153133.json coupang_crawl/output/
+cp ../sft_gmarket_crawl_mgmode-search/coupang_crawl/output/coupang_category_헬스_건강식품_20260824_153133.csv coupang_crawl/output/
+```
+
+## Blockers / Risks
+
+- WSL 현재 환경에는 Windows Python/빌드 도구/Wine이 없어 Windows EXE를 직접 검증할 수 없다. 실제 Windows 10/11 + Python 3.12 환경이 필수다.
+- Main 작업 트리가 clean하지 않다(staged 변경과 untracked 파일이 다수). 빌드 후보는 반드시 `git diff --cached`, `git diff`, `git status`를 기록한 뒤 source snapshot/hash를 고정해야 한다.
+- 9,852행 결과는 sibling의 `coupang-search` 산출물이며 main으로 복사되지 않은 상태다. 복사 시 기존 파일과 이름 충돌 여부, JSON/CSV 행·필드·해시를 다시 확인해야 한다.
+- 문서상 Windows clean VM 검증은 이미 PASS라고 주장하지만, 그 VM/후보 EXE가 현재 WSL `dist/`에 존재하지 않는다. 문서 해시(`docs/RELEASE_READINESS.md:41-49`)를 현재 빌드 결과의 증명으로 사용하면 안 된다.
+- Runtime 설치는 약 1.4GB 네트워크 다운로드이며 setup과 GUI를 같은 Windows 사용자로 실행해야 한다. GeoIP는 30일 갱신이 필요하다. `%LOCALAPPDATA%`/로컬 경로 전제, UNC·공유폴더·다중 세션은 지원 범위 밖이다.
+- `WORK_ORDER.md:843-847` 및 `RELEASE_READINESS.md:9-14`에 따라 라이브 자동수집은 정책/robots 제한으로 HOLD, 외부 공개 배포는 공개 코드서명·SmartScreen 문제로 HOLD다.
+
+## Validation Checklist
+
+- [ ] main/sibling branch, staged/unstaged/untracked 상태를 build log에 저장
+- [ ] 9,852행 JSON/CSV를 main `coupang_crawl/output`에 복사 후 각 9,852행, 동일 14필드, UTF-8 JSON/UTF-8-BOM CSV 확인
+- [ ] Windows clean venv에서 `python -m unittest discover -s tests -v` 통과
+- [ ] `pyinstaller==6.21.0`로 `SellerCollector.exe` 단 하나 생성, `dist`에 EXE 추가 산출물 없음
+- [ ] EXE SHA-256 manifest 생성 및 보관; 현재 문서의 기존 hash와 혼동하지 않음
+- [ ] clean cache에서 `--verify-runtime` exit 1 및 명확한 누락 안내
+- [ ] 같은 사용자로 `--setup-runtime` 실행, Camoufox pinned `0.5.4`/browser `152.0.4-beta.28`, GeoIP, patchright Chromium 설치 확인
+- [ ] 설치 후 `--verify-runtime` exit 0
+- [ ] 인자 없는 EXE GUI 기동, Gmarket/Coupang 탭 표시, 로그 파일 생성, 정상 종료
+- [ ] 오프라인 fixture로 JSON/CSV round-trip, 14필드/행 수/CSV BOM 확인
+- [ ] 종료 후 `SellerCollector`, browser, node, chrome 잔류 프로세스 0 확인
+- [ ] 라이브 수집은 별도 정책 승인 전 실행하지 않음

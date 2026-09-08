@@ -1,0 +1,135 @@
+{
+  "runId": "e6a008ea-796d-473b-8379-c9cb960bae3a",
+  "agent": "reviewer",
+  "task": "[Read from: /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/plan.md, /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/progress.md]\n\nIndependently validate release quality and user-facing usability for /home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/dist/SellerCollector.exe and coupang_crawl/output/coupang_category_헬스_건강식품_20260824_153133.{csv,json}. Check Windows PE/single-EXE claim, hash/signature evidence where available, row/schema consistency, likely runtime/setup behavior, and whether any packaging omissions would stop normal use. Do not edit files and do not run live crawling. Return concise evidence-backed findings with severity and final verdict.\n\n## Acceptance Contract\nAcceptance level: attested\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Return concrete findings with file paths and severity when applicable\n\nRequired evidence: review-findings, residual-risks\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "openai-codex/gpt-5.6-sol:high",
+  "attemptedModels": [
+    "openai-codex/gpt-5.6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "openai-codex/gpt-5.6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 162371,
+        "output": 15401,
+        "cacheRead": 2804224,
+        "cacheWrite": 0,
+        "cost": 2.6759969999999997,
+        "turns": 34
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "dist/SellerCollector.exe, dist/SHA256SUMS.txt, docs/RELEASE_READINESS.md:41-46, docs/DEPLOYMENT_APPROVAL.md:78-99 및 두 Coupang 결과 파일에 대해 구체적 경로·심각도·검증 수치를 제시했다."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "file/stat/sha256sum/objdump dist/SellerCollector.exe",
+          "result": "passed",
+          "summary": "Windows x64 PE32+, 141752080 bytes, SHA-256 manifest 일치를 확인했다."
+        },
+        {
+          "command": "PowerShell Get-AuthenticodeSignature dist/SellerCollector.exe",
+          "result": "passed",
+          "summary": "Status Valid, 내부 서명자 thumbprint와 DigiCert 타임스탬프를 확인했다."
+        },
+        {
+          "command": "SellerCollector.exe --verify-runtime",
+          "result": "passed",
+          "summary": "현재 Windows 호스트에서 Camoufox, GeoIP, Gmarket Chromium 검증이 exit 0으로 완료됐다."
+        },
+        {
+          "command": "Windows Python unittest discover -s tests -q",
+          "result": "passed",
+          "summary": "274 tests OK, 2 skipped; 네트워크 수집 없이 mock/fixture 테스트만 실행했다."
+        },
+        {
+          "command": "Python csv/json schema and row comparison",
+          "result": "passed",
+          "summary": "양쪽 9852행·14필드, CSV/JSON 셀 불일치 0건, 인코딩 정상."
+        }
+      ],
+      "validationOutput": [
+        "EXE SHA-256: 75851aea347f18be7dfa6e0539c67ab3a29b3c9b2a3750ec293b05c31653cfe7",
+        "CSV SHA-256: c61a456b6660584c59d982a2688c61f55c7356d85a8e3da903488a808e18209d",
+        "JSON SHA-256: 523aed7328b61c52e8c60401efd5644357a4107fa926b40d436a7ee00d1637b8",
+        "CSV/JSON: 9852 data rows, 14 ordered fields, 0 cross-format cell mismatches",
+        "Authenticode: Valid on available Windows host"
+      ],
+      "residualRisks": [
+        "현재 EXE 해시가 승인 문서의 이전 후보 해시와 달라 현재 배포 승인이 성립하지 않는다.",
+        "자체서명 공개 인증서와 설치 안내가 배포 폴더에 없어 신규 또는 제한된 Windows 환경에서 실행이 막힐 수 있다.",
+        "현재 EXE의 clean Windows 최초 설치·GUI 기동 검증은 수행되지 않았다.",
+        "GeoIP DB가 검증 시점에 29일 경과해 곧 재설치 또는 갱신이 필요하다.",
+        "JSON store_name 2187건은 null이므로 엄격한 문자열 스키마 소비자는 정규화가 필요하다."
+      ],
+      "noStagedFiles": false,
+      "diffSummary": "검토 전용 작업으로 파일 변경 없음; 저장소에는 기존 staged 변경이 존재한다.",
+      "reviewFindings": [
+        "blocker: docs/RELEASE_READINESS.md:41-46 - 승인된 EXE 크기·해시가 현재 dist/SellerCollector.exe와 불일치",
+        "blocker: dist/ - 내부 신뢰 절차에 필요한 SellerCollector-Internal-Release.cer 누락",
+        "high: docs/RELEASE_READINESS.md:16-34 - 최신 EXE에 대한 clean Windows setup/GUI 증적 없음",
+        "low: coupang_crawl/output/coupang_category_헬스_건강식품_20260824_153133.json - store_name 2187건이 null",
+        "correct: CSV/JSON 9852행·14필드 및 모든 셀 일치"
+      ],
+      "manualNotes": "plan.md와 progress.md는 지정 경로에 없었다. 파일 편집과 라이브 크롤링은 하지 않았다."
+    }
+  },
+  "transcriptPath": "/home/noah/Desktop/project/dev_busi/sft_gmarket_crawl_mgmode/.pi-subagents/artifacts/e6a008ea-796d-473b-8379-c9cb960bae3a_reviewer_1_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1787707738235
+}

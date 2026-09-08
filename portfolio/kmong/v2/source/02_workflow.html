@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face{font-family:'Pretendard';src:url('fonts/PretendardVariable.woff2') format('woff2-variations');font-weight:45 920;font-display:block;}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:1200px;height:1370px;overflow:hidden;}
+body{font-family:'Pretendard','Noto Sans CJK KR',sans-serif;background:#F5F8FB;color:#0F172A;-webkit-font-smoothing:antialiased;position:relative;}
+
+/* header band */
+.head{background:linear-gradient(150deg,#0E1A2F,#0B1220);padding:64px 76px 56px;position:relative;overflow:hidden;}
+.head::after{content:'';position:absolute;inset:0;background:radial-gradient(700px 400px at 88% -20%,rgba(3,105,161,.45),transparent 65%);}
+.eyebrow{font-size:18px;font-weight:750;letter-spacing:.22em;color:#38BDF8;}
+.head h1{position:relative;z-index:1;margin-top:16px;font-size:52px;font-weight:830;letter-spacing:-.02em;color:#F8FAFC;line-height:1.28;}
+.head p{position:relative;z-index:1;margin-top:14px;font-size:23px;color:#AAB8CC;font-weight:450;}
+
+.steps{padding:44px 76px 0;}
+.step{display:flex;gap:28px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:20px;padding:30px 34px;align-items:center;
+  box-shadow:0 6px 24px rgba(15,23,42,.05);}
+.step + .step{margin-top:22px;}
+.stepline{display:flex;flex-direction:column;align-items:center;flex:none;}
+.num{width:58px;height:58px;border-radius:16px;background:#0369A1;color:#fff;display:flex;align-items:center;justify-content:center;
+  font-size:26px;font-weight:800;}
+.info{flex:1;min-width:0;}
+.info h2{font-size:29px;font-weight:780;letter-spacing:-.015em;display:flex;align-items:center;gap:12px;}
+.info p{margin-top:9px;font-size:20px;line-height:1.55;color:#54657D;font-weight:450;}
+.info p b{color:#0F172A;font-weight:700;}
+
+/* right-side mini UI fragments */
+.frag{flex:none;width:400px;background:#F8FAFC;border:1px solid #E5EAF1;border-radius:14px;padding:16px 18px;}
+.frag table{width:100%;border-collapse:collapse;font-size:15px;font-variant-numeric:tabular-nums;}
+.frag th{text-align:left;color:#64748B;font-weight:650;padding:6px 8px;border-bottom:1px solid #E2E8F0;font-size:14px;}
+.frag td{padding:7px 8px;color:#1E293B;border-bottom:1px solid #EEF2F7;}
+.frag tr:last-child td{border-bottom:none;}
+.ftitle{font-size:14px;font-weight:700;color:#64748B;letter-spacing:.04em;margin-bottom:10px;}
+
+.bar{height:13px;border-radius:999px;background:#E8EEF5;overflow:hidden;margin-top:6px;}
+.bar i{display:block;height:100%;width:62%;border-radius:999px;background:linear-gradient(90deg,#0369A1,#38BDF8);}
+.meta{display:flex;gap:14px;margin-top:12px;font-size:15px;color:#64748B;font-variant-numeric:tabular-nums;}
+.meta b{color:#0F172A;}
+.g{color:#059669;font-weight:700;}
+
+.btnrow{display:flex;gap:10px;}
+.btn{flex:1;text-align:center;padding:12px 0;border-radius:10px;font-size:16px;font-weight:700;border:1px solid #E2E8F0;background:#fff;color:#334155;}
+.btn.primary{background:#0369A1;border-color:#0369A1;color:#fff;}
+.notice{margin-top:12px;display:flex;align-items:center;gap:9px;font-size:15px;color:#059669;font-weight:650;background:#ECFDF5;border:1px solid #D1FAE5;border-radius:10px;padding:10px 13px;}
+.notice svg{width:17px;height:17px;flex:none;}
+
+.files{display:flex;flex-direction:column;gap:9px;}
+.file{display:flex;align-items:center;gap:11px;background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:10px 14px;font-size:16px;font-weight:600;color:#1E293B;}
+.file svg{width:20px;height:20px;flex:none;}
+.file .ext{margin-left:auto;font-size:13px;font-weight:750;padding:3px 10px;border-radius:999px;}
+.ext.csv{background:#ECFDF5;color:#059669;}
+.ext.json{background:#EFF6FF;color:#1D4ED8;}
+
+.foot{position:absolute;left:0;right:0;bottom:0;padding:24px 76px 30px;display:flex;align-items:center;gap:10px;color:#5B6B82;font-size:17px;font-weight:520;}
+.foot svg{width:19px;height:19px;flex:none;}
+</style>
+</head>
+<body>
+<div class="head">
+  <div class="eyebrow">WORKFLOW</div>
+  <h1>수집량 확인부터 Excel 저장까지,<br>4단계면 끝납니다</h1>
+  <p>무작정 돌리지 않습니다. 먼저 확인하고, 안전하게 수집합니다.</p>
+</div>
+
+<div class="steps">
+  <div class="step">
+    <div class="stepline"><div class="num">1</div></div>
+    <div class="info">
+      <h2>사전 조사</h2>
+      <p>수집을 시작하기 전에 카테고리별 <b>전체 상품 수 · 신규 대상 · 예상 소요 시간</b>을 먼저 보여드립니다. 작업량을 보고 나서 실행 여부를 결정할 수 있습니다.</p>
+    </div>
+    <div class="frag">
+      <div class="ftitle">사전 조사 결과</div>
+      <table>
+        <tr><th>카테고리</th><th>전체</th><th>신규</th><th>예상</th></tr>
+        <tr><td>베스트 · 신선식품</td><td>200</td><td>176</td><td>18분</td></tr>
+        <tr><td>베스트 · 뷰티</td><td>200</td><td>132</td><td>14분</td></tr>
+        <tr><td>슈퍼딜 · 식품</td><td>184</td><td>95</td><td>10분</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="stepline"><div class="num">2</div></div>
+    <div class="info">
+      <h2>수집 시작</h2>
+      <p>진행률, 성공·실패 건수, 수집 속도와 남은 시간을 <b>실시간으로</b> 확인합니다. 긴 작업 중에도 화면이 멈추지 않도록 설계했습니다.</p>
+    </div>
+    <div class="frag">
+      <div class="ftitle">진행 상황</div>
+      <div class="bar"><i></i></div>
+      <div class="meta"><span>진행 <b>62%</b></span><span>남은 시간 <b>07:36</b></span><span class="g">성공 124</span><span>실패 0</span></div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="stepline"><div class="num">3</div></div>
+    <div class="info">
+      <h2>멈춰도 안전</h2>
+      <p>일시정지 · 재개 · 취소 · 이어서 수집을 지원합니다. 프로그램이 중간에 꺼져도 <b>이미 수집한 결과는 사라지지 않고</b>, 다음 실행에서 남은 것만 이어서 수집합니다.</p>
+    </div>
+    <div class="frag">
+      <div class="btnrow"><span class="btn">일시정지</span><span class="btn">취소</span><span class="btn primary">이어서 수집</span></div>
+      <div class="notice">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        중간 저장 완료 — 124건 보존됨
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="stepline"><div class="num">4</div></div>
+    <div class="info">
+      <h2>바로 쓰는 결과물</h2>
+      <p>Excel에서 바로 열리는 <b>CSV</b>와 구조화된 <b>JSON</b>을 카테고리별 파일 + 통합 파일로 동시에 저장합니다. 후처리 없이 그대로 업무에 사용하세요.</p>
+    </div>
+    <div class="frag">
+      <div class="files">
+        <div class="file">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          베스트_신선식품.csv <span class="ext csv">CSV</span>
+        </div>
+        <div class="file">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          통합_ALL.json <span class="ext json">JSON</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#7C8BA1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  실제 수집은 대상 사이트 정책과 데이터 이용 권한을 확인한 범위에서 진행합니다.
+</div>
+</body>
+</html>

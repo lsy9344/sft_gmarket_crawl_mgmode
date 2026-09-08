@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +74,47 @@ WARMUP_TIMEOUT_MS = 20000
 BEST_WAIT_SELECTOR = 'a[href*="goodscode"]'
 CLOUDFLARE_WAIT = 30         # 403 차단 감지 시 대기(초)
 LISTING_MAX_RETRIES = 2      # 리스팅 fetch 재시도 횟수(차단 대응)
+
+# ── 전체 카테고리 탭 (Gmarket 카테고리) ────────────────────────────────────
+# Phase A 리스팅은 Bright Data Web Unlocker 로 fetch 한다 — 로컬 IP(사무실/
+# 데이터센터) 평판과 무관하게 Cloudflare Managed Challenge 를 통과한다.
+# 실측(2026-09-08, docs/gmarket/ACCESS_ROUTES_RESEARCH_20260908.md §6):
+#   - `categoryCode=` 는 홈으로 리다이렉트되고 **`category=`(레거시)만 목록 반환**
+#   - 페이지네이션은 `&page=N` 이 아니라 **`&k=0&p={N}&keep-ssid=y`**
+CATEGORY_LIST_URL = "https://www.gmarket.co.kr/n/list?category={}"
+# 대/중/소 트리 소스 — Cloudflare 없는 레거시 카테고리 페이지. 이 페이지에
+# 대분류 네비 + 대분류별 중/소분류(`n/list?category=` 링크)가 한글명으로 내장된다.
+CATEGORY_TREE_URL = "https://category.gmarket.co.kr/listview/L{}.aspx"
+CATEGORY_TIMEOUT_MS = 20000          # 카테고리 리스팅 fetch 타임아웃(ms)
+CATEGORY_TREE_TIMEOUT = 15           # 트리 페이지 HTTP 타임아웃(초)
+CATEGORY_TREE_CACHE_HOURS = 24 * 7   # 트리 캐시 수명 (7일)
+CATEGORY_MAX_PAGES = 20              # 카테고리 리스팅 최대 페이지 기본값
+CATEGORY_EMPTY_PAGE_TOLERANCE = 2    # 연속 빈 페이지 허용치(종료 판정)
+CATEGORY_PAGE_DELAY_MIN = 8.0        # 리스팅 페이지 간 딜레이 최소(초)
+CATEGORY_PAGE_DELAY_MAX = 12.0       # 리스팅 페이지 간 딜레이 최대(초)
+
+# Bright Data Web Unlocker 요청 설정 (Phase A — 카테고리 리스팅)
+BRIGHTDATA_API_URL = "https://api.brightdata.com/request"
+BRIGHTDATA_ZONE = "gm_unlocker"
+BRIGHTDATA_COUNTRY = "kr"        # 한국 가정용 IP 출발 강제 — 국내 한글 카탈로그 필수
+BRIGHTDATA_TIMEOUT = 90          # Unlocker 1요청 타임아웃(초) — 실측 20~70초
+UNLOCKER_RETRY_WAIT = 10         # Unlocker 실패 재시도 전 대기(초)
+
+
+def brightdata_api_token() -> str:
+    """Bright Data API 토큰 — 환경변수 우선, 없으면 gitignore 된 로컬 토큰 파일.
+
+    토큰은 저장소에 커밋하지 않는다(output/ 는 .gitignore). 환경변수
+    BRIGHTDATA_API_TOKEN 또는 output/brightdata_token.txt 파일로 공급한다.
+    """
+    env = os.environ.get("BRIGHTDATA_API_TOKEN", "").strip()
+    if env:
+        return env
+    token_file = DEFAULT_OUTPUT_DIR / "brightdata_token.txt"
+    try:
+        return token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 # 봇/캡차 감지 키워드 (리스팅 HTML 내 존재 시 차단으로 판단)
 BOT_KEYWORDS = ["기다리십시오", "확인 안내", "확인 절차", "자동입력 방지", "접근이 제한"]
