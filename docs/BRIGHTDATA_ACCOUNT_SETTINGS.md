@@ -143,3 +143,24 @@
 |---|---:|---|
 | `SellerCollector.exe` | 142,630,512 | `772373b15c3f838938ab13ec9d48c25bb168135bf86901f190c194bb3cb860e3` |
 | `CoupangRuntimeSetup.exe` | 69,005,501 | `86e4a205277ebba7b2425e0905799dd098451344bd38bd6534a724a5385abf7d` |
+
+## 8. 재배포 기록 3 — 검토 반영분 (2026-09-09)
+
+- 빌드 커밋: `9f17f16` (main) — 판매자 API 연속 실패 차단기(blockguard
+  연동) + Unlocker 빈 껍데기 회복·`x-brd-error` 검사 + max_pages/딜레이
+  기본값 정렬 + 시작 전 잔액 안내 (상세: BRIGHTDATA_AKAMAI_REVIEW §11)
+- 빌드 환경: Windows Python 3.12, PyInstaller 6.21.0, 클린 `.venv-win`
+- 빌드 내 자동 테스트: `Ran 441 tests — OK (skipped=2)` — 서킷 브레이커 4건 +
+  blockguard 종단 1건 + 빈 껍데기 재요청 3건 + mg 연속 실패 중단 2건 신규 포함
+- Frozen 스모크: `SellerCollector.exe --verify-runtime` → exit 0
+- 산출물(`C:\Users\dltnd\Desktop\gmarket_build_review_20260909\dist\`):
+
+| 파일 | 크기(bytes) | SHA-256 |
+|---|---:|---|
+| `SellerCollector.exe` | 142,632,792 | `936853cbda3f065713b3cfbb6f30c4ab83c79f4d2cfaeda76ebec377ca018454` |
+| `CoupangRuntimeSetup.exe` | 69,005,704 | `3ba0e23f4d54cd7b229584bb81e2a6382fc0bd89fcb7966bece95800d77c800a` |
+
+- 내부 서명 릴리스가 필요하면 `docs/DEPLOYMENT_APPROVAL.md` 절차로
+  Authenticode 서명 후 hash를 다시 생성한다(기존 게이트 유지).
+- 라이브 미확인 항목: 실제 프록시 키로 1차→2차 전환 1사이클, 2차 연속 403
+  시 쿨다운 게이트 동작(유닛 테스트로는 검증됨), 빈 껍데기 회복률.
