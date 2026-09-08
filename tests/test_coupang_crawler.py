@@ -366,6 +366,74 @@ class CrawlerTerminationTest(unittest.TestCase):
         self.assertEqual(summary.termination_reason, "page_limit")
 
 
+class SellerApiCircuitBreakerTest(unittest.TestCase):
+    """판매자 API 연속 실패 서킷 브레이커 (2026-09-09 검토 반영).
+
+    getStoreReview/individualInfo 가 연속 실패하면 reason="blocked" 로 중단해
+    상위(SearchCrawler.run)의 blockguard 쿨다운 기록을 유도한다 — 차단 진행
+    중 재요청으로 IP 평판을 더 깎는 번아웃 나선을 끊는다(BRIGHTDATA_AKAMAI_
+    REVIEW §9: getStoreReview 는 IP 평판 게이트).
+    """
+
+    def _run(self, page, tmp_dir, **config_kwargs):
+        config = _make_config(tmp_dir, **config_kwargs)
+        crawler = CoupangCrawler(
+            config=config, control=Control(), browser_factory=lambda: FakeBrowser(page),
+        )
+        return crawler.run()
+
+    def test_consecutive_getStoreReview_errors_abort_as_blocked(self):
+        items = _make_items(6)
+        products = _make_products([f"VI{i}" for i in range(1, 7)])
+        page = FakePage(
+            promotion_pages=[_promotion_response(items, None)],
+            vendors_response=_individual_response(products),
+            review_responses={},  # 미등록 vendorId → {"status": 500} → 전부 오류
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._run(page, tmp)
+        self.assertEqual(summary.termination_reason, "blocked")
+        self.assertIn("연속 5회", summary.error)
+        self.assertIn("getStoreReview", summary.error)
+        self.assertEqual(summary.business_info_success, 0)
+        self.assertGreaterEqual(summary.request_errors, 5)
+
+    def test_success_resets_consecutive_error_streak(self):
+        # 4회 실패 → 성공 1회 → 실패 1회: 연속이 끊기므로 중단하지 않는다
+        items = _make_items(6)
+        products = _make_products([f"VI{i}" for i in range(1, 7)])
+        reviews = {
+            "V0": {"status": 500, "body": ""},
+            "V1": {"status": 500, "body": ""},
+            "V2": {"status": 500, "body": ""},
+            "V3": {"status": 500, "body": ""},
+            "V4": _store_review_response(),
+            "V5": {"status": 500, "body": ""},
+        }
+        page = FakePage(
+            promotion_pages=[_promotion_response(items, None)],
+            vendors_response=_individual_response(products),
+            review_responses=reviews,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._run(page, tmp)
+        self.assertIsNone(summary.error)
+        self.assertEqual(summary.business_info_success, 1)
+        self.assertEqual(summary.request_errors, 5)
+
+    def test_consecutive_vendor_batch_errors_abort_as_blocked(self):
+        # 배치 크기 5 × 15건 = 3배치 전부 실패 → 매핑 단계에서 중단
+        items = _make_items(15)
+        page = FakePage(
+            promotion_pages=[_promotion_response(items, None)],
+            vendors_response={"status": 500, "body": ""},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._run(page, tmp)
+        self.assertEqual(summary.termination_reason, "blocked")
+        self.assertIn("individualInfo", summary.error)
+
+
 class CrawlerCancelTest(unittest.TestCase):
     """AC-12, AC-13: cancel behavior and partial save."""
 

@@ -76,8 +76,9 @@ class CategoryPanel(QWidget):
         layout = QVBoxLayout(self)
 
         info = QLabel(
-            "대상: 쿠팡 카테고리 리스팅 — 선택한 카테고리의 페이지(1..N, 실측 상한 17)를 "
-            "순회 수집합니다. 로켓배송 상품은 기본 제외. "
+            "대상: 쿠팡 카테고리 리스팅 — 선택한 카테고리의 페이지(1..N)를 "
+            "순회 수집합니다. 목록 끝은 빈 페이지 연속 2회(부트 셸 지속 포함)로 "
+            "자동 판정됩니다. 로켓배송 상품은 기본 제외. "
             "카테고리 목록은 쿠팡 '카테고리' 메뉴와 동일합니다."
         )
         info.setWordWrap(True)
@@ -131,7 +132,10 @@ class CategoryPanel(QWidget):
 
         self.spin_max_pages = QSpinBox()
         self.spin_max_pages.setRange(1, 50)
-        self.spin_max_pages.setValue(17)
+        self.spin_max_pages.setValue(30)
+        self.spin_max_pages.setToolTip(
+            "카테고리당 최대 순회 페이지. 목록이 먼저 끝나면(빈 페이지 연속 2회)\n"
+            "이 값 전에 종료되므로 여유 있게 두어도 손해가 없습니다.")
         form.addRow("최대 페이지:", self.spin_max_pages)
 
         delay_row = QHBoxLayout()

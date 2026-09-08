@@ -109,9 +109,10 @@ class RunConfigTest(unittest.TestCase):
 # ── fake Unlocker (requests.Session.post) 페이지 응답 ────────────────────────
 
 class _FakeResponse:
-    def __init__(self, status: int, html: str = "") -> None:
+    def __init__(self, status: int, html: str = "", headers: dict | None = None) -> None:
         self.status_code = status
         self.text = html
+        self.headers = headers or {}
 
 
 class _FakeUnlockerSession:
@@ -164,14 +165,16 @@ class ListerTest(unittest.TestCase):
         return lister
 
     def test_collect_one_stops_on_empty_pages(self):
-        # 1페이지: 코드 2개, 2~3페이지: 빈 페이지 → 연속 2회(허용치)면 종료
+        # 1페이지: 코드 2개, 2~3페이지: 빈 페이지 → 연속 2회(허용치)면 종료.
+        # 빈 페이지는 이제 1회 재요청을 거친다(§9 회복 재시도) — 대기만 0으로.
         url1 = category_list_url("200002669", None)
         session = _FakeUnlockerSession({
             url1: _FakeResponse(200, _listing_html(["111111111", "222222222"])),
         })
         lister = self._lister(max_pages=3)
         target = CategoryTarget("200002669", "티셔츠")
-        out = lister._collect_one(session, target)
+        with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0):
+            out = lister._collect_one(session, target)
         self.assertEqual(out.codes, ["111111111", "222222222"])
         self.assertFalse(out.blocked)
 
@@ -250,6 +253,56 @@ class ListerTest(unittest.TestCase):
         )
         self.assertEqual(codes, [])
         self.assertFalse(blocked)
+
+    def test_fetch_page_retries_empty_once_and_recovers(self):
+        # 빈 껍데기(200 + 코드 0)는 1회 재요청으로 회복을 시도한다 —
+        # 대량 실측(ACCESS_ROUTES_RESEARCH §9)에서 재시도로 81% 회복됐다.
+        url = category_list_url("200002669", None)
+        session = _FakeUnlockerSession({
+            url: [_FakeResponse(200, ""), _FakeResponse(200, _listing_html(["111111111"]))],
+        })
+        lister = self._lister()
+        with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0):
+            codes, blocked = lister._fetch_page(
+                session, url, CategoryTarget("200002669", "티")
+            )
+        self.assertEqual(codes, ["111111111"])
+        self.assertFalse(blocked)
+        self.assertEqual(len(session.calls), 2)
+
+    def test_fetch_page_empty_stays_empty_after_single_retry(self):
+        # 재요청 후에도 비면 빈 페이지로 반환 — 연속 종료 판정은 호출자 몫.
+        # 무한 재시도가 아니라 정확히 1회만 재요청한다.
+        url = category_list_url("200002669", None)
+        session = _FakeUnlockerSession({
+            url: [_FakeResponse(200, ""), _FakeResponse(200, "")],
+        })
+        lister = self._lister()
+        with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0):
+            codes, blocked = lister._fetch_page(
+                session, url, CategoryTarget("200002669", "티")
+            )
+        self.assertEqual(codes, [])
+        self.assertFalse(blocked)
+        self.assertEqual(len(session.calls), 2)
+
+    def test_fetch_page_xbrd_error_header_is_blocked(self):
+        # 200 + x-brd-error 헤더 = Unlocker가 포장한 실패
+        # (BRIGHTDATA_AKAMAI_REVIEW §2) — 빈 페이지가 아니라 오류로 재시도한다.
+        url = category_list_url("200002669", None)
+        session = _FakeUnlockerSession({
+            url: [_FakeResponse(200, "", headers={
+                "x-brd-error": "captcha or protection page found",
+            })] * (config.LISTING_MAX_RETRIES + 1),
+        })
+        lister = self._lister()
+        with mock.patch.object(config, "UNLOCKER_RETRY_WAIT", 0):
+            codes, blocked = lister._fetch_page(
+                session, url, CategoryTarget("200002669", "티")
+            )
+        self.assertEqual(codes, [])
+        self.assertTrue(blocked)
+        self.assertEqual(len(session.calls), config.LISTING_MAX_RETRIES + 1)
 
 
 class CollectTokenTest(unittest.TestCase):

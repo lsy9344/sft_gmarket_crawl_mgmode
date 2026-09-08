@@ -269,6 +269,13 @@ class GmarketCategoryLister:
 
         blocked=True 는 재시도 소진 후에도 오류/차단으로 페이지를 읽지 못한
         경우. 200 으로 정상 수신됐으면(코드 0개여도) blocked=False.
+
+        Unlocker 실패는 200 + 빈 본문 + `x-brd-error` 헤더로 포장되기도 한다
+        (BRIGHTDATA_AKAMAI_REVIEW §2) — 상태 코드와 함께 헤더를 검사한다.
+        200 수신 후 goodscode 0개("빈 껍데기")는 차단도 목록 끝일 수도 있지만
+        대량 실측(ACCESS_ROUTES_RESEARCH §9)에서 재시도 1회로 343건 중 278건이
+        회복됐다 — 빈 페이지를 연속 종료 판정에 넣기 전 1회 재요청으로 회복을
+        시도한다(2026-09-09 검토 반영).
         """
         payload = {
             "zone": self._zone,
@@ -277,6 +284,7 @@ class GmarketCategoryLister:
             "country": self._country,
         }
         headers = {"Authorization": f"Bearer {self._token}"}
+        empty_retried = False
 
         for attempt in range(config.LISTING_MAX_RETRIES + 1):
             self._checkpoint()
@@ -295,9 +303,14 @@ class GmarketCategoryLister:
                 return [], True
 
             html = r.text or ""
-            if r.status_code != 200 or contains_bot_challenge(html):
+            resp_headers = getattr(r, "headers", None) or {}
+            brd_error = str(resp_headers.get("x-brd-error", "") or "").strip()
+            if r.status_code != 200 or brd_error or contains_bot_challenge(html):
+                detail = f"HTTP {r.status_code}"
+                if brd_error:
+                    detail += f", x-brd-error: {brd_error[:80]}"
                 self.on_log(
-                    f"  [{target.label}] 차단/오류 감지(HTTP {r.status_code}), "
+                    f"  [{target.label}] 차단/오류 감지({detail}), "
                     f"{config.UNLOCKER_RETRY_WAIT}초 대기..."
                 )
                 if attempt < config.LISTING_MAX_RETRIES:
@@ -313,13 +326,31 @@ class GmarketCategoryLister:
                 self.on_log(f"  [{target.label}] 레거시 대분류 변형 페이지 — 목록 없음, 건너뜀")
                 return [], False
 
-            return extract_goodscodes(html), False
+            codes = extract_goodscodes(html)
+            if codes:
+                return codes, False
+
+            # ── 빈 껍데기 회복 재시도 (200 + 코드 0) ─────────────────────
+            # 1회만 재요청한다 — 그래도 비면 빈 페이지로 반환해 호출자의
+            # 연속 빈 페이지 종료 판정이 그대로 적용된다.
+            if not empty_retried:
+                empty_retried = True
+                self.on_log(
+                    f"  [{target.label}] 빈 응답(200, 코드 0) — "
+                    f"{config.UNLOCKER_EMPTY_RETRY_WAIT}초 후 1회 재요청..."
+                )
+                self._wait_seconds(config.UNLOCKER_EMPTY_RETRY_WAIT)
+                continue
+            return [], False
 
         return [], True
 
     def _wait_blocked(self, name: str) -> None:
         """재시도 대기: 취소 반응성을 위해 1초 단위 분할 대기."""
-        for _ in range(config.UNLOCKER_RETRY_WAIT):
+        self._wait_seconds(config.UNLOCKER_RETRY_WAIT)
+
+    def _wait_seconds(self, seconds: float) -> None:
+        for _ in range(max(0, int(seconds))):
             self._checkpoint()
             time.sleep(1)
 

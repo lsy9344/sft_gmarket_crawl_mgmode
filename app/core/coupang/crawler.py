@@ -34,6 +34,17 @@ SHOP_SESSION_URL = "https://shop.coupang.com/A00067881"
 
 PHASES = ("warmup", "capture_template", "feed_pagination", "vendor_mapping", "business_info", "save")
 
+# 판매자 API 연속 실패 한도 — 이 이상 실패가 이어지면 IP 평판 차단이 진행
+# 중인 것으로 보고 중단한다(BRIGHTDATA_AKAMAI_REVIEW §9: getStoreReview 는
+# IP 평판 게이트). reason="blocked" 로 중단해야 SearchCrawler.run() 이
+# blockguard 쿨다운을 기록·적용해, 차단 중 재실행으로 평판을 더 깎는 일을
+# 막는다(2026-09-09 검토). 개별 403을 그냥 세고 끝까지 때리던 기존 동작의
+# 번아웃 나선을 끊는다.
+SELLER_API_CONSECUTIVE_ERROR_LIMIT = 5
+# individualInfo 배치(= vendorItemId 10건) 연속 실패 한도. 매핑이 전부 실패한
+# 상태에서는 2차 판매자정보 단계도 성공하지 않으므로 조기에 끊는다.
+VENDOR_BATCH_CONSECUTIVE_ERROR_LIMIT = 3
+
 
 def _safe_callback(cb: Callable | None, name: str, on_log: Callable | None, *args: Any) -> None:
     if cb is None:
@@ -448,6 +459,7 @@ class CoupangCrawler:
         batch_size = self.config.batch_size
         total_batches = (len(viids) + batch_size - 1) // batch_size
         batch_errors = 0
+        consecutive_batch_errors = 0
 
         for batch_idx in range(total_batches):
             self.control.checkpoint()
@@ -457,6 +469,16 @@ class CoupangCrawler:
             if had_error:
                 batch_errors += 1
                 summary.request_errors += 1
+                consecutive_batch_errors += 1
+                if consecutive_batch_errors >= VENDOR_BATCH_CONSECUTIVE_ERROR_LIMIT:
+                    raise _RunError(
+                        f"individualInfo API 배치가 연속 {consecutive_batch_errors}회 "
+                        "실패했습니다 — 차단/세션 만료 가능성이 높아 수집을 중단합니다. "
+                        "쿨다운 후 재시도하세요.",
+                        reason="blocked",
+                    )
+            else:
+                consecutive_batch_errors = 0
             all_vendors.update(vendors)
             self._progress("vendor_mapping", batch_idx + 1, total_batches)
             self._log(f"  Batch {batch_idx + 1}/{total_batches}: {len(batch)}건 → {len(vendors)}명")
@@ -537,11 +559,13 @@ class CoupangCrawler:
         self, page, vendor_ids: list[str], all_vendors: dict, summary: CoupangRunSummary
     ) -> None:
         total = len(vendor_ids)
+        consecutive_errors = 0
         for i, vendor_id in enumerate(vendor_ids):
             self.control.checkpoint()
             data = self._get_store_review(page, vendor_id)
 
             if data and data.get("name"):
+                consecutive_errors = 0
                 vinfo = all_vendors.get(vendor_id, {})
                 record = self._build_record(vendor_id, data, vinfo)
                 summary.records.append(record.to_dict())
@@ -556,11 +580,22 @@ class CoupangCrawler:
                 power = " [POWER]" if record.power_seller else ""
                 self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: {record.company_name}{power}")
             elif data:
+                # 브랜드 셀러 응답(200 정상) — API 는 살아있으므로 연속 실패 카운터 리셋
+                consecutive_errors = 0
                 summary.brand_seller_skipped += 1
                 self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: (brand seller - 스킵)")
             else:
                 summary.request_errors += 1
-                self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: (오류)")
+                consecutive_errors += 1
+                self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: (오류 — 연속 {consecutive_errors})")
+                if consecutive_errors >= SELLER_API_CONSECUTIVE_ERROR_LIMIT:
+                    raise _RunError(
+                        f"판매자정보 API(getStoreReview)가 연속 {consecutive_errors}회 "
+                        "실패했습니다 — IP 평판 차단이 진행 중일 가능성이 높아 수집을 "
+                        "중단합니다. 지금까지의 부분 결과는 저장되며, 충분한 쿨다운 후 "
+                        "재시도하세요.",
+                        reason="blocked",
+                    )
 
             self._progress("business_info", i + 1, total)
             self._emit_stats(summary)

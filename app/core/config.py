@@ -65,6 +65,11 @@ SAVE_INTERVAL = 50           # 중간 저장 주기(건)
 MAX_RETRIES = 3              # 네트워크 오류 재시도 횟수
 HTTP_TIMEOUT = 10            # Phase 2 요청 타임아웃(초)
 DEFAULT_MAX_ITEMS = 200      # 카테고리당 최대 수집 수
+# 판매자정보(mg) 요청이 연속 이 횟수만큼 실패하면 카테고리를 중단한다 —
+# 정상 응답(OK/SKIP/MISS)은 리셋되고 네트워크 오류·403/429/5xx 만 누적된다.
+# 건당 3회 내부 재시도까지 실패한 연속 10건은 사이트 측 제한(차단 진행)의
+# 강한 신호이며, 계속 때리면 회복을 늦출 뿐이다(2026-09-09 검토 반영).
+CONSECUTIVE_FAIL_ABORT = 10
 
 # Phase 0/1 리스팅 관련
 WARMUP_WAIT = 3              # Cloudflare 쿠키 획득 대기(초)
@@ -99,6 +104,12 @@ BRIGHTDATA_ZONE = "gm_unlocker"
 BRIGHTDATA_COUNTRY = "kr"        # 한국 가정용 IP 출발 강제 — 국내 한글 카탈로그 필수
 BRIGHTDATA_TIMEOUT = 90          # Unlocker 1요청 타임아웃(초) — 실측 20~70초
 UNLOCKER_RETRY_WAIT = 10         # Unlocker 실패 재시도 전 대기(초)
+# 빈 껍데기(200 수신 + goodscode 0개) 재요청 전 대기(초). 차단/오류 재시도보다
+# 짧게 — 대량 실측(ACCESS_ROUTES_RESEARCH §9)에서 이 형태는 재시도 1회로
+# 343건 중 278건이 회복됐다.
+UNLOCKER_EMPTY_RETRY_WAIT = 5
+# Unlocker 성공 요청 단가(USD) — 시작 전 예상 비용 안내용 (약 $3/1,000건 실측)
+BRIGHTDATA_COST_PER_REQUEST = 0.003
 
 
 def brightdata_api_token() -> str:

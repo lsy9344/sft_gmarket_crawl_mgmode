@@ -93,13 +93,13 @@ class CoupangPanel(QWidget):
 
         self.spin_delay_min = QDoubleSpinBox()
         self.spin_delay_min.setRange(0, 60)
-        self.spin_delay_min.setValue(1.0)
+        self.spin_delay_min.setValue(2.5)
         self.spin_delay_min.setSingleStep(0.5)
         form.addRow("지연 최소 (초):", self.spin_delay_min)
 
         self.spin_delay_max = QDoubleSpinBox()
         self.spin_delay_max.setRange(0, 60)
-        self.spin_delay_max.setValue(2.5)
+        self.spin_delay_max.setValue(3.5)
         self.spin_delay_max.setSingleStep(0.5)
         form.addRow("지연 최대 (초):", self.spin_delay_max)
 

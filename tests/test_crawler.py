@@ -20,6 +20,7 @@ from unittest.mock import patch
 from app.core import crawler as crawler_module
 from app.core.base import Control
 from app.core.crawler import (
+    OUTCOME_FAIL,
     OUTCOME_MISS,
     OUTCOME_OK,
     OUTCOME_SKIP,
@@ -131,6 +132,58 @@ class NormalRunTest(_FastCrawlTestCase):
         self.assertIsNone(summary.error)
         self.assertEqual(summary.total_success, 0)
         self.assertEqual(summary.per_category, {})
+
+
+class ConsecutiveFailAbortTest(_FastCrawlTestCase):
+    """연속 실패 조기 중단 (2026-09-09 검토 반영).
+
+    사이트 측 제한(403/429 등)이 진행 중이면 나머지 대상을 끝까지 때리지 않고
+    카테고리를 중단한다 — 실패 건은 collected_ids 에 커밋되지 않으므로 나중에
+    '이어서 수집'으로 재시도된다.
+    """
+
+    def _make(self, n: int):
+        storage = Storage(tempfile.mkdtemp())
+        storage.reset_collected_ids()
+        storage.reset_state()
+        codes = tuple(str(2000 + i) for i in range(n))
+        plan = _plan(
+            [CategoryPlan("테스트", "superdeal", codes, capped=False)], storage=storage
+        )
+        crawler = SellerCrawler(storage, control=Control(), delay=0.0)
+        return storage, plan, crawler
+
+    def test_consecutive_fails_abort_category(self) -> None:
+        _storage, plan, crawler = self._make(30)
+        crawler.fetch_seller_info = lambda gc: FetchResult(OUTCOME_FAIL)  # type: ignore[assignment]
+        records, stats, cancelled, error = crawler.crawl_category(
+            plan.categories[0], set()
+        )
+        self.assertEqual(stats.fail, 10)  # config.CONSECUTIVE_FAIL_ABORT
+        self.assertIsNotNone(error)
+        self.assertIn("연속 10회", error)
+        self.assertEqual(len(records), 0)
+        self.assertFalse(cancelled)
+
+    def test_recovered_streak_does_not_abort(self) -> None:
+        # 9회 실패 후 성공이 끼어들면 카운터가 리셋된다 — 중단 없이 끝까지 진행
+        _storage, plan, crawler = self._make(20)
+        seq = {"i": 0}
+
+        def fake_fetch(goodscode: str) -> FetchResult:
+            seq["i"] += 1
+            if seq["i"] % 10 == 0:  # 10번째, 20번째만 성공
+                return FetchResult(OUTCOME_OK, _rec(goodscode))
+            return FetchResult(OUTCOME_FAIL)
+
+        crawler.fetch_seller_info = fake_fetch  # type: ignore[assignment]
+        records, stats, cancelled, error = crawler.crawl_category(
+            plan.categories[0], set()
+        )
+        self.assertIsNone(error)
+        self.assertEqual(stats.success, 2)
+        self.assertEqual(stats.fail, 18)
+        self.assertEqual(len(records), 2)
 
 
 class CancelTest(_FastCrawlTestCase):

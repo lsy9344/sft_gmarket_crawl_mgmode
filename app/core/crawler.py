@@ -491,6 +491,7 @@ class SellerCrawler:
 
         self.on_log(f"[{cat_plan.category_name}] 계획된 {len(targets)}건 수집 시작...")
 
+        consecutive_fails = 0
         try:
             for i, code in enumerate(targets, start=1):
                 self.control.checkpoint()  # 건 경계 안전 중단/일시정지
@@ -499,6 +500,7 @@ class SellerCrawler:
                 result = self.fetch_seller_info(code)
 
                 if result.outcome == OUTCOME_OK and result.record is not None:
+                    consecutive_fails = 0
                     result.record["source"] = cat_plan.category_name
                     records.append(result.record)
                     newly_collected.add(code)  # 로컬에만 반영 — 아직 durable 아님
@@ -510,12 +512,27 @@ class SellerCrawler:
                         f"{result.record.get('store_name', '')}"
                     )
                 elif result.outcome == OUTCOME_SKIP:
+                    consecutive_fails = 0
                     stats.skip += 1
                     self.on_log(f"  [{cat_plan.category_name}] {code} -> 건너뜀(302)")
                 elif result.outcome == OUTCOME_FAIL:
                     stats.fail += 1
-                    self.on_log(f"  [{cat_plan.category_name}] {code} -> 실패")
+                    consecutive_fails += 1
+                    self.on_log(
+                        f"  [{cat_plan.category_name}] {code} -> 실패"
+                        f" (연속 {consecutive_fails})"
+                    )
+                    if consecutive_fails >= config.CONSECUTIVE_FAIL_ABORT:
+                        error = (
+                            f"판매자정보 요청이 연속 {consecutive_fails}회 실패해 "
+                            "이 카테고리를 중단합니다 — 사이트 측 제한(403/429 등) "
+                            "가능성. 시간을 두고 '이어서 수집'으로 남은 건을 "
+                            "재시도하세요(실패 건은 수집 완료로 커밋되지 않습니다)."
+                        )
+                        self.on_log(f"[{cat_plan.category_name}] {error}")
+                        break
                 else:
+                    consecutive_fails = 0
                     stats.miss += 1
                     self.on_log(f"  [{cat_plan.category_name}] {code} -> MISS")
 

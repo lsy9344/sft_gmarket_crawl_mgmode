@@ -181,6 +181,15 @@ class ClickJsErrorPage(FakeSearchPage):
         return super().evaluate(script, *args)
 
 
+class SellerErrorPage(FakeSearchPage):
+    """getStoreReview 만 전부 실패(403)하는 페이지 — 2차 단계 차단 시뮬레이션."""
+
+    def evaluate(self, script, *args):
+        if "getStoreReview" in script:
+            return {"status": 403, "body": "Access Denied"}
+        return super().evaluate(script, *args)
+
+
 def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocket=True,
          content_html=_OK_HTML, include_price_bands=False, category_id="", max_pages=3,
          keyword="뷰티", category_name="", subcategories=(), require_login=False):
@@ -774,6 +783,64 @@ class ProxyPhaseSplitTest(unittest.TestCase):
                 require_login=True)
         self.assertTrue(any("계정 보안 경보" in m for m in logs))
         self.assertIsNone(summary.error)
+
+
+class SellerApiBreakerBlockguardTest(unittest.TestCase):
+    """2차(판매자 API) 연속 실패 → blocked 중단 → blockguard 쿨다운 게이트.
+
+    검토(2026-09-09) 반영: 기존에는 2차 단계의 403이 건별 request_errors 로만
+    세져 끝까지 요청을 계속했다 — 차단 진행 중 재요청으로 IP 평판만 깎였다.
+    이제 연속 5회 실패 시 reason="blocked" 로 중단하고 blockguard 가 기록되어,
+    쿨다운 미경과 재실행이 게이트된다.
+    """
+
+    _VIIDS = ("11", "12", "13", "14", "15")  # 판매자 5명 → 연속 5회 실패
+
+    def _config(self, tmp_dir):
+        return SearchRunConfig(
+            output_dir=Path(tmp_dir),
+            output_prefix="breaker_test",
+            keyword="",
+            category_id="194276",
+            category_name="과일",
+            sorters=("saleCountDesc",),
+            category_cooldown_min=0,
+            category_cooldown_max=0,
+            max_pages=1,
+            warmup_time=0,
+            page_delay_min=0,
+            page_delay_max=0,
+            delay_min=0,
+            delay_max=0,
+        )
+
+    def test_consecutive_seller_errors_abort_and_gate_retry(self):
+        page = SellerErrorPage(sorter_rows=[[_row(v) for v in self._VIIDS]],
+                               viids=self._VIIDS)
+        with tempfile.TemporaryDirectory() as tmp:
+            crawler = FastSearchCrawler(
+                config=self._config(tmp), control=Control(),
+                browser_factory=lambda: FakeBrowser(page), on_log=lambda m: None,
+            )
+            summary = crawler.run()
+            self.assertEqual(summary.termination_reason, "blocked")
+            self.assertIn("연속 5회", summary.error)
+            self.assertEqual(summary.business_info_success, 0)
+            # blockguard 기록 — 차단 감지 시각이 남는다
+            self.assertIsNotNone(blockguard.read_block_state(Path(tmp)))
+
+            # 쿨다운 미경과 재실행은 게이트된다 — IP 를 더 때리지 않는다
+            page2 = SellerErrorPage(sorter_rows=[[_row(v) for v in self._VIIDS]],
+                                    viids=self._VIIDS)
+            crawler2 = FastSearchCrawler(
+                config=self._config(tmp), control=Control(),
+                browser_factory=lambda: FakeBrowser(page2), on_log=lambda m: None,
+            )
+            summary2 = crawler2.run()
+            self.assertEqual(summary2.termination_reason, "block_cooldown")
+            self.assertIn("쿨다운", summary2.error)
+            # 게이트로 홈 진입 자체를 하지 않는다
+            self.assertEqual(len(page2.goto_urls), 0)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,9 @@
 수집 모드 (2026-08-24 컨셉 전환 이후 카테고리 선택이 기본):
 
   카테고리 모드  — 카테고리 선택 → /np/categories/{id}?page=1..N 순회 수집
-                   (비로그인 SSR, 실측 상한 ~17페이지, rev.11~24)
+                   (비로그인 SSR. 종료는 빈 페이지 연속 2회 + 부트 셸 지속
+                   판정이 담당 — 과거의 "17페이지 상한"은 실측(BRIGHTDATA_
+                   AKAMAI_REVIEW §8: 19페이지 유효)으로 무효 확인)
   키워드 모드    — 층1 SRP 정렬 4종 + 층2 가격 밴드 (기존 3층 구조 잔존,
                    CLI 등에서만 사용. 페이지네이션은 비로그인 미제공 — rev.24)
 
@@ -61,7 +63,9 @@ SORTER_NAMES = {
 BACKOFF_SECONDS = (30, 60, 90)
 # PLP 빈 페이지 연속 허용 한도 (일시 렌더 실패 대비, 상한 도달 시 종료용)
 PLP_EMPTY_TOLERANCE = 2
-# PLP 최대 페이지 (실측 상한 ~17, rev.13)
+# PLP 최대 페이지 — 상한 자체는 종료 판정(빈 페이지 연속 2회 + 셸 지속)이
+# 담당하므로 목록 끝 이후의 여분 페이지는 471B 셸로 빠르게 끝난다(§8 실측).
+# 구버전 "실측 상한 ~17" 주석은 §8(냉동과일 19페이지 유효)로 폐기.
 PLP_MAX_PAGES_LIMIT = 50
 
 # 부트스트랩 셸 — Camoufox+프록시 내비게이션의 ~1/3 빈도로 오는 JS 부트 페이지.
@@ -137,7 +141,10 @@ class SearchRunConfig(CoupangRunConfig):
     page_delay_max: float = 20.0
     include_price_bands: bool = True
     category_id: str = ""
-    max_pages: int = 17
+    # 큰 카테고리는 17페이지를 넘는다(§8: 냉동과일 19페이지 유효). 종료 판정
+    # (빈 페이지 연속 2회 + 셸 지속)이 실제 목록 끝을 담당하므로 여분 페이지의
+    # 비용은 셸 1~2장뿐이다 — 기본값은 여유 있게 30.
+    max_pages: int = 30
     # 하위 카테고리 포함 수집 — (카테고리ID, 이름) 순서 쌍 (부모 다음 순회)
     subcategories: tuple[tuple[str, str], ...] = ()
     category_cooldown_min: float = 30.0

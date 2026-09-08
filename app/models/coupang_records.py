@@ -21,8 +21,11 @@ class CoupangRunConfig:
     max_scroll_pages: int = 10
     batch_size: int = 10
     warmup_time: float = 20.0
-    delay_min: float = 1.0
-    delay_max: float = 2.5
+    # 판매자정보(getStoreReview) 요청 간격 — IP 평판 게이트 엔드포인트(BRIGHTDATA_
+    # AKAMAI_REVIEW §9). 1,794건 무차단 실측값 3초 중심으로 정렬했다(2026-09-09
+    # 검토: 기존 1.0~2.5초는 검증치의 절반 수준으로 403 노출이 컸다).
+    delay_min: float = 2.5
+    delay_max: float = 3.5
     # 영속 브라우저 프로필 — 쿠키·방문 이력을 실행 간 누적해 세션 신뢰를 축적한다
     # (SEARCH_POC_FINDINGS 가설 A). False 면 기존의 매 실행 신규 세션 방식.
     use_persistent_profile: bool = True

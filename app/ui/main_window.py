@@ -1125,9 +1125,46 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
 
+        # Bright Data 잔액·예상 비용 확인 (2026-09-09 검토 반영). 잔액이 부족하면
+        # 실행이 끝까지 돌다가 남은 카테고리가 전부 "차단/오류"로 기록되므로
+        # 시작 전에 알린다. 조회 실패는 시작을 막지 않는다 — 참고 정보일 뿐이고
+        # 엔진이 요청 단위로 오류를 처리한다.
+        from app.core import config as app_config
+
+        est_requests = n_targets * config_run.max_pages
+        est_cost = est_requests * app_config.BRIGHTDATA_COST_PER_REQUEST
+        balance_note = "토큰 없음 — 설정 탭에서 API 토큰을 입력하세요"
+        insufficient = False
+        bd_token = brightdata.resolve_api_token(brightdata.load_settings())
+        if bd_token:
+            try:
+                balance = brightdata.fetch_balance(bd_token)
+                bal = float(balance.get("balance", 0) or 0)
+                balance_note = f"현재 잔액 ${bal:,.2f}"
+                insufficient = bal < est_cost
+            except brightdata.BrightDataAPIError as e:
+                balance_note = f"잔액 조회 실패({e}) — 무시하고 진행"
+        if insufficient:
+            reply = QMessageBox.question(
+                self, "Bright Data 잔액 부족 가능",
+                f"리스팅 예상 요청이 최대 {est_requests:,}건"
+                f"(≈ ${est_cost:,.2f}, 카테고리 {n_targets}개 × 최대 "
+                f"{config_run.max_pages}p)인데 {balance_note}입니다.\n"
+                f"잔액이 소진되면 남은 카테고리는 차단/오류로 건너뛰어집니다.\n\n"
+                f"계속할까요?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
         self.gmcat_control = Control()
         self._gmcat_had_error = False
         self.gmarket_category_panel.clear_results()
+        self.gmarket_category_panel.append_log(
+            f"[Bright Data] 리스팅 예상 요청 ≤ {est_requests:,}건 "
+            f"(≈ ${est_cost:,.2f}, 카테고리 {n_targets}개 × 최대 "
+            f"{config_run.max_pages}p) — {balance_note}"
+        )
 
         worker = GmarketCategoryCrawlWorker(config_run, self.gmcat_control)
         worker.phase_changed.connect(self.gmarket_category_panel.set_phase)
