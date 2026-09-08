@@ -28,7 +28,7 @@ from pathlib import Path
 
 import requests
 
-from app.core import config
+from app.core import brightdata, config
 from app.models.records import (
     SOURCE_CATEGORY,
     STATUS_BLOCKED,
@@ -165,31 +165,44 @@ class GmarketCategoryLister:
         self.max_pages = max(1, max_pages)
         self.page_delay_min = max(0.0, page_delay_min)
         self.page_delay_max = max(self.page_delay_min, page_delay_max)
+        # Unlocker 요청 3요소 — collect() 에서 설정 탭 값으로 확정된다.
+        # 기본값은 config 상수(_fetch_page 단위 테스트가 직접 호출할 때 필요).
+        self._token = ""
+        self._zone = config.BRIGHTDATA_ZONE
+        self._country = config.BRIGHTDATA_COUNTRY
 
     # ── 공개 API ──────────────────────────────────────────────────────────
     def collect(self, targets: list[CategoryTarget]) -> list[ListingOutcome]:
         """대상 카테고리를 순회하며 goodscode 목록 수집.
 
         반환 순서 = targets 순서. 토큰이 없으면 즉시 RuntimeError —
-        세팅 방법(환경변수/output/brightdata_token.txt)을 로그로 안내한다.
+        설정 탭에서 자신의 Bright Data API 토큰을 입력하면 그 계정 키로
+        사용량이 차감된다(환경변수·output/brightdata_token.txt 도 이전과
+        같은 우선순위 폴백으로 유효).
         """
         outcomes: list[ListingOutcome] = []
         if not targets:
             return outcomes
 
-        token = config.brightdata_api_token()
+        settings = brightdata.load_settings()
+        token = brightdata.resolve_api_token(settings)
         if not token:
             raise RuntimeError(
-                "Bright Data API 토큰이 설정되지 않았습니다. 환경변수 "
-                "BRIGHTDATA_API_TOKEN 또는 output/brightdata_token.txt 파일에 "
-                "토큰을 저장한 뒤 다시 시도하세요."
+                "Bright Data API 토큰이 설정되지 않았습니다. 앱 '설정' 탭에서 "
+                "API 토큰을 입력·저장한 뒤 다시 시도하세요. (환경변수 "
+                "BRIGHTDATA_API_TOKEN 또는 output/brightdata_token.txt 도 인식합니다)"
             )
         self._token = token
+        self._zone, self._country = (
+            settings.unlocker_zone or config.BRIGHTDATA_ZONE,
+            settings.country or config.BRIGHTDATA_COUNTRY,
+        )
 
         self._checkpoint()
         self.on_log(
-            f"[카테고리 리스팅] Web Unlocker 시작 (zone={config.BRIGHTDATA_ZONE}, "
-            f"country={config.BRIGHTDATA_COUNTRY})..."
+            f"[카테고리 리스팅] Web Unlocker 시작 (zone={self._zone}, "
+            f"country={self._country}, 토큰 "
+            f"{brightdata.masked_token(token)} — 입력된 계정 키로 차감)..."
         )
         with requests.Session() as session:
             for idx, target in enumerate(targets, start=1):
@@ -258,10 +271,10 @@ class GmarketCategoryLister:
         경우. 200 으로 정상 수신됐으면(코드 0개여도) blocked=False.
         """
         payload = {
-            "zone": config.BRIGHTDATA_ZONE,
+            "zone": self._zone,
             "url": url,
             "format": "raw",
-            "country": config.BRIGHTDATA_COUNTRY,
+            "country": self._country,
         }
         headers = {"Authorization": f"Bearer {self._token}"}
 

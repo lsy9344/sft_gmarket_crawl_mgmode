@@ -89,7 +89,7 @@ class RunConfigTest(unittest.TestCase):
     def test_invalid(self):
         from pathlib import Path
 
-        base = dict(output_dir=Path("/tmp/out"), output_prefix="x")
+        base = {"output_dir": Path("/tmp/out"), "output_prefix": "x"}
         with self.assertRaises(ValueError):
             GmarketCategoryRunConfig(**base, targets=())
         with self.assertRaises(ValueError):
@@ -115,13 +115,13 @@ class _FakeResponse:
 
 
 class _FakeUnlockerSession:
-    """post(url, headers, json, timeout) 만 제공하는 fake requests.Session."""
+    """post/get 제공 + 컨텍스트 매니저 지원 fake requests.Session."""
 
     def __init__(self, page_map) -> None:
         self.page_map = page_map  # 대상 URL → _FakeResponse | list[_FakeResponse]
         self.calls: list[dict] = []
 
-    def post(self, url, headers=None, json=None, timeout=None):  # noqa: ANN001
+    def post(self, url, headers=None, json=None, timeout=None):
         self.calls.append({"url": url, "headers": headers, "json": json})
         target_url = (json or {}).get("url", "")
         resp = self.page_map.get(target_url)
@@ -130,6 +130,12 @@ class _FakeUnlockerSession:
         if isinstance(resp, _FakeResponse):
             return resp
         return _FakeResponse(200, "")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
 
 
 def _listing_html(codes: list[str]) -> str:
@@ -222,7 +228,7 @@ class ListerTest(unittest.TestCase):
         })
         lister = self._lister()
         with mock.patch.object(config, "UNLOCKER_RETRY_WAIT", 0):
-            codes, blocked = lister._fetch_page(
+            _codes, blocked = lister._fetch_page(
                 session, url, CategoryTarget("200002669", "티")
             )
         self.assertTrue(blocked)
@@ -248,14 +254,41 @@ class ListerTest(unittest.TestCase):
 
 class CollectTokenTest(unittest.TestCase):
     def test_collect_raises_without_token(self):
+        from app.core import brightdata
+
         lister = GmarketCategoryLister(on_log=lambda m: None)
-        with mock.patch.object(config, "brightdata_api_token", lambda: ""):
-            with self.assertRaises(RuntimeError):
-                lister.collect([CategoryTarget("200002669", "티셔츠")])
+        with mock.patch.object(brightdata, "resolve_api_token", lambda s=None: ""), \
+                self.assertRaises(RuntimeError):
+            lister.collect([CategoryTarget("200002669", "티셔츠")])
 
     def test_collect_returns_empty_without_targets(self):
         lister = GmarketCategoryLister(on_log=lambda m: None)
         self.assertEqual(lister.collect([]), [])
+
+    def test_collect_uses_settings_zone_and_token(self):
+        # 설정 탭에서 입력한 계정 키·존이 Unlocker 요청에 그대로 쓰인다 —
+        # 사용량 차감 대상 계정이 입력 키로 결정되는 것의 엔진 단면.
+        from app.core import brightdata
+
+        lister = GmarketCategoryLister(
+            on_log=lambda m: None, max_pages=1, page_delay_min=0, page_delay_max=0,
+        )
+        url = category_list_url("200002669", None)
+        session = _FakeUnlockerSession({
+            url: _FakeResponse(200, _listing_html(["111111111"])),
+        })
+        settings = brightdata.BrightDataSettings(
+            api_token="ui-tok", unlocker_zone="my_zone", country="us")
+        with mock.patch.object(brightdata, "load_settings", lambda: settings), \
+             mock.patch.object(brightdata, "resolve_api_token", lambda s: "ui-tok"), \
+             mock.patch("app.core.gmarket_category_crawler.requests.Session",
+                        return_value=session):
+            outcomes = lister.collect([CategoryTarget("200002669", "티셔츠")])
+        self.assertEqual(outcomes[0].codes, ["111111111"])
+        call = session.calls[0]
+        self.assertEqual(call["json"]["zone"], "my_zone")
+        self.assertEqual(call["json"]["country"], "us")
+        self.assertEqual(call["headers"]["Authorization"], "Bearer ui-tok")
 
 
 if __name__ == "__main__":

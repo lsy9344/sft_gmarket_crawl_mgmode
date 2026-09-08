@@ -27,11 +27,22 @@ class CoupangRunConfig:
     # (SEARCH_POC_FINDINGS 가설 A). False 면 기존의 매 실행 신규 세션 방식.
     use_persistent_profile: bool = True
     profile_dir: Path | None = None  # None → <프로젝트 루트>/runtime_profile
+    # Bright Data ISP 프록시 (playwright/Camoufox proxy dict) — None 이면 직접 접속.
+    # 설정 탭에서 활성화한 경우에만 주입된다. 판매자정보 API(getStoreReview)는
+    # 프록시 IP에서 403 실측(BRIGHTDATA_AKAMAI_REVIEW §9)이므로 기본값은 끔이다.
+    proxy: dict | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.use_persistent_profile, bool):
             # TRY004 무시 — 설정 검증은 이 파일 전체가 ValueError 관례
             raise ValueError("use_persistent_profile must be a bool")  # noqa: TRY004
+        if self.proxy is not None:
+            if not isinstance(self.proxy, dict):
+                raise ValueError("proxy must be a dict or None")
+            for key in ("server", "username", "password"):
+                value = self.proxy.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"proxy must include a non-empty '{key}'")
         if self.profile_dir is not None:
             self.profile_dir = Path(self.profile_dir)
         if self.max_scroll_pages < 1:

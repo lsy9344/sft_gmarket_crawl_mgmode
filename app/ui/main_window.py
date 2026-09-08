@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.core import brightdata
 from app.core.base import Control
 from app.core.config import DEFAULT_OUTPUT_DIR
 from app.core.coupang.categories import (
@@ -25,7 +26,11 @@ from app.core.coupang.categories import (
 from app.core.crawler import reconcile_leftover_checkpoints
 from app.core.gmarket_categories import (
     DEFAULT_SEED_CACHE_PATH as GMARKET_SEED_CACHE_PATH,
+)
+from app.core.gmarket_categories import (
     GmarketCategoryTreeCache,
+)
+from app.core.gmarket_categories import (
     count_nodes as gmcat_count_nodes,
 )
 from app.core.plan import build_crawl_plan
@@ -35,6 +40,7 @@ from app.ui.category_panel import CategoryPanel
 from app.ui.coupang_panel import CoupangPanel
 from app.ui.foodspring_panel import FoodSpringPanel
 from app.ui.gmarket_category_panel import GmarketCategoryPanel
+from app.ui.widgets.brightdata_panel import BrightDataPanel
 from app.ui.widgets.log_panel import LogPanel
 from app.ui.widgets.prescan_table import PrescanTable
 from app.ui.widgets.progress_panel import ProgressPanel
@@ -208,6 +214,11 @@ class MainWindow(QMainWindow):
             self._on_gmcat_open_result
         )
 
+        # 설정 탭 (2026-09-09 신규: Bright Data 계정 키 입력 — 두 탭의
+        # Bright Data 사용량(Web Unlocker/ISP 프록시)을 입력된 계정 키로 차감)
+        self.brightdata_panel = BrightDataPanel()
+        self.tab_widget.addTab(self.brightdata_panel, "설정")
+
         self.setCentralWidget(self.tab_widget)
         self._show_status("준비됨")
 
@@ -241,6 +252,7 @@ class MainWindow(QMainWindow):
         self.foodspring_panel.set_external_busy(gmarket_busy)
         self.category_panel.set_external_busy(gmarket_busy)
         self.gmarket_category_panel.set_external_busy(gmarket_busy)
+        self.brightdata_panel.set_external_busy(gmarket_busy)
 
     # ── 전역 단일 워커 ─────────────────────────────────────────────
     def _active_worker(self):
@@ -293,6 +305,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(busy)
         self.foodspring_panel.set_external_busy(busy)
         self.gmarket_category_panel.set_external_busy(busy)
+        self.brightdata_panel.set_external_busy(busy)
 
     # ── Gmarket: 사전 조사 ─────────────────────────────────────────
     def _make_storage(self) -> Storage | None:
@@ -800,6 +813,7 @@ class MainWindow(QMainWindow):
             self.btn_start.setEnabled(False)
             self.btn_resume_run.setEnabled(False)
             self.btn_reset.setEnabled(False)
+            self.brightdata_panel.set_external_busy(True)
         else:
             self._set_ui_state("prescanned" if self.prescan_results else "idle")
 
@@ -1394,6 +1408,24 @@ class MainWindow(QMainWindow):
 
         self.category_control = Control()
         self.category_panel.clear_results()
+
+        # 설정 탭에서 활성화한 Bright Data ISP 프록시 주입 — 사용량은 입력된
+        # 계정 키에서 차감된다. 자격이 불완비하면 직접 접속으로 진행하고
+        # 그 이유를 로그로 남긴다.
+        bd_settings = brightdata.load_settings()
+        proxy = brightdata.isp_proxy_dict(bd_settings)
+        if proxy:
+            config.proxy = proxy
+            self.category_panel.append_log(
+                f"[Bright Data] ISP 프록시 경유: "
+                f"{brightdata.isp_proxy_summary(proxy)} "
+                f"(토큰 {brightdata.masked_token(brightdata.resolve_api_token(bd_settings))} 계정 차감)"
+            )
+        elif bd_settings.isp_enabled:
+            self.category_panel.append_log(
+                "[Bright Data] ISP 프록시 사용 설정이지만 계정 ID/존/비밀번호가 "
+                "불완비합니다 — 직접 접속으로 진행합니다. 설정 탭에서 완성하세요."
+            )
 
         worker = SearchWorker(config, self.category_control)
         worker.phase_changed.connect(self.category_panel.set_phase)

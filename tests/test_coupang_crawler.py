@@ -721,6 +721,60 @@ class ConfigValidationTest(unittest.TestCase):
         c = CoupangRunConfig(output_dir=Path("/tmp"), output_prefix="  ")
         self.assertIsNone(c.output_prefix)
 
+    def test_proxy_default_none(self):
+        c = CoupangRunConfig(output_dir=Path("/tmp"))
+        self.assertIsNone(c.proxy)
+
+    def test_proxy_must_be_dict_or_none(self):
+        with self.assertRaises(ValueError):
+            CoupangRunConfig(output_dir=Path("/tmp"), proxy="http://proxy:8080")
+
+    def test_proxy_requires_complete_credentials(self):
+        base = {"output_dir": Path("/tmp")}
+        proxy = {"server": "http://brd.superproxy.io:22225",
+                 "username": "brd-customer-hl_x-zone-z", "password": "pw"}
+        for key in ("server", "username", "password"):
+            broken = {k: v for k, v in proxy.items() if k != key}
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                CoupangRunConfig(**base, proxy=broken)
+            with self.subTest(blank=key):
+                broken = dict(proxy)
+                broken[key] = "  "
+                with self.assertRaises(ValueError):
+                    CoupangRunConfig(**base, proxy=broken)
+
+    def test_valid_proxy_accepted(self):
+        c = CoupangRunConfig(
+            output_dir=Path("/tmp"),
+            proxy={"server": "http://brd.superproxy.io:22225",
+                   "username": "brd-customer-hl_x-zone-z", "password": "pw"},
+        )
+        self.assertEqual(c.proxy["username"], "brd-customer-hl_x-zone-z")
+
+    def test_create_browser_passes_proxy_to_camoufox(self):
+        # 설정 탭에서 활성화한 ISP 프록시가 Camoufox 실행 인자로 전달되는 것 확인.
+        import tempfile
+        from unittest.mock import MagicMock, patch
+
+        fake_cm = MagicMock()
+        fake_camoufox = MagicMock(return_value=fake_cm)
+        fake_cm.__enter__.return_value = MagicMock()
+        proxy = {"server": "http://brd.superproxy.io:22225",
+                 "username": "brd-customer-hl_x-zone-z", "password": "pw"}
+        config = _make_config(tempfile.mkdtemp(), proxy=proxy,
+                              use_persistent_profile=False)
+        logs: list[str] = []
+        crawler = CoupangCrawler(config, Control(), on_log=logs.append)
+        with patch("camoufox.sync_api.Camoufox", fake_camoufox):
+            _browser, cm = crawler._create_browser()
+        self.assertIs(cm, fake_cm)
+        kwargs = fake_camoufox.call_args.kwargs
+        self.assertEqual(kwargs["proxy"], proxy)
+        # 프록시 경유 로그 — 비밀번호는 노출되지 않는다
+        joined = "\n".join(logs)
+        self.assertIn("[Bright Data]", joined)
+        self.assertNotIn("pw", joined)
+
 
 class ControlSleepTest(unittest.TestCase):
     """Control.sleep interruptible behavior."""

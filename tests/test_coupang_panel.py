@@ -94,14 +94,16 @@ class MainWindowTabTest(unittest.TestCase):
         self.win.close()
 
     def test_has_three_tabs(self):
-        """AC-02: QTabWidget with Gmarket, Coupang, Foodspring, Coupang 카테고리 and Gmarket 카테고리 tabs."""
+        """AC-02: QTabWidget with Gmarket, Coupang, Foodspring, Coupang 카테고리,
+        Gmarket 카테고리 and 설정(Bright Data) tabs."""
         self.assertIsInstance(self.win.tab_widget, QTabWidget)
-        self.assertEqual(self.win.tab_widget.count(), 5)
+        self.assertEqual(self.win.tab_widget.count(), 6)
         self.assertEqual(self.win.tab_widget.tabText(0), "Gmarket")
         self.assertEqual(self.win.tab_widget.tabText(1), "Coupang")
         self.assertEqual(self.win.tab_widget.tabText(2), "Foodspring")
         self.assertEqual(self.win.tab_widget.tabText(3), "Coupang 카테고리")
         self.assertEqual(self.win.tab_widget.tabText(4), "Gmarket 카테고리")
+        self.assertEqual(self.win.tab_widget.tabText(5), "설정")
 
     def test_window_title_platform_neutral(self):
         """AC-02: platform-neutral title."""

@@ -67,6 +67,15 @@ python -m app.main
 부가 버튼: **[일시정지]/[재개]**, **[취소]**(현재 건 완료 후 중단 + 중간 저장),
 **[이어서 수집]**(사전 조사 후 남은 신규 건만 자동 수집), **[초기화]**(수집 이력/상태 리셋).
 
+## Bright Data 계정 설정 (2026-09-09 신규 "설정" 탭)
+
+Gmarket 카테고리 탭(Web Unlocker)과 Coupang 카테고리 탭(ISP 프록시, 선택)의
+Bright Data 사용량은 **설정 탭에 입력한 자신의 계정 API 토큰에서 차감**된다.
+토큰·존·국가 입력, 잔액 조회(토큰 검증), ISP 프록시 자격(계정 ID/존/비밀번호 —
+"토큰으로 가져오기"로 자동 채움)을 지원하며, 자격 증명은 저장소 밖
+`output/brightdata_settings.json` 에만 저장된다. 상세:
+[`docs/BRIGHTDATA_ACCOUNT_SETTINGS.md`](docs/BRIGHTDATA_ACCOUNT_SETTINGS.md).
+
 ## 아키텍처
 
 ```

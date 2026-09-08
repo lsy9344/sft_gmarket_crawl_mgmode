@@ -15,6 +15,7 @@ import traceback
 from collections.abc import Callable
 from typing import Any
 
+from app.core import brightdata
 from app.core.base import CancelledError, Control
 from app.core.config import DEFAULT_COUPANG_PROFILE_DIR
 from app.core.storage import acquire_output_lock
@@ -168,16 +169,26 @@ class CoupangCrawler:
             from camoufox.sync_api import Camoufox
         except ImportError as e:
             raise _RunError(
-                "Camoufox 패키지가 설치되지 않았습니다. "
+                "Camoufox 패키지가 설치되지 않습니다. "
                 "명령 프롬프트에서 SellerCollector.exe --setup-runtime 을 먼저 실행하세요.",
                 reason="error",
             ) from e
+        # Bright Data ISP 프록시 (설정 탭에서 활성화한 경우에만 config.proxy 존재).
+        # geoip=True 가 프록시 IP 기준 locale/타임존/지리를 자동 동기화한다 —
+        # Akamai 교차 검증 신호 일관성 (BRIGHTDATA_AKAMAI_REVIEW §7.2).
+        proxy = getattr(self.config, "proxy", None)
+        if proxy:
+            self._log(
+                f"  [Bright Data] ISP 프록시 경유: "
+                f"{brightdata.isp_proxy_summary(proxy)} — 사용량은 입력된 계정 키로 차감"
+            )
         if self.config.use_persistent_profile:
             profile_dir = self.config.profile_dir or DEFAULT_COUPANG_PROFILE_DIR
             try:
                 cm = Camoufox(
                     headless=False, geoip=True, locale="ko-KR", humanize=True,
                     persistent_context=True, user_data_dir=str(profile_dir),
+                    proxy=proxy,
                 )
                 browser = cm.__enter__()
             except Exception as e:  # noqa: BLE001 - 프로필 락 등 기동 실패 → 폴백
@@ -185,7 +196,10 @@ class CoupangCrawler:
             else:
                 self._log(f"  영속 프로필 사용: {profile_dir}")
                 return browser, cm
-        cm = Camoufox(headless=False, geoip=True, locale="ko-KR", humanize=True)
+        cm = Camoufox(
+            headless=False, geoip=True, locale="ko-KR", humanize=True,
+            proxy=proxy,
+        )
         browser = cm.__enter__()
         return browser, cm
 
