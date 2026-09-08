@@ -178,3 +178,26 @@ getStoreReview → fruit_sellers.csv / fruit_product_seller.csv 저장.
   어쩔 수 없으나, 대량 확대 시 `route` 차단(이미지/폰트) 등 대역폭 절감 필요.
 - Windows 예약잡(PatchrightFruitPipeline-80Min)은 이미 Disabled 상태로 확인
   (충돌 없음). 재개 여부는 사용자 결정.
+
+## 10. 앱 반영 완료 — 실측 규칙의 엔진 구현 (2026-09-09)
+
+> §3·§8·§9 의 scratchpad 실측(coupang_fruit_remaining / coupang_fruit_sellers)
+> 규칙을 메인 앱의 Coupang 수집 엔진에 반영했다. 설정 입력은
+> [BRIGHTDATA_ACCOUNT_SETTINGS.md](../BRIGHTDATA_ACCOUNT_SETTINGS.md) 의
+> "설정" 탭(output/brightdata_settings.json / 환경변수)을 사용한다.
+
+| 실측 규칙 | 앱 구현 |
+|---|---|
+| 1차 목록 = Camoufox + ISP 프록시 (§3·§7.3) | 설정 탭에서 ISP 프록시 활성화 → `SearchRunConfig.proxy` 주입 → `Camoufox(geoip=True, proxy=...)` |
+| 작은 페이지(셸) → 재내비게이션 (§3) | `_load_listing_page`: 상품 0건 + 본문 10KB 미만 → 대기 후 같은 URL 재내비게이션 최대 2회 (`PLP_SHELL_HTML_BYTES`, `SHELL_RENAVIGATE_MAX`) |
+| 셸 지속 = 목록 끝 판정 (§8, 471B 반복) | 재내비게이션 소수 후에도 셸이면 빈 페이지 반환 — 기존 빈 페이지 연속 2회 종료 판정과 연동 |
+| 2차 판매자정보 = 회선 IP 필수 (§9) | 2차 직전 `_switch_to_direct_session()` — 프록시 세션을 닫고 `Camoufox(proxy=None, geoip=True)` 새 세션으로 홈 웜업 후 `getStoreReview` 진행 (scratchpad 2-pass 방식) |
+| 키워드 차단 즉시 중단 유지 | `is_blocked` 의 소프트 블록(크기) 규칙 대신 `keyword_block_reason`(키워드 전용) 로 하드 스톱 판정 — 작은 응답은 셸 규칙이 흡수 |
+
+- 세션 교체를 지원하도록 `CoupangCrawler.run()` 이 마지막 세션을 추적해
+  finally 정리한다(잔류 프로세스 방지 유지). 프록시 미설정 시 동작은
+  기존과 완전히 동일하다(단일 세션 — 회귀 없음).
+- 검증: 전체 자동 테스트 432 passed (셸 4건 + 세션 분리 3건 + 프록시 인자
+  1건 신규), ruff/mypy 베이스라인 정합.
+- 라이브 확인은 미실행 — 배포 환경에서 실제 프록시 키로 1차→2차 전환 1사이클
+  관찰이 남아 있다(비용은 입력 계정 키에서 차감).

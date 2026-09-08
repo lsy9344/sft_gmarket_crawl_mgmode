@@ -85,14 +85,27 @@ class SearchProduct:
         return self.vendor_item_id or self.item_id
 
 
+def keyword_block_reason(html: str) -> str:
+    """차단 키워드 매칭만 수행 — 소프트 블록(크기) 판정 없이.
+
+    목록 로드 경로는 작은 본문을 '차단'이 아니라 '부트스트랩 셸'로 분류해야
+    한다(2026-09-09 실측, BRIGHTDATA_AKAMAI_REVIEW §3·§8 — 셸은 재내비게이션
+    으로 흡수). 키워드 차단만 하드 스톱으로 쓰려면 이 함수를 쓴다.
+    """
+    low = (html or "").lower()
+    for kw in BLOCK_KEYWORDS:
+        if kw.lower() in low:
+            return f"차단 키워드: {kw}"
+    return ""
+
+
 def is_blocked(html: str) -> tuple[bool, str]:
     """차단 페이지 감지 — 키워드 매칭 + 소프트 블록(비정상 작은 응답)."""
     if len(html.encode("utf-8", errors="ignore")) < _SOFT_BLOCK_MAX_BYTES:
         return True, f"소프트 블록 ({len(html)}자)"
-    low = html.lower()
-    for kw in BLOCK_KEYWORDS:
-        if kw.lower() in low:
-            return True, f"차단 키워드: {kw}"
+    reason = keyword_block_reason(html)
+    if reason:
+        return True, reason
     return False, ""
 
 

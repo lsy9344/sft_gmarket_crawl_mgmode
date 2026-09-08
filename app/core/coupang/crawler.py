@@ -99,12 +99,15 @@ class CoupangCrawler:
 
     def run(self) -> CoupangRunSummary:
         summary = CoupangRunSummary()
-        browser = None
-        cm = None  # Camoufox context manager (real browser only)
+        # 열린 세션의 현재 값 — 파이프라인 중 세션 교체(프록시→회선 IP 전환)를
+        # 해도 finally 가 마지막 세션을 닫도록 self 경유로 읽는다.
+        self._browser = None
+        self._cm = None  # Camoufox context manager (real browser only)
         try:
             self.config.output_dir.mkdir(parents=True, exist_ok=True)
             acquire_output_lock(self.config.output_dir)
             browser, cm = self._create_browser()
+            self._browser, self._cm = browser, cm
             page = browser.new_page()
             self._attach_http_status_logger(page)
             self._run_pipeline(page, summary)
@@ -130,6 +133,7 @@ class CoupangCrawler:
                 self._save_results(summary, partial=True)
         finally:
             cleanup_failed = False
+            browser, cm = self._browser, self._cm
             if cm is not None:
                 try:
                     cm.__exit__(None, None, None)
@@ -155,8 +159,13 @@ class CoupangCrawler:
         self._emit_stats(summary)
         return summary
 
-    def _create_browser(self):
+    def _create_browser(self, with_proxy: bool | None = None):
         """Returns (browser, context_manager). cm is None for injected factories.
+
+        with_proxy: None 이면 config.proxy 설정을 따르고, False 면 프록시 없이
+        연다 — 프록시 세션(1차 목록)에서 회선 IP 세션(2차 판매자 API)으로
+        전환할 때 쓴다(BRIGHTDATA_AKAMAI_REVIEW §9: getStoreReview 는 프록시
+        IP에서 403). True 는 config.proxy 강제(현재 미사용).
 
         영속 프로필(persistent_context)로 쿠키·방문 이력을 실행 간 누적해 세션
         신뢰를 축적한다(SEARCH_POC_FINDINGS 가설 A — 매 실행 신규 세션 + 즉시
@@ -174,14 +183,17 @@ class CoupangCrawler:
                 reason="error",
             ) from e
         # Bright Data ISP 프록시 (설정 탭에서 활성화한 경우에만 config.proxy 존재).
+        # with_proxy=False 면 회선 IP 세션(2차 판매자 API)이므로 프록시를 뺀다.
         # geoip=True 가 프록시 IP 기준 locale/타임존/지리를 자동 동기화한다 —
         # Akamai 교차 검증 신호 일관성 (BRIGHTDATA_AKAMAI_REVIEW §7.2).
-        proxy = getattr(self.config, "proxy", None)
+        proxy = None if with_proxy is False else getattr(self.config, "proxy", None)
         if proxy:
             self._log(
                 f"  [Bright Data] ISP 프록시 경유: "
                 f"{brightdata.isp_proxy_summary(proxy)} — 사용량은 입력된 계정 키로 차감"
             )
+        elif with_proxy is False and getattr(self.config, "proxy", None):
+            self._log("  [Bright Data] 2차 세션 — 회선 IP 직접 접속 (프록시 미사용)")
         if self.config.use_persistent_profile:
             profile_dir = self.config.profile_dir or DEFAULT_COUPANG_PROFILE_DIR
             try:

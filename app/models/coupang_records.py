@@ -28,8 +28,9 @@ class CoupangRunConfig:
     use_persistent_profile: bool = True
     profile_dir: Path | None = None  # None → <프로젝트 루트>/runtime_profile
     # Bright Data ISP 프록시 (playwright/Camoufox proxy dict) — None 이면 직접 접속.
-    # 설정 탭에서 활성화한 경우에만 주입된다. 판매자정보 API(getStoreReview)는
-    # 프록시 IP에서 403 실측(BRIGHTDATA_AKAMAI_REVIEW §9)이므로 기본값은 끔이다.
+    # 설정 탭에서 활성화한 경우에만 주입된다. 1차 목록은 프록시 IP로 돌고, 엔진이
+    # 2차 판매자정보 직전에 회선 IP 세션으로 자동 전환한다(getStoreReview 는
+    # 프록시 IP에서 403 실측 — BRIGHTDATA_AKAMAI_REVIEW §9). 기본값은 끔.
     proxy: dict | None = None
 
     def __post_init__(self) -> None:

@@ -31,6 +31,7 @@ from app.core.coupang.search_parser import (
     DOM_EXTRACTION_JS,
     SearchProduct,
     is_blocked,
+    keyword_block_reason,
     parse_extracted,
     parse_price_bands,
 )
@@ -62,6 +63,15 @@ BACKOFF_SECONDS = (30, 60, 90)
 PLP_EMPTY_TOLERANCE = 2
 # PLP 최대 페이지 (실측 상한 ~17, rev.13)
 PLP_MAX_PAGES_LIMIT = 50
+
+# 부트스트랩 셸 — Camoufox+프록시 내비게이션의 ~1/3 빈도로 오는 JS 부트 페이지.
+# 실측(2026-09-09, BRIGHTDATA_AKAMAI_REVIEW §3·§8): 셸 본문 471B~3.4KB,
+# 정상 목록 ~600KB+ — 차단이 아니므로 대기 후 같은 URL 재내비게이션으로
+# 흡수하고(1~2회 회복), 끝까지 지속하면 실제 목록 끝으로 판정한다(471B 반복).
+# 차단 응답(Access Denied 등)은 is_blocked 가 먼저 걸러내므로 이 크기
+# 기준과 충돌하지 않는다.
+PLP_SHELL_HTML_BYTES = 10_000
+SHELL_RENAVIGATE_MAX = 2
 
 # 홈 메가메뉴의 카테고리 앵커 클릭 JS — 첫 카테고리 진입을 딥링크 goto 대신
 # 자연 내비게이션으로 수행하기 위한 것. href 를 path 기준 정확 일치로 비교해
@@ -227,13 +237,7 @@ class SearchCrawler(CoupangCrawler):
         # Phase 1: 웜업 (기존 방식 재사용)
         self._phase("warmup")
         self._log("Phase 1: 웜업 시작...")
-        from app.core.coupang.crawler import COUPANG_HOME
-        page.goto(COUPANG_HOME, wait_until="domcontentloaded", timeout=30000)
-        self.control.sleep(2 * self._wait_scale)
-        self._verify_warmup_ok(page)
-        self._check_login_state(page)
-        self._natural_interaction(page, config.warmup_time)
-        self.control.checkpoint()
+        self._warmup_home(page)
         self._log("  Akamai 검증 완료.")
 
         products: dict[str, SearchProduct] = {}
@@ -350,6 +354,14 @@ class SearchCrawler(CoupangCrawler):
             raise _RunError("vendorItemId 를 확보하지 못했습니다.", reason="no_items")
         self._log(f"vendorItemId {len(viids)}개 → 스토어 매핑 준비")
 
+        # ── 2차 전환: 프록시 사용 중이면 판매자 API 단계는 회선 IP 세션으로 ──
+        # 실측(BRIGHTDATA_AKAMAI_REVIEW §9): 목록·매핑(individualInfo)은 프록시
+        # IP 로 200 이지만 판매자정보(getStoreReview)는 프록시 IP 에서 403 —
+        # Akamai 가 엔드포인트별로 다른 규칙을 둔다. scratchpad 2-pass 방식의
+        # 앱 반영: 프록시 세션을 닫고 비프록시(회선 IP) 세션을 새로 연다.
+        if getattr(config, "proxy", None):
+            page = self._switch_to_direct_session(page)
+
         # Phase 5~7: 기존 스토어 API 파이프라인 재사용
         self._phase("vendor_mapping")
         self._log("Phase 5: vendor 매핑...")
@@ -371,6 +383,54 @@ class SearchCrawler(CoupangCrawler):
         summary.termination_reason = summary.termination_reason or "success"
 
     # ── 수집 헬퍼 ──────────────────────────────────────────────────────────
+
+    def _warmup_home(self, page) -> None:
+        """홈 진입 + 차단·로그인 검사 + 자연 행동 — 세션 시작의 공통 규율.
+
+        1차(목록) 세션과 2차(회선 IP 전환) 세션 모두 같은 웜업을 거친다.
+        """
+        from app.core.coupang.crawler import COUPANG_HOME
+        page.goto(COUPANG_HOME, wait_until="domcontentloaded", timeout=30000)
+        self.control.sleep(2 * self._wait_scale)
+        self._verify_warmup_ok(page)
+        self._check_login_state(page)
+        self._natural_interaction(page, self.config.warmup_time)
+        self.control.checkpoint()
+
+    def _switch_to_direct_session(self, page):
+        """프록시 세션(1차 목록) → 회선 IP 세션(2차 판매자 API) 전환.
+
+        실측(BRIGHTDATA_AKAMAI_REVIEW §9): 판매자정보 API(getStoreReview)는
+        프록시 IP 에서 403, 회선 IP 에서 200 — Akamai 가 엔드포인트별로 다른
+        규칙을 둔다. 프록시 세션을 닫고 같은 영속 프로필로 비프록시 세션을
+        새로 열어 웜업한 뒤, 새 page 를 반환한다(scratchpad 2-pass 방식).
+        """
+        self._log(
+            "  [Bright Data] 2차 전환 — 판매자 API 단계는 회선 IP 세션으로 진행 "
+            "(프록시 IP getStoreReview 403 실측)"
+        )
+        if getattr(self.config, "require_login", False):
+            self._log(
+                "  [Bright Data] 주의: 로그인 세션 + 프록시 조합은 계정 보안 경보 "
+                "가능성이 있습니다(BRIGHTDATA_AKAMAI_REVIEW §7.4). 가능하면 "
+                "비로그인 목록 수집에만 프록시를 사용하세요."
+            )
+        old_browser, old_cm = self._browser, self._cm
+        try:
+            if old_cm is not None:
+                old_cm.__exit__(None, None, None)
+            elif old_browser is not None:
+                old_browser.close()
+        except Exception as e:  # noqa: BLE001 - 이전 세션 정리는 진행을 막지 않음
+            self._log(f"  이전 세션 종료 실패({type(e).__name__}: {e}) — 새 세션으로 진행")
+        browser, cm = self._create_browser(with_proxy=False)
+        self._browser, self._cm = browser, cm
+        new_page = browser.new_page()
+        self._attach_http_status_logger(new_page)
+        self._log("Phase 4.5: 2차 세션 웜업 (회선 IP)...")
+        self._warmup_home(new_page)
+        self._log("  2차 세션 준비 완료.")
+        return new_page
 
     def _check_login_state(self, page) -> None:
         """홈에서 로그인 세션 여부를 확인하고 require_login 정책을 적용한다.
@@ -493,6 +553,8 @@ class SearchCrawler(CoupangCrawler):
         (PLP 상한 도달은 빈 페이지가 정상 신호 — rev.13 실측).
         skip_goto=True 면 첫 시도에서 goto 를 건너뛴다 — 메뉴 클릭 진입처럼
         페이지가 이미 목표 URL 에 있을 때 사용하며, 재시도 시에는 goto 로 복귀한다.
+        부트스트랩 셸(상품 0건 + 작은 본문)은 재내비게이션으로 흡수하고, 지속
+        시 목록 끝으로 판정한다 — PLP_SHELL_HTML_BYTES 주석의 실측 근거 참조.
         """
         last_error = ""
         for attempt in range(len(self._backoff_seconds) + 1):
@@ -517,13 +579,16 @@ class SearchCrawler(CoupangCrawler):
             self._natural_interaction(page, random.uniform(4.0, 7.0) * self._wait_scale)
             html = page.content()
 
-            blocked, reason = is_blocked(html)
-            if blocked:
+            # 차단 분류 — 키워드 차단(Access Denied/사용권한 등)만 하드 스톱.
+            # 작은 본문은 차단이 아니라 부트스트랩 셸일 수 있다(§3 실측) —
+            # 소프트 블록 크기 규칙 대신 아래 셸 규칙으로 흡수한다.
+            kw_reason = keyword_block_reason(html)
+            if kw_reason:
                 # 밀어붙이지 않는다 — 즉시 중단 (EXTERNAL_RESEARCH 차단 규율)
                 diagnosis = self._dump_blocked_page(page, name, html)
                 hint = f" — {diagnosis}" if diagnosis else ""
                 raise _RunError(
-                    f"쿠팡 차단 감지 ({name}): {reason}{hint}. "
+                    f"쿠팡 차단 감지 ({name}): {kw_reason}{hint}. "
                     "수집을 중단하고 충분한 쿨다운 후 재시도하세요.",
                     reason="blocked",
                 )
@@ -538,6 +603,27 @@ class SearchCrawler(CoupangCrawler):
             items = parse_extracted(rows)
             if items:
                 return items, html
+
+            # ── 부트스트랩 셸 흡수 (실측 §3·§8) ────────────────────────────
+            # 상품 0건 + 비정상적으로 작은 본문(정상 목록 ~600KB+, 셸 471B~3.4KB)
+            # 은 차단이 아니라 JS 부트 페이지다 — 대기 후 같은 URL 을
+            # 재내비게이션해 흡수한다. 셸이 끝까지 지속하면 실제 목록 끝으로
+            # 판정해 빈 페이지로 반환한다(빈 페이지 연속 종료 판정과 연동).
+            if len(html.encode("utf-8")) < PLP_SHELL_HTML_BYTES:
+                html = self._renavigate_shell(page, url, name, html)
+                if len(html.encode("utf-8")) < PLP_SHELL_HTML_BYTES:
+                    # 셸 지속 = 목록 끝 판정 — 백오프로 시간을 낭비하지 않는다
+                    return [], html
+                try:
+                    rows = page.evaluate(DOM_EXTRACTION_JS)
+                except Exception as e:  # noqa: BLE001 - evaluate 경계
+                    rows = []
+                    last_error = f"DOM 추출 실패: {type(e).__name__}: {e}"
+                    self._log(f"    {last_error}")
+                items = parse_extracted(rows)
+                if items:
+                    return items, html
+                # 회복했지만 상품 0 — 빈 페이지로 기존 로직 진행
 
             if not retry_empty:
                 return [], html
@@ -554,3 +640,39 @@ class SearchCrawler(CoupangCrawler):
             f"목록 페이지를 가져오지 못했습니다 ({name}). {last_error}",
             reason="no_items",
         )
+
+    def _renavigate_shell(self, page, url: str, name: str, html: str) -> str:
+        """부트스트랩 셸 감지 — 대기 후 같은 URL 재내비게이션 (실측 §3 규칙).
+
+        재내비게이션해도 셸(작은 본문)이 지속하면 마지막 html 을 그대로
+        반환하고 호출자가 '목록 끝'으로 판정한다(§8: 471B 셸 반복 = 페이지
+        소진). 재내비게이션 중 차단이 감지되면 기존 규율대로 즉시 중단한다.
+        """
+        for shell_attempt in range(1, SHELL_RENAVIGATE_MAX + 1):
+            self.control.checkpoint()
+            self._log(
+                f"    [{name}] 부트스트랩 셸 감지 (본문 {len(html.encode('utf-8')):,}B) — "
+                f"대기 후 재내비게이션 ({shell_attempt}/{SHELL_RENAVIGATE_MAX})..."
+            )
+            self.control.sleep(random.uniform(2.0, 4.0) * self._wait_scale)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            except Exception as e:  # noqa: BLE001 - 재내비게이션 실패는 빈 페이지로 흡수
+                self._log(f"    [{name}] 재내비게이션 실패({type(e).__name__}: {e})")
+                return html
+            self.control.sleep(random.uniform(2.5, 4.0) * self._wait_scale)
+            self._natural_interaction(page, random.uniform(3.0, 6.0) * self._wait_scale)
+            html = page.content()
+            kw_reason = keyword_block_reason(html)
+            if kw_reason:
+                diagnosis = self._dump_blocked_page(page, name, html)
+                hint = f" — {diagnosis}" if diagnosis else ""
+                raise _RunError(
+                    f"쿠팡 차단 감지 ({name}): {kw_reason}{hint}. "
+                    "수집을 중단하고 충분한 쿨다운 후 재시도하세요.",
+                    reason="blocked",
+                )
+            if len(html.encode("utf-8")) >= PLP_SHELL_HTML_BYTES:
+                self._log(f"    [{name}] 재내비게이션으로 회복 (본문 {len(html.encode('utf-8')):,}B)")
+                return html
+        return html

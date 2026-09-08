@@ -775,6 +775,27 @@ class ConfigValidationTest(unittest.TestCase):
         self.assertIn("[Bright Data]", joined)
         self.assertNotIn("pw", joined)
 
+    def test_create_browser_with_proxy_false_opens_direct_session(self):
+        # 2차(판매자 API) 전환 — with_proxy=False 면 config.proxy 가 있어도
+        # 프록시 없이(회선 IP) 연다.
+        import tempfile
+        from unittest.mock import MagicMock, patch
+
+        fake_cm = MagicMock()
+        fake_camoufox = MagicMock(return_value=fake_cm)
+        fake_cm.__enter__.return_value = MagicMock()
+        proxy = {"server": "http://brd.superproxy.io:22225",
+                 "username": "brd-customer-hl_x-zone-z", "password": "pw"}
+        config = _make_config(tempfile.mkdtemp(), proxy=proxy,
+                              use_persistent_profile=False)
+        logs: list[str] = []
+        crawler = CoupangCrawler(config, Control(), on_log=logs.append)
+        with patch("camoufox.sync_api.Camoufox", fake_camoufox):
+            crawler._create_browser(with_proxy=False)
+        kwargs = fake_camoufox.call_args.kwargs
+        self.assertIsNone(kwargs["proxy"])
+        self.assertTrue(any("회선 IP 직접 접속" in m for m in logs))
+
 
 class ControlSleepTest(unittest.TestCase):
     """Control.sleep interruptible behavior."""

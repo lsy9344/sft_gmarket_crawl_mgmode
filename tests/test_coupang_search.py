@@ -24,7 +24,12 @@ from app.core.coupang.search_parser import (
     parse_price_bands,
 )
 
-_OK_HTML = "<html><body>" + ("검색결과 콘텐츠 " * 400) + "</body></html>"
+# 정상 목록 본문 — UTF-8 기준 PLP_SHELL_HTML_BYTES(10KB) 위여야 한다(실측:
+# 정상 목록 ~600KB+, 셸 471B~3.4KB). 800회 반복 ≈ 18.4KB.
+_OK_HTML = "<html><body>" + ("검색결과 콘텐츠 " * 800) + "</body></html>"
+# 부트스트랩 셸 — JS 부트 페이지(차단 아님, 상품 0건 + 작은 본문)
+_SHELL_HTML = ('<html><head><script src="/_next/static/chunks/main.js">'
+               "</script></head><body><div id=\"__next\"></div></body></html>")
 _BLOCKED_HTML = "<html><body>요청하신 페이지의 사용권한이 없습니다.</body></html>" + "x" * 2000
 _AKAMAI_HTML = "<html><body>Access Denied<br>Reference #18.4a2b1c3.1234</body></html>" + "x" * 2000
 
@@ -572,6 +577,203 @@ class SearchConfigTest(unittest.TestCase):
                 SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", max_pages=0)
             with self.assertRaises(ValueError):
                 SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", max_pages=51)
+
+
+class ShellSequencePage(FakeSearchPage):
+    """목록 goto 횟수에 따라 본문을 셸→정상(또는 셸 고정)으로 바꾸는 fake.
+
+    실측 시나리오 재현 — Camoufox+프록시 내비게이션의 ~1/3 빈도로 JS 부트
+    셸(471B~3.4KB)이 오고, 재내비게이션 1~2회로 회복된다(§3·§8).
+    """
+
+    def __init__(self, *args, listing_gotos_before_full: int = 2,
+                 always_shell: bool = False,
+                 blocked_at_listing_goto: int | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._listing_gotos = 0
+        self._listing_gotos_before_full = listing_gotos_before_full
+        self._always_shell = always_shell
+        self._blocked_at_listing_goto = blocked_at_listing_goto
+
+    def goto(self, url, **kwargs):
+        super().goto(url, **kwargs)
+        if str(url) != COUPANG_HOME:
+            self._listing_gotos += 1
+
+    def content(self):
+        if self.url == COUPANG_HOME:
+            return self._home_html
+        if (self._blocked_at_listing_goto is not None
+                and self._listing_gotos >= self._blocked_at_listing_goto):
+            return _BLOCKED_HTML
+        if self._always_shell or self._listing_gotos <= self._listing_gotos_before_full:
+            return _SHELL_HTML
+        return self._content_html
+
+
+class ShellRuleTest(unittest.TestCase):
+    """부트스트랩 셸 재내비게이션 규칙 (실측 §3·§8의 앱 반영)."""
+
+    def _run_category(self, tmp_dir, page, max_pages=3, **kwargs):
+        config = SearchRunConfig(
+            output_dir=Path(tmp_dir),
+            output_prefix="shell_test",
+            keyword="",
+            category_id="194276",
+            category_name="과일",
+            sorters=("saleCountDesc",),
+            category_cooldown_min=0,
+            category_cooldown_max=0,
+            max_pages=max_pages,
+            warmup_time=0,
+            page_delay_min=0,
+            page_delay_max=0,
+            delay_min=0,
+            delay_max=0,
+            **kwargs,
+        )
+        logs: list[str] = []
+        browser = FakeBrowser(page)
+        crawler = FastSearchCrawler(
+            config=config, control=Control(),
+            browser_factory=lambda: browser, on_log=logs.append,
+        )
+        return crawler.run(), logs
+
+    def _listing_gotos(self, page) -> int:
+        return sum(1 for u in page.goto_urls if "/np/categories/" in u)
+
+    def test_shell_renavigation_recovers(self):
+        # p1: 셸 → 재내비게이션 2회 후 회복 → 상품 수집
+        page = ShellSequencePage(
+            sorter_rows=[[], [_row("11")]],   # 초기 셸 로드 0건, 회복 후 1건
+            listing_gotos_before_full=2,
+            viids=["11"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, logs = self._run_category(tmp, page, max_pages=1)
+        self.assertIsNone(summary.error)
+        self.assertEqual(summary.products_seen, 1)
+        # 초기 1회 + 재내비게이션 2회 = p1 총 3회 로드
+        self.assertEqual(self._listing_gotos(page), 3)
+        self.assertTrue(any("부트스트랩 셸 감지" in m for m in logs))
+        self.assertTrue(any("재내비게이션으로 회복" in m for m in logs))
+
+    def test_persistent_shell_ends_category_as_empty(self):
+        # 실측 §8: 셸 지속(471B 반복) = 실제 목록 끝 — 빈 페이지로 판정해 종료
+        page = ShellSequencePage(sorter_rows=[[], [], []], always_shell=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, logs = self._run_category(tmp, page)
+        self.assertEqual(summary.termination_reason, "no_items")
+        # p1·p2 각 1회 초기 + 2회 재내비게이션 = 6회 후 빈 페이지 2회 종료
+        self.assertEqual(self._listing_gotos(page), 6)
+        # 재내비게이션 소진이 백오프를 유발하지 않는다 (no_items 즉시 종료)
+        self.assertTrue(any("셸 감지" in m for m in logs))
+
+    def test_shell_blocked_during_renavigation_stops(self):
+        # 재내비게이션 중 차단 응답이 오면 기존 규율대로 즉시 중단
+        # — 2번째 목록 로드(첫 재내비게이션)에서 차단 응답으로 전환
+        page = ShellSequencePage(sorter_rows=[[], []], always_shell=True,
+                                 blocked_at_listing_goto=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, _logs = self._run_category(tmp, page)
+        self.assertEqual(summary.termination_reason, "blocked")
+
+    def test_full_size_empty_page_keeps_original_backoff_path(self):
+        # 본문이 정상 크기인 빈 페이지는 셸이 아니므로 기존 규칙 그대로:
+        # 카테고리 모드(retry_empty=False)는 재내비게이션 없이 빈 페이지 처리
+        page = FakeSearchPage(sorter_rows=[[], []])   # _OK_HTML (전체 크기)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, _logs = self._run_category(tmp, page)
+        self.assertEqual(summary.termination_reason, "no_items")
+        # 재내비게이션 없음 — p1·p2 각 1회 로드
+        self.assertEqual(self._listing_gotos(page), 2)
+
+
+class ProxyPhaseSplitTest(unittest.TestCase):
+    """프록시 사용 시 2차(판매자 API)를 회선 IP 세션으로 분리 (실측 §9)."""
+
+    @staticmethod
+    def _proxy() -> dict:
+        return {"server": "http://brd.superproxy.io:22225",
+                "username": "brd-customer-hl_x-zone-gm_isp", "password": "pw"}
+
+    def _run_split(self, tmp_dir, pages, proxy=None, require_login=False):
+        config = SearchRunConfig(
+            output_dir=Path(tmp_dir),
+            output_prefix="split_test",
+            keyword="",
+            category_id="194276",
+            category_name="과일",
+            sorters=("saleCountDesc",),
+            category_cooldown_min=0,
+            category_cooldown_max=0,
+            max_pages=1,
+            warmup_time=0,
+            page_delay_min=0,
+            page_delay_max=0,
+            delay_min=0,
+            delay_max=0,
+            require_login=require_login,
+            proxy=proxy,
+        )
+        logs: list[str] = []
+        pool = [FakeBrowser(p) for p in pages]
+        made: list[FakeBrowser] = []
+        calls = {"browser_factory": 0}
+
+        def factory():
+            calls["browser_factory"] += 1
+            browser = pool.pop(0)
+            made.append(browser)
+            return browser
+
+        crawler = FastSearchCrawler(
+            config=config, control=Control(),
+            browser_factory=factory, on_log=logs.append,
+        )
+        summary = crawler.run()
+        return summary, made, logs, calls
+
+    def test_proxy_run_switches_to_direct_session_for_phase2(self):
+        collection_page = FakeSearchPage(sorter_rows=[[_row("11")]])
+        seller_page = FakeSearchPage(viids=["11"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, browsers, logs, calls = self._run_split(
+                tmp, [collection_page, seller_page], proxy=self._proxy())
+            self.assertIsNone(summary.error)
+            self.assertEqual(summary.business_info_success, 1)
+            # 1차(프록시) + 2차(회선 IP) — 세션 2회 생성
+            self.assertEqual(calls["browser_factory"], 2)
+            # 프록시 세션(1차)은 전환 시 닫히고, 회선 IP 세션(2차)은 finally 가 닫는다
+            self.assertTrue(browsers[0].closed)
+            self.assertTrue(browsers[1].closed)
+            # 2차 세션은 홈 웜업을 다시 거친다
+            self.assertIn(COUPANG_HOME, seller_page.goto_urls)
+            self.assertTrue(any("2차 전환" in m for m in logs))
+            self.assertTrue(any("회선 IP" in m for m in logs))
+
+    def test_no_proxy_keeps_single_session(self):
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], viids=["11"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, _browsers, logs, calls = self._run_split(tmp, [page], proxy=None)
+            self.assertIsNone(summary.error)
+            self.assertEqual(summary.business_info_success, 1)
+            self.assertEqual(calls["browser_factory"], 1)  # 세션 교체 없음
+            self.assertFalse(any("2차 전환" in m for m in logs))
+
+    def test_proxy_with_require_login_logs_warning(self):
+        # 로그인 세션 + 프록시 조합 경고는 2차 전환 시 엔진이 남긴다.
+        # 2차 세션도 로그인 상태여야 require_login 정책을 통과한다.
+        collection_page = FakeSearchPage(sorter_rows=[[_row("11")]],
+                                         login_state=True)
+        seller_page = FakeSearchPage(viids=["11"], login_state=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, _browsers, logs, _calls = self._run_split(
+                tmp, [collection_page, seller_page], proxy=self._proxy(),
+                require_login=True)
+        self.assertTrue(any("계정 보안 경보" in m for m in logs))
+        self.assertIsNone(summary.error)
 
 
 if __name__ == "__main__":

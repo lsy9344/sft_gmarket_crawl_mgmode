@@ -1419,7 +1419,8 @@ class MainWindow(QMainWindow):
             self.category_panel.append_log(
                 f"[Bright Data] ISP 프록시 경유: "
                 f"{brightdata.isp_proxy_summary(proxy)} "
-                f"(토큰 {brightdata.masked_token(brightdata.resolve_api_token(bd_settings))} 계정 차감)"
+                f"(토큰 {brightdata.masked_token(brightdata.resolve_api_token(bd_settings))} 계정 차감) — "
+                f"1차 목록은 프록시 IP, 2차 판매자정보는 회선 IP 세션으로 진행됩니다"
             )
         elif bd_settings.isp_enabled:
             self.category_panel.append_log(

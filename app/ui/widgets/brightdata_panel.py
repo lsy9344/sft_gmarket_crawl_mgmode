@@ -110,10 +110,11 @@ class BrightDataPanel(QWidget):
         isp_form.addRow("ISP 존 비밀번호", isp_pw_row)
 
         isp_note = QLabel(
-            "주의(실측): 목록 수집은 프록시 IP로 통과하지만 판매자정보 API"
-            "(getStoreReview)는 프록시 IP에서 403 입니다 — 사업자정보까지 수집할 "
-            "거라면 프록시를 끄는 것이 안전합니다. 대량 목록 수집으로 회선 IP를 "
-            "보호할 때만 켜세요."
+            "프록시를 켜면 1차 목록 수집은 프록시 IP(회선 IP 보호)로 진행되고, "
+            "2차 판매자정보는 회선 IP 세션으로 자동 전환됩니다 — 실측상 "
+            "판매자정보 API(getStoreReview)는 프록시 IP에서 403 입니다. "
+            "로그인 세션을 함께 쓰면 계정 보안 경보 가능성이 있으니 비로그인 "
+            "수집에 사용하세요."
         )
         isp_note.setWordWrap(True)
         isp_form.addRow(isp_note)
