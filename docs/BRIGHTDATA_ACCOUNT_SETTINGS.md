@@ -100,3 +100,21 @@
 - 배포 환경에서 사용자 소유 계정 키로 Unlocker 요청 1건 → `budget`/잔액으로
   차감 확인 (개발 계정이 아닌 별도 계정 필요 — 로컬 검증은 mock 응답 기반).
 - ISP 존 보유 계정에서 Coupang 목록 수집 1사이클 → 차감·IP 확인.
+
+## 6. 재배포 기록 (2026-09-09)
+
+- 빌드 커밋: `b0687f7` (feature/brightdata-account-key)
+- 빌드 환경: Windows Python 3.12.10, PyInstaller 6.21.0, 클린 `.venv-win`
+- 빌드 내 자동 테스트: `Ran 424 tests — OK (skipped=2)` — 신규
+  brightdata 설정/패널 테스트 포함
+- Frozen 스모크: `SellerCollector.exe --verify-runtime` → exit 0
+  (camoufox 0.5.4 + GeoIP + patchright Chromium 전부 OK)
+- 산출물(`C:\Users\dltnd\Desktop\gmarket_build_bdapi_b0687f7\dist\`):
+
+| 파일 | 크기(bytes) | SHA-256 |
+|---|---:|---|
+| `SellerCollector.exe` | 142,626,760 | `174d1add28ecc382a83e186b6924e3f7d0a0941b70ff2c20e3aafc7daf54189d` |
+| `CoupangRuntimeSetup.exe` | 69,004,898 | `075968a56ae8f90aa8dc7ce4b292affd5a8a5bbd042a13dfceae376787be4df6` |
+
+- 내부 서명 릴리스가 필요하면 `docs/DEPLOYMENT_APPROVAL.md` 절차로
+  Authenticode 서명 후 hash를 다시 생성한다(기존 게이트 유지).
