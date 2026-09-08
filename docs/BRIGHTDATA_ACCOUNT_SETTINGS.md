@@ -127,3 +127,19 @@
 
 - 내부 서명 릴리스가 필요하면 `docs/DEPLOYMENT_APPROVAL.md` 절차로
   Authenticode 서명 후 hash를 다시 생성한다(기존 게이트 유지).
+
+## 7. 재배포 기록 2 — 실측 규칙 앱 반영분 (2026-09-09)
+
+- 빌드 커밋: `2365a7f` (feature/coupang-proxy-phase-split) — §2.3 의
+  단계별 IP 분리 + 부트스트랩 셸 규칙 포함
+  (상세: BRIGHTDATA_AKAMAI_REVIEW §10)
+- 빌드 환경: Windows Python 3.12.10, PyInstaller 6.21.0, 클린 `.venv-win`
+- 빌드 내 자동 테스트: `Ran 432 tests — OK (skipped=2)` — 셸 4건 +
+  세션 분리 3건 + 프록시 인자 1건 신규 포함
+- Frozen 스모크: `SellerCollector.exe --verify-runtime` → exit 0
+- 산출물(`C:\Users\dltnd\Desktop\gmarket_build_coupang_split_2365a7f\dist\`):
+
+| 파일 | 크기(bytes) | SHA-256 |
+|---|---:|---|
+| `SellerCollector.exe` | 142,630,512 | `772373b15c3f838938ab13ec9d48c25bb168135bf86901f190c194bb3cb860e3` |
+| `CoupangRuntimeSetup.exe` | 69,005,501 | `86e4a205277ebba7b2425e0905799dd098451344bd38bd6534a724a5385abf7d` |
