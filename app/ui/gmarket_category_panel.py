@@ -64,6 +64,8 @@ class GmarketCategoryPanel(QWidget):
         layout = QVBoxLayout(self)
 
         info = QLabel(
+            "⚠ 수집에는 Bright Data API 토큰이 필요합니다 — 상단 '설정' 탭에서 "
+            "입력·저장한 뒤 시작하세요 (입력 없이는 시작할 수 없습니다).\n"
             "대상: Gmarket 전체 카테고리 — 대/중/소 트리(또는 대분류 전체)에서 "
             "카테고리를 선택하면 그 카테고리의 리스팅 상품(goodscode)을 수집한 뒤 "
             "판매자 사업자정보를 수집합니다. 리스팅은 Bright Data Web Unlocker "

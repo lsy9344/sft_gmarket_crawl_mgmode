@@ -60,6 +60,7 @@ class BrightDataSettings:
     """사용자 입력 Bright Data 계정 설정 (output/brightdata_settings.json)."""
 
     api_token: str = ""                 # 계정 API 토큰 — 요청 과금 대상 계정의 열쇠
+    account_name: str = ""              # 계정 별칭 (예: "본사 계정") — 여러 키 구분용
     unlocker_zone: str = ""             # Web Unlocker 존 (빈 값 → config.BRIGHTDATA_ZONE)
     country: str = ""                   # 출발 국가 (빈 값 → config.BRIGHTDATA_COUNTRY)
     isp_enabled: bool = False           # Coupang 카테고리 탭 ISP 프록시 경유 여부
@@ -87,6 +88,7 @@ class BrightDataSettings:
         return replace(
             self,
             api_token=str(self.api_token or "").strip(),
+            account_name=str(self.account_name or "").strip(),
             unlocker_zone=str(self.unlocker_zone or "").strip(),
             country=str(self.country or "").strip().lower(),
             isp_customer_id=str(self.isp_customer_id or "").strip(),

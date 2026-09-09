@@ -106,6 +106,7 @@ class SettingsRoundTripTest(unittest.TestCase):
     def test_save_load_roundtrip(self):
         s = brightdata.BrightDataSettings(
             api_token="tok123",
+            account_name="본사 계정",
             unlocker_zone="my_zone",
             country="KR",
             isp_enabled=True,
@@ -116,6 +117,7 @@ class SettingsRoundTripTest(unittest.TestCase):
         brightdata.save_settings(s, self.path)
         loaded = brightdata.load_settings(self.path)
         self.assertEqual(loaded.api_token, "tok123")
+        self.assertEqual(loaded.account_name, "본사 계정")
         self.assertEqual(loaded.unlocker_zone, "my_zone")
         self.assertEqual(loaded.country, "kr")  # 소문자 정규화 (엔진 기본값 스타일)
         self.assertTrue(loaded.isp_enabled)

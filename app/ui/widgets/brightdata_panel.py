@@ -23,7 +23,8 @@ from __future__ import annotations
 
 from dataclasses import replace as dataclasses_replace
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -39,6 +40,19 @@ from PyQt6.QtWidgets import (
 
 from app.core import brightdata
 from app.core.applog import log_line
+
+# Bright Data API 토큰이 있는 설정 페이지 — 일반 사용자가 발급 경로를
+# 직접 찾지 않아도 되게 열어주는 링크(2026-09-09 사용성 개선).
+TOKEN_PAGE_URL = "https://brightdata.com/cp/settings"
+
+_BANNER_NEEDS_TOKEN = (
+    "⚠ Bright Data API 토큰이 필요합니다 — 입력하지 않으면 Gmarket 카테고리 탭 "
+    "수집이 시작되지 않습니다. 아래 순서대로 따라 하면 1분이면 설정됩니다."
+)
+_BANNER_STYLES = {
+    "warn": ("background-color: #fff3cd; color: #7a5b00; border: 1px solid #e0c46c;"),
+    "ok": ("background-color: #e2f3e7; color: #135a2e; border: 1px solid #9ed3ae;"),
+}
 
 
 class _BrightDataCallWorker(QThread):
@@ -82,6 +96,28 @@ class BrightDataPanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
+        # ── 토큰 필수 배너 — 토큰 유무에 따라 눈에 띄게 상태를 바꾼다 ──
+        self.banner = QLabel("")
+        self.banner.setWordWrap(True)
+        self.banner.setStyleSheet("padding: 8px;")
+        layout.addWidget(self.banner)
+
+        # 발급 경로 안내 — 일반 사용자가 어디서 토큰을 얻는지 모르는 문제를
+        # 링크 하나로 해결한다.
+        guide_row = QHBoxLayout()
+        guide = QLabel(
+            "① brightdata.com 로그인 → ② 계정 설정(Settings) 페이지에서 API token 복사 "
+            "→ ③ 아래 'API 토큰'에 붙여넣기 → '잔액 조회·토큰 검증' → '저장'")
+        guide.setWordWrap(True)
+        guide_row.addWidget(guide, 1)
+        self.btn_open_token_page = QPushButton("토큰 발급 페이지 열기")
+        self.btn_open_token_page.setToolTip(
+            "브라우저에서 Bright Data 설정 페이지(brightdata.com/cp/settings)를 "
+            "엽니다. 로그인 후 'API token' 항목의 값을 복사해 아래에 붙여넣으세요.")
+        self.btn_open_token_page.clicked.connect(self._on_open_token_page)
+        guide_row.addWidget(self.btn_open_token_page)
+        layout.addLayout(guide_row)
+
         info = QLabel(
             "Bright Data(brightdata.com) 계정의 API 토큰을 입력하면 Gmarket 카테고리 탭의 "
             "Web Unlocker 요청과 Coupang 카테고리 탭의 ISP 프록시 사용량이 "
@@ -98,7 +134,7 @@ class BrightDataPanel(QWidget):
         token_row = QHBoxLayout()
         self.edit_token = QLineEdit()
         self.edit_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.edit_token.setPlaceholderText("계정 Settings → API token")
+        self.edit_token.setPlaceholderText("여기에 복사한 API 토큰을 붙여넣으세요")
         token_row.addWidget(self.edit_token, 1)
         self.chk_show_token = QCheckBox("표시")
         self.chk_show_token.stateChanged.connect(self._on_toggle_token)
@@ -106,7 +142,16 @@ class BrightDataPanel(QWidget):
         self.btn_balance = QPushButton("잔액 조회·토큰 검증")
         self.btn_balance.clicked.connect(self.on_check_balance)
         token_row.addWidget(self.btn_balance)
-        acct_form.addRow("API 토큰", token_row)
+        acct_form.addRow("Bright Data API 토큰", token_row)
+
+        self.edit_account_name = QLineEdit()
+        self.edit_account_name.setPlaceholderText("예: 본사 계정 (선택 — 여러 키를 구분하는 이름)")
+        self.edit_account_name.setToolTip(
+            "여러 Bright Data 계정 키를 쓸 때 구분하기 위한 별칭입니다. "
+            "저장하면 상태·수집 로그에 이 이름으로 표시됩니다.")
+        acct_form.addRow("계정 이름", self.edit_account_name)
+        # 토큰 입력이 끝날 때마다 배너 상태를 갱신한다(저장 전에도 반응).
+        self.edit_token.editingFinished.connect(self._update_banner)
 
         self.edit_unlocker_zone = QLineEdit()
         self.edit_unlocker_zone.setPlaceholderText("gm_unlocker")
@@ -187,6 +232,28 @@ class BrightDataPanel(QWidget):
         shown = state == Qt.CheckState.Checked.value
         self.edit_token.setEchoMode(
             QLineEdit.EchoMode.Normal if shown else QLineEdit.EchoMode.Password)
+
+    def _on_open_token_page(self) -> None:
+        """브라우저로 Bright Data 설정(토큰 발급) 페이지를 연다."""
+        QDesktopServices.openUrl(QUrl(TOKEN_PAGE_URL))
+
+    def _update_banner(self) -> None:
+        """토큰 유무에 따라 상단 배너를 갱신한다 — 눈에 띄는 경고/확인 표시."""
+        stored = brightdata.load_settings()
+        new_token = self.edit_token.text().strip()
+        alias = self.edit_account_name.text().strip() or stored.account_name
+        if stored.api_token or new_token:
+            token_mask = brightdata.masked_token(new_token or stored.api_token)
+            alias_txt = f"'{alias}' " if alias else ""
+            self.banner.setText(
+                f"✔ Bright Data 계정 {alias_txt}설정됨 — 토큰 {token_mask}. "
+                "'잔액 조회·토큰 검증'으로 확인 후 저장하세요.")
+            self.banner.setStyleSheet(
+                f"{_BANNER_STYLES['ok']} padding: 8px; font-weight: bold;")
+        else:
+            self.banner.setText(_BANNER_NEEDS_TOKEN)
+            self.banner.setStyleSheet(
+                f"{_BANNER_STYLES['warn']} padding: 8px; font-weight: bold;")
 
     # ── 잔액 조회·토큰 검증 ──────────────────────────────────────────────
     def on_check_balance(self) -> None:
@@ -334,7 +401,10 @@ class BrightDataPanel(QWidget):
             self._set_status(f"저장 실패: {e}", error=True)
             return
         stored = brightdata.load_settings(path)
+        alias = stored.account_name or self.edit_account_name.text().strip()
+        alias_txt = f"계정 '{alias}', " if alias else ""
         log_line(f"[설정] Bright Data 계정 토큰 저장: "
+                 f"계정 {alias or '(이름 없음)'} — "
                  f"{brightdata.masked_token(stored.api_token)} ({path})")
         isp_warn = ""
         if stored.isp_enabled and not (stored.isp_customer_id and stored.isp_zone
@@ -343,17 +413,20 @@ class BrightDataPanel(QWidget):
                         "있어 Coupang 탭에서는 프록시 없이(직접 접속) 진행됩니다 — "
                         "'프록시 테스트'로 자격을 완성하세요.")
         self._set_status(
-            f"저장됨: {path} — {token_note}, "
+            f"저장됨: {alias_txt}"
+            f"토큰 {brightdata.masked_token(stored.api_token)} — {token_note}, "
             f"Unlocker 존 '{stored.unlocker_zone or '기본값'}'"
             f"{', ISP 프록시 사용' if stored.isp_enabled else ''}{isp_warn}",
             error=bool(isp_warn),
         )
+        self._update_banner()
 
     # ── 공개 API ─────────────────────────────────────────────────────────
     def collect_settings(self) -> brightdata.BrightDataSettings:
         """입력값 → BrightDataSettings (저장·주입 경로 모두 사용)."""
         return brightdata.BrightDataSettings(
             api_token=self.edit_token.text().strip(),
+            account_name=self.edit_account_name.text().strip(),
             unlocker_zone=self.edit_unlocker_zone.text().strip(),
             country=self.edit_country.text().strip(),
             isp_enabled=self.chk_isp_enabled.isChecked(),
@@ -372,7 +445,8 @@ class BrightDataPanel(QWidget):
                 f"저장된 토큰 {brightdata.masked_token(s.api_token)} — "
                 "변경할 때만 새 키 입력")
         else:
-            self.edit_token.setPlaceholderText("계정 Settings → API token")
+            self.edit_token.setPlaceholderText("여기에 복사한 API 토큰을 붙여넣으세요")
+        self.edit_account_name.setText(s.account_name)
         self.edit_unlocker_zone.setText(s.unlocker_zone)
         self.edit_country.setText(s.country)
         self.chk_isp_enabled.setChecked(s.isp_enabled)
@@ -386,6 +460,7 @@ class BrightDataPanel(QWidget):
         if s.saved_at:
             self._set_status(f"저장된 설정 불러옴 (마지막 저장: {s.saved_at})",
                              error=False)
+        self._update_banner()
 
     def collect_settings_preserving_stored(self) -> brightdata.BrightDataSettings:
         """저장 버튼 경로 — 빈 토큰/비밀번호는 기존 저장값을 유지한다.
@@ -403,12 +478,12 @@ class BrightDataPanel(QWidget):
 
     def set_external_busy(self, busy: bool) -> None:
         """수집 실행 중 자격 증명 변경 잠금 (다른 탭의 규율과 동일)."""
-        for w in (self.edit_token, self.edit_unlocker_zone, self.edit_country,
-                  self.chk_isp_enabled, self.edit_customer_id, self.edit_isp_zone,
-                  self.edit_isp_password, self.chk_show_token):
+        for w in (self.edit_token, self.edit_account_name, self.edit_unlocker_zone,
+                  self.edit_country, self.chk_isp_enabled, self.edit_customer_id,
+                  self.edit_isp_zone, self.edit_isp_password, self.chk_show_token):
             w.setEnabled(not busy)
         for b in (self.btn_save, self.btn_balance, self.btn_fetch_password,
-                  self.btn_test_proxy):
+                  self.btn_test_proxy, self.btn_open_token_page):
             b.setEnabled(not busy)
 
     # ── 비동기 호출 공통 ─────────────────────────────────────────────────

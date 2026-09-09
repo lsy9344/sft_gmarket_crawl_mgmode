@@ -65,6 +65,7 @@ class BrightDataPanelTest(unittest.TestCase):
     # ── 저장·로드 ─────────────────────────────────────────────────────
     def test_save_writes_settings_file(self):
         self.panel.edit_token.setText("tok123")
+        self.panel.edit_account_name.setText("본사 계정")
         self.panel.edit_unlocker_zone.setText("my_zone")
         self.panel.edit_country.setText("kr")
         self.panel.chk_isp_enabled.setChecked(True)
@@ -82,9 +83,34 @@ class BrightDataPanelTest(unittest.TestCase):
         with open(self.path, encoding="utf-8") as f:
             raw = json.load(f)
         self.assertEqual(raw["api_token"], "tok123")
+        self.assertEqual(raw["account_name"], "본사 계정")
         self.assertEqual(raw["unlocker_zone"], "my_zone")
         self.assertTrue(raw["isp_enabled"])
         self.assertIn("검증 완료", self.panel.lbl_status.text())
+        self.assertIn("본사 계정", self.panel.lbl_status.text())
+
+    def test_banner_warns_without_token(self):
+        # 토큰이 없으면 눈에 띄는 경고 배너 — 수집 시작이 막힌다는 사실을 명시
+        panel = BrightDataPanel()
+        self.assertIn("필요합니다", panel.banner.text())
+        self.assertIn("시작되지", panel.banner.text())
+
+    def test_banner_shows_saved_account_by_name(self):
+        # 토큰 저장 후에는 계정 이름으로 구분되는 확인 배너로 바뀐다
+        brightdata.save_settings(
+            brightdata.BrightDataSettings(api_token="tok123",
+                                          account_name="본사 계정"),
+            self.path)
+        panel = BrightDataPanel()
+        self.assertIn("설정됨", panel.banner.text())
+        self.assertIn("본사 계정", panel.banner.text())
+        self.assertIn("tok123"[-4:], panel.banner.text())
+
+    def test_banner_updates_after_token_typed(self):
+        # 저장 전이라도 토큰을 입력하면 배너가 경고 → 확인 상태로 바뀐다
+        self.panel.edit_token.setText("newtok")
+        self.panel.edit_token.editingFinished.emit()
+        self.assertIn("설정됨", self.panel.banner.text())
 
     def test_blank_token_preserves_stored_value_on_save(self):
         brightdata.save_settings(
@@ -162,13 +188,14 @@ class BrightDataPanelTest(unittest.TestCase):
     def test_load_from_settings_fills_widgets(self):
         brightdata.save_settings(
             brightdata.BrightDataSettings(
-                api_token="tok123", unlocker_zone="z1", country="kr",
-                isp_enabled=True, isp_customer_id="hl_x", isp_zone="z2",
-                isp_password="pw123456"),
+                api_token="tok123", account_name="부산 지점", unlocker_zone="z1",
+                country="kr", isp_enabled=True, isp_customer_id="hl_x",
+                isp_zone="z2", isp_password="pw123456"),
             self.path)
         panel = BrightDataPanel()
         self.assertEqual(panel.edit_token.text(), "")  # 토큰은 마스크 복원
         self.assertIn("tok123"[-4:], panel.edit_token.placeholderText())
+        self.assertEqual(panel.edit_account_name.text(), "부산 지점")
         self.assertEqual(panel.edit_unlocker_zone.text(), "z1")
         self.assertEqual(panel.edit_country.text(), "kr")
         self.assertTrue(panel.chk_isp_enabled.isChecked())
@@ -271,19 +298,24 @@ class BrightDataPanelTest(unittest.TestCase):
         self.panel.set_external_busy(True)
         self.assertFalse(self.panel.btn_save.isEnabled())
         self.assertFalse(self.panel.btn_test_proxy.isEnabled())
+        self.assertFalse(self.panel.btn_open_token_page.isEnabled())
+        self.assertFalse(self.panel.edit_account_name.isEnabled())
         self.assertFalse(self.panel.edit_token.isEnabled())
         self.panel.set_external_busy(False)
         self.assertTrue(self.panel.btn_save.isEnabled())
         self.assertTrue(self.panel.btn_test_proxy.isEnabled())
+        self.assertTrue(self.panel.btn_open_token_page.isEnabled())
         self.assertTrue(self.panel.edit_token.isEnabled())
 
     # ── collect_settings ──────────────────────────────────────────────
     def test_collect_settings_maps_widgets(self):
         self.panel.edit_token.setText("tok")
+        self.panel.edit_account_name.setText("별칭")
         self.panel.edit_unlocker_zone.setText("z")
         self.panel.chk_isp_enabled.setChecked(True)
         s = self.panel.collect_settings()
         self.assertEqual(s.api_token, "tok")
+        self.assertEqual(s.account_name, "별칭")
         self.assertEqual(s.unlocker_zone, "z")
         self.assertTrue(s.isp_enabled)
 

@@ -1089,6 +1089,23 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Bright Data API 토큰 필수 — 입력 없이는 리스팅(Phase A)이 시작 자체가
+        # 불가능하다. 워커 안에서 실패하는 대신 시작 전에 눈에 띄게 안내하고
+        # 중단한다(2026-09-09 사용성 개선).
+        bd_settings = brightdata.load_settings()
+        bd_token = brightdata.resolve_api_token(bd_settings)
+        if not bd_token:
+            QMessageBox.warning(
+                self, "Bright Data API 토큰 필요",
+                "Gmarket 카테고리 탭 수집에는 Bright Data API 토큰이 반드시 "
+                "필요합니다.\n\n"
+                "① 상단 '설정' 탭 → '토큰 발급 페이지 열기'에서 토큰 복사\n"
+                "② 'API 토큰'에 붙여넣기 → '잔액 조회·토큰 검증'으로 확인\n"
+                "③ '저장'\n\n"
+                "저장한 뒤 다시 '수집 시작'을 누르세요.",
+            )
+            return
+
         # 리스팅은 브라우저(StealthySession) 사용 → 런타임 preflight
         from app.core.gmarket_preflight import check_gmarket_runtime
 
@@ -1128,22 +1145,22 @@ class MainWindow(QMainWindow):
         # Bright Data 잔액·예상 비용 확인 (2026-09-09 검토 반영). 잔액이 부족하면
         # 실행이 끝까지 돌다가 남은 카테고리가 전부 "차단/오류"로 기록되므로
         # 시작 전에 알린다. 조회 실패는 시작을 막지 않는다 — 참고 정보일 뿐이고
-        # 엔진이 요청 단위로 오류를 처리한다.
+        # 엔진이 요청 단위로 오류를 처리한다. 토큰은 위에서 필수 확인됨.
         from app.core import config as app_config
 
         est_requests = n_targets * config_run.max_pages
         est_cost = est_requests * app_config.BRIGHTDATA_COST_PER_REQUEST
-        balance_note = "토큰 없음 — 설정 탭에서 API 토큰을 입력하세요"
+        balance_note = "잔액 조회 실패 — 무시하고 진행"
         insufficient = False
-        bd_token = brightdata.resolve_api_token(brightdata.load_settings())
-        if bd_token:
-            try:
-                balance = brightdata.fetch_balance(bd_token)
-                bal = float(balance.get("balance", 0) or 0)
-                balance_note = f"현재 잔액 ${bal:,.2f}"
-                insufficient = bal < est_cost
-            except brightdata.BrightDataAPIError as e:
-                balance_note = f"잔액 조회 실패({e}) — 무시하고 진행"
+        try:
+            balance = brightdata.fetch_balance(bd_token)
+            bal = float(balance.get("balance", 0) or 0)
+            balance_note = f"현재 잔액 ${bal:,.2f}"
+            insufficient = bal < est_cost
+        except brightdata.BrightDataAPIError as e:
+            balance_note = f"잔액 조회 실패({e}) — 무시하고 진행"
+        alias = (bd_settings.account_name or "").strip()
+        alias_txt = f"계정 '{alias}' — " if alias else ""
         if insufficient:
             reply = QMessageBox.question(
                 self, "Bright Data 잔액 부족 가능",
@@ -1161,7 +1178,7 @@ class MainWindow(QMainWindow):
         self._gmcat_had_error = False
         self.gmarket_category_panel.clear_results()
         self.gmarket_category_panel.append_log(
-            f"[Bright Data] 리스팅 예상 요청 ≤ {est_requests:,}건 "
+            f"[Bright Data] {alias_txt}리스팅 예상 요청 ≤ {est_requests:,}건 "
             f"(≈ ${est_cost:,.2f}, 카테고리 {n_targets}개 × 최대 "
             f"{config_run.max_pages}p) — {balance_note}"
         )
