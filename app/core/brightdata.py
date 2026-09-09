@@ -88,7 +88,7 @@ class BrightDataSettings:
             self,
             api_token=str(self.api_token or "").strip(),
             unlocker_zone=str(self.unlocker_zone or "").strip(),
-            country=str(self.country or "").strip(),
+            country=str(self.country or "").strip().lower(),
             isp_customer_id=str(self.isp_customer_id or "").strip(),
             isp_zone=str(self.isp_zone or "").strip(),
             isp_password=str(self.isp_password or "").strip(),
@@ -240,6 +240,109 @@ def fetch_zone_password(
                 return value.strip()
     raise BrightDataAPIError(f"존 '{zone}' 의 비밀번호를 응답에서 찾지 못했습니다.",
                              body=body[:200])
+
+
+# ── ISP 프록시 연결 테스트 ────────────────────────────────────────────────
+
+# requests 세부 예외 — 최소 스텁 환경(tests/__init__.py)에는 세부 클래스가
+# 없으므로 RequestException 으로 폴백한다(분류 정확도는 실제 requests 에서만
+# 완전 — 함수가 호출 불가가 되지 않게 하는 방어).
+_REQUESTS_CONNECT_TIMEOUT = getattr(requests, "ConnectTimeout", requests.RequestException)
+_REQUESTS_TIMEOUT = getattr(requests, "Timeout", requests.RequestException)
+_REQUESTS_PROXY_ERROR = getattr(requests, "ProxyError", requests.RequestException)
+_REQUESTS_CONNECTION_ERROR = getattr(requests, "ConnectionError", requests.RequestException)
+
+# 프록시 경유로 출발 IP 를 확인하는 공개 엔드포인트. 요청 1건 수 KB 로 ISP 존
+# 대역폭(과금 구간)이 아주 조금 소비된다 — 자격 3요소 검증 비용으로 납득 가능.
+ISP_TEST_URL = "http://lumtest.com/myip.json"           # Bright Data 제공 IP 확인
+ISP_TEST_FALLBACK_URL = "https://api.ipify.org/?format=json"
+ISP_TEST_TIMEOUT = 20.0
+
+
+def test_isp_proxy(
+    settings: BrightDataSettings | None = None,
+    timeout: float = ISP_TEST_TIMEOUT,
+    session: requests.Session | None = None,
+) -> dict[str, Any]:
+    """ISP 프록시 자격(계정 ID·존·비밀번호)을 실제 연결로 검증한다.
+
+    잔액 조회가 계정 API 토큰만 검증하는 것과 달리, 프록시 3요소가 모두
+    맞아야 통과한다 — Coupang 탭에서 "불완비로 직접 접속" 침묵 폴백을 막는
+    사전 확인 수단(2026-09-09 검토 반영). 성공 시 {"ip", "country"} —
+    country 는 1차 엔드포인트(lumtest)가 줄 때만 채워진다.
+    """
+    proxy = isp_proxy_dict(settings)
+    if not proxy:
+        raise BrightDataAPIError(
+            "ISP 프록시가 비활성화되었거나 계정 ID/존/비밀번호가 비어 있습니다 — "
+            "먼저 입력한 뒤 테스트하세요.")
+    proxies = {"http": proxy["server"], "https": proxy["server"]}
+    auth = (proxy["username"], proxy["password"])
+    owned = session is None
+    sess = session or requests.Session()
+    try:
+        try:
+            r = sess.get(ISP_TEST_URL, proxies=proxies, auth=auth, timeout=timeout)
+        except _REQUESTS_CONNECT_TIMEOUT as e:
+            raise BrightDataAPIError(
+                "프록시 접속 시간 초과 — 호스트(brd.superproxy.io)·포트·네트워크를 "
+                "확인하세요.") from e
+        except _REQUESTS_TIMEOUT as e:
+            fallback = _isp_test_fallback(sess, proxies, auth, timeout)
+            if fallback is not None:
+                return fallback
+            raise BrightDataAPIError(
+                f"프록시 응답 시간 초과({timeout:.0f}초) — 존 상태(IP 할당 여부)를 "
+                "확인하세요.") from e
+        except (_REQUESTS_PROXY_ERROR, _REQUESTS_CONNECTION_ERROR) as e:
+            fallback = _isp_test_fallback(sess, proxies, auth, timeout)
+            if fallback is not None:
+                return fallback
+            raise BrightDataAPIError(
+                f"프록시 연결 실패 — 계정 ID·존·비밀번호와 호스트/포트를 "
+                f"확인하세요: {e}") from e
+        except requests.RequestException as e:
+            raise BrightDataAPIError(f"프록시 테스트 실패: {e}") from e
+
+        if r.status_code == 407:
+            raise BrightDataAPIError(
+                "프록시 인증 실패(HTTP 407) — 계정 ID·ISP 존·비밀번호가 "
+                "일치하지 않습니다.", status=407)
+        try:
+            r.raise_for_status()
+            data = json.loads(r.text or "{}")
+        except requests.RequestException as e:
+            raise BrightDataAPIError(f"IP 확인 요청 실패: {e}") from e
+        except ValueError as e:
+            raise BrightDataAPIError(
+                "IP 확인 응답이 JSON 이 아닙니다.", body=(r.text or "")[:200]) from e
+        if isinstance(data, dict) and data.get("ip"):
+            return {"ip": str(data["ip"]),
+                    "country": str(data.get("country", "") or "")}
+        raise BrightDataAPIError(
+            "IP 확인 응답 형식이 예상과 다릅니다.", body=(r.text or "")[:200])
+    finally:
+        if owned:
+            sess.close()
+
+
+def _isp_test_fallback(
+    sess: requests.Session,
+    proxies: dict[str, str],
+    auth: tuple[str, str],
+    timeout: float,
+) -> dict[str, Any] | None:
+    """1차 엔드포인트가 네트워크 오류일 때 폴백으로 IP 만 확인한다. 실패 시 None."""
+    try:
+        r = sess.get(ISP_TEST_FALLBACK_URL, proxies=proxies, auth=auth,
+                     timeout=timeout)
+        r.raise_for_status()
+        data = json.loads(r.text or "{}")
+    except (requests.RequestException, ValueError):
+        return None
+    if isinstance(data, dict) and data.get("ip"):
+        return {"ip": str(data["ip"]), "country": ""}
+    return None
 
 
 def _account_get(

@@ -15,7 +15,12 @@ import tempfile
 import unittest
 from unittest import mock
 
+import requests
+
 from app.core import brightdata, config
+
+# 최소 스텁(requests 세부 예외 없음) 환경에서는 연결 분류 테스트을 건너뛴다.
+_HAS_REQUESTS_ERRORS = hasattr(requests, "ConnectionError")
 
 
 class _FakeAccountResponse:
@@ -34,6 +39,39 @@ class _FakeAccountSession:
     def get(self, url, headers=None, timeout=None):
         self.calls.append({"url": url, "headers": headers, "timeout": timeout})
         return self.response
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeProxyResponse:
+    """test_isp_proxy 용 응답 — raise_for_status 까지 제공한다."""
+
+    def __init__(self, status: int = 200, text: str = "") -> None:
+        self.status_code = status
+        self.text = text
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"HTTP {self.status_code}")
+
+
+class _FakeProxySession:
+    """test_isp_proxy 용 세션 — URL 접두별로 응답/예외를 스크립트한다."""
+
+    def __init__(self, responses: dict) -> None:
+        self._responses = responses  # url → _FakeProxyResponse | Exception
+        self.calls: list[dict] = []
+
+    def get(self, url, proxies=None, auth=None, timeout=None):
+        self.calls.append({"url": url, "proxies": proxies, "auth": auth,
+                           "timeout": timeout})
+        for prefix, resp in self._responses.items():
+            if url.startswith(prefix):
+                if isinstance(resp, Exception):
+                    raise resp
+                return resp
+        raise AssertionError(f"unexpected url: {url}")
 
     def close(self) -> None:
         pass
@@ -79,7 +117,7 @@ class SettingsRoundTripTest(unittest.TestCase):
         loaded = brightdata.load_settings(self.path)
         self.assertEqual(loaded.api_token, "tok123")
         self.assertEqual(loaded.unlocker_zone, "my_zone")
-        self.assertEqual(loaded.country, "KR")
+        self.assertEqual(loaded.country, "kr")  # 소문자 정규화 (엔진 기본값 스타일)
         self.assertTrue(loaded.isp_enabled)
         self.assertEqual(loaded.isp_customer_id, "hl_test")
         self.assertEqual(loaded.isp_zone, "my_isp")
@@ -255,6 +293,66 @@ class FetchZonePasswordTest(unittest.TestCase):
     def test_empty_zone_raises_without_network(self):
         with self.assertRaises(brightdata.BrightDataAPIError):
             brightdata.fetch_zone_password("tok", "  ")
+
+
+@unittest.skipUnless(_HAS_REQUESTS_ERRORS, "requests 세부 예외 필요")
+class IspProxyConnectTest(unittest.TestCase):
+    """test_isp_proxy — 프록시 3요소 실연결 검증 (2026-09-09 보강)."""
+
+    def setUp(self):
+        self.settings = brightdata.BrightDataSettings(
+            isp_enabled=True, isp_customer_id="hl_x",
+            isp_zone="gm_isp", isp_password="pw")
+
+    def test_success_returns_ip_and_country(self):
+        sess = _FakeProxySession({
+            brightdata.ISP_TEST_URL: _FakeProxyResponse(
+                text=json.dumps({"ip": "31.40.194.114", "country": "kr"})),
+        })
+        result = brightdata.test_isp_proxy(self.settings, session=sess)
+        self.assertEqual(result, {"ip": "31.40.194.114", "country": "kr"})
+        call = sess.calls[0]
+        self.assertIn("brd-customer-hl_x-zone-gm_isp", call["auth"][0])
+        self.assertEqual(call["auth"][1], "pw")
+        self.assertIn("22225", call["proxies"]["http"])
+
+    def test_auth_failure_407_classified(self):
+        sess = _FakeProxySession({
+            brightdata.ISP_TEST_URL: _FakeProxyResponse(status=407, text="denied"),
+        })
+        with self.assertRaises(brightdata.BrightDataAPIError) as cm:
+            brightdata.test_isp_proxy(self.settings, session=sess)
+        self.assertIn("407", str(cm.exception))
+        self.assertEqual(cm.exception.status, 407)
+
+    def test_disabled_or_incomplete_raises_without_network(self):
+        sess = _FakeProxySession({})
+        with self.assertRaises(brightdata.BrightDataAPIError):
+            brightdata.test_isp_proxy(
+                brightdata.BrightDataSettings(isp_enabled=True), session=sess)
+        with self.assertRaises(brightdata.BrightDataAPIError):
+            brightdata.test_isp_proxy(
+                brightdata.BrightDataSettings(), session=sess)
+        self.assertEqual(sess.calls, [])  # 네트워크 호출 없이 거부
+
+    def test_fallback_endpoint_used_on_connection_error(self):
+        sess = _FakeProxySession({
+            brightdata.ISP_TEST_URL: requests.ConnectionError("boom"),
+            brightdata.ISP_TEST_FALLBACK_URL: _FakeProxyResponse(
+                text=json.dumps({"ip": "10.0.0.1"})),
+        })
+        result = brightdata.test_isp_proxy(self.settings, session=sess)
+        self.assertEqual(result, {"ip": "10.0.0.1", "country": ""})
+        self.assertEqual(len(sess.calls), 2)  # 1차 실패 → 폴백 1회
+
+    def test_connection_error_both_endpoints_classified(self):
+        sess = _FakeProxySession({
+            brightdata.ISP_TEST_URL: requests.ConnectionError("boom"),
+            brightdata.ISP_TEST_FALLBACK_URL: requests.ConnectionError("boom"),
+        })
+        with self.assertRaises(brightdata.BrightDataAPIError) as cm:
+            brightdata.test_isp_proxy(self.settings, session=sess)
+        self.assertIn("연결 실패", str(cm.exception))
 
 
 class DefaultPathTest(unittest.TestCase):
