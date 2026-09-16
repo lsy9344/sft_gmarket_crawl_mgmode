@@ -1,14 +1,11 @@
 """Bright Data 계정 설정 — API 토큰·존 입력 저장과 사용량 차감 대상 계정 해석.
 
-2026-09-09 신규 기능. 두 탭이 Bright Data 기술을 쓴다(실측 문서 기준):
-- Gmarket 카테고리 탭 — Web Unlocker(`POST /request`, 요청제 과금).
-  docs/gmarket/ACCESS_ROUTES_RESEARCH_20260908.md §6
-- Coupang 카테고리 탭 — Camoufox + ISP 프록시(대역폭제 과금).
-  docs/coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md §3·§7
+Gmarket 카테고리 탭만 Bright Data Web Unlocker(`POST /request`, 요청제 과금)를
+쓴다. Coupang 카테고리 탭은 Decodo 한국 고정 회선을 쓰며, Bright Data ISP
+프록시는 쿠팡 도메인 게이트로 사용하지 않는다.
 
-이 모듈이 사용자가 입력한 계정 자격 증명(자신의 키 — 사용량은 그 키에서
-차감된다)을 저장소 밖 파일(output/ 는 .gitignore)에 보관하고, 두 엔진이
-실행 시점에 읽어가는 단일 해석 지점이다.
+이 모듈이 사용자가 입력한 Bright Data 계정 자격 증명(자신의 키 — 사용량은
+그 키에서 차감된다)을 저장소 밖 파일(output/ 는 .gitignore)에 보관한다.
 
 토큰 우선순위: 설정 파일(UI 입력) → 환경변수 BRIGHTDATA_API_TOKEN →
 기존 output/brightdata_token.txt(개발 환경 하위 호환).
@@ -63,7 +60,7 @@ class BrightDataSettings:
     account_name: str = ""              # 계정 별칭 (예: "본사 계정") — 여러 키 구분용
     unlocker_zone: str = ""             # Web Unlocker 존 (빈 값 → config.BRIGHTDATA_ZONE)
     country: str = ""                   # 출발 국가 (빈 값 → config.BRIGHTDATA_COUNTRY)
-    isp_enabled: bool = False           # Coupang 카테고리 탭 ISP 프록시 경유 여부
+    isp_enabled: bool = False           # Bright Data ISP (쿠팡 카테고리에는 적용되지 않음)
     isp_customer_id: str = ""           # 계정 ID (예: hl_22fb0228 — /status customer)
     isp_zone: str = ""                  # ISP 존명 (예: gm_isp_kr3)
     isp_password: str = ""              # 존 비밀번호 — /zone/passwords 로 조회 가능
@@ -269,9 +266,9 @@ def test_isp_proxy(
     """ISP 프록시 자격(계정 ID·존·비밀번호)을 실제 연결로 검증한다.
 
     잔액 조회가 계정 API 토큰만 검증하는 것과 달리, 프록시 3요소가 모두
-    맞아야 통과한다 — Coupang 탭에서 "불완비로 직접 접속" 침묵 폴백을 막는
-    사전 확인 수단(2026-09-09 검토 반영). 성공 시 {"ip", "country"} —
-    country 는 1차 엔드포인트(lumtest)가 줄 때만 채워진다.
+    맞아야 통과한다. 쿠팡 카테고리 수집에는 쓰이지 않는다(Decodo 사용).
+    성공 시 {"ip", "country"} — country 는 1차 엔드포인트(lumtest)가 줄 때만
+    채워진다.
     """
     proxy = isp_proxy_dict(settings)
     if not proxy:

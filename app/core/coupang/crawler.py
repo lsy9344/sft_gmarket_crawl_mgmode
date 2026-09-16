@@ -15,9 +15,9 @@ import traceback
 from collections.abc import Callable
 from typing import Any
 
-from app.core import brightdata
 from app.core.base import CancelledError, Control
 from app.core.config import DEFAULT_COUPANG_PROFILE_DIR
+from app.core.coupang.resume_store import ResumeStoreError
 from app.core.storage import acquire_output_lock
 from app.models.coupang_records import (
     CoupangRecord,
@@ -137,7 +137,13 @@ class CoupangCrawler:
                 self._save_results(summary, partial=True)
         except Exception as e:  # noqa: BLE001 - 엔진 최상위 실패를 summary로 구조화
             summary.error = f"{type(e).__name__}: {e}"
-            summary.termination_reason = "error"
+            if isinstance(e, ResumeStoreError):
+                # 진행 기록 쓰기 실패 — 회선을 바꿔도 같은 지점에서 다시
+                # 실패하므로 decodo_run 이 재시도 없이 중단하도록 사유를
+                # 구조화해 전달한다(작업지시서 §3.1).
+                summary.termination_reason = "resume_store_error"
+            else:
+                summary.termination_reason = "error"
             self._log(f"예상치 못한 오류 ({type(e).__name__}): {e}")
             self._log(traceback.format_exc())
             if summary.records:
@@ -193,18 +199,17 @@ class CoupangCrawler:
                 "명령 프롬프트에서 SellerCollector.exe --setup-runtime 을 먼저 실행하세요.",
                 reason="error",
             ) from e
-        # Bright Data ISP 프록시 (설정 탭에서 활성화한 경우에만 config.proxy 존재).
-        # with_proxy=False 면 회선 IP 세션(2차 판매자 API)이므로 프록시를 뺀다.
-        # geoip=True 가 프록시 IP 기준 locale/타임존/지리를 자동 동기화한다 —
-        # Akamai 교차 검증 신호 일관성 (BRIGHTDATA_AKAMAI_REVIEW §7.2).
+        # 프록시 (Coupang 카테고리: Decodo 스티키 세션). with_proxy=False 면
+        # 회선 IP 세션(2차 판매자 API)이므로 프록시를 뺀다.
+        # geoip=True 가 프록시 IP 기준 locale/타임존/지리를 자동 동기화한다.
         proxy = None if with_proxy is False else getattr(self.config, "proxy", None)
         if proxy:
+            from app.core.decodo import proxy_summary
             self._log(
-                f"  [Bright Data] ISP 프록시 경유: "
-                f"{brightdata.isp_proxy_summary(proxy)} — 사용량은 입력된 계정 키로 차감"
+                f"  [프록시] 경유: {proxy_summary(proxy)}"
             )
         elif with_proxy is False and getattr(self.config, "proxy", None):
-            self._log("  [Bright Data] 2차 세션 — 회선 IP 직접 접속 (프록시 미사용)")
+            self._log("  [프록시] 2차 세션 — 회선 IP 직접 접속 (프록시 미사용)")
         if self.config.use_persistent_profile:
             profile_dir = self.config.profile_dir or DEFAULT_COUPANG_PROFILE_DIR
             try:
@@ -333,14 +338,20 @@ class CoupangCrawler:
         while time.monotonic() < end_time:
             self.control.checkpoint()
             action = random.choice(["move", "scroll", "pause", "move", "scroll"])
-            if action == "move":
-                page.mouse.move(random.randint(100, 900), random.randint(100, 600))
-                self.control.sleep(random.uniform(0.1, 0.4))
-            elif action == "scroll":
-                page.mouse.wheel(0, random.randint(50, 300))
-                self.control.sleep(random.uniform(0.3, 0.8))
-            else:
-                self.control.sleep(random.uniform(0.5, 1.5))
+            try:
+                if action == "move":
+                    page.mouse.move(random.randint(100, 900), random.randint(100, 600))
+                    self.control.sleep(random.uniform(0.1, 0.4))
+                elif action == "scroll":
+                    page.mouse.wheel(0, random.randint(50, 300))
+                    self.control.sleep(random.uniform(0.3, 0.8))
+                else:
+                    self.control.sleep(random.uniform(0.5, 1.5))
+            except CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - 행동 중 내비게이션/컨텍스트 전환은 정상 범위
+                self._log(f"  [행동 시뮬레이션 건너뜀] {type(e).__name__}: 페이지 전환 중")
+                self.control.sleep(random.uniform(0.5, 1.0))
 
     def _paginate_feed(self, page, template: dict, summary: CoupangRunSummary) -> dict:
         all_items: dict[str, dict] = {}
@@ -450,6 +461,33 @@ class CoupangCrawler:
         return [], None, True
 
     def _map_vendors(self, page, viids: list[str], summary: CoupangRunSummary) -> dict:
+        # 진행 기록에 매핑이 저장돼 있으면 API 재호출 없이 복원한다(§3.3).
+        # 매핑은 vendorItemId → 판매자정보로 저장한다(재개 판정의 키가 viid).
+        # 완료 시에만 일괄 저장되므로 도중 실패 시 저장본이 없어 매핑만
+        # 처음부터 다시 수행된다.
+        store = getattr(self.config, "resume_store", None)
+        saved = store.load_mapping() if store is not None else {}
+        missing = [v for v in viids if v not in saved]
+
+        def _by_vendor_id(payloads) -> dict:
+            return {
+                payload["vendorId"]: payload
+                for payload in payloads
+                if isinstance(payload, dict) and payload.get("vendorId")
+            }
+
+        if store is not None and viids and not missing:
+            self._log(
+                f"  [재개] 매핑 저장본 사용 — vendorItemId {len(viids)}건 전체가 "
+                "이미 매핑되어 있습니다 (API 재호출 없음)"
+            )
+            return _by_vendor_id(saved.values())
+        if store is not None and len(missing) < len(viids):
+            self._log(
+                f"  [재개] 매핑 {len(viids) - len(missing)}건은 저장본 사용 — "
+                f"신규 {len(missing)}건만 매핑합니다"
+            )
+
         page.goto(SHOP_SESSION_URL, wait_until="domcontentloaded", timeout=30000)
         self.control.sleep(3 * self._wait_scale)
         self._natural_interaction(page, 5 * self._wait_scale)
@@ -457,14 +495,14 @@ class CoupangCrawler:
 
         all_vendors: dict[str, dict] = {}
         batch_size = self.config.batch_size
-        total_batches = (len(viids) + batch_size - 1) // batch_size
+        total_batches = (len(missing) + batch_size - 1) // batch_size
         batch_errors = 0
         consecutive_batch_errors = 0
 
         for batch_idx in range(total_batches):
             self.control.checkpoint()
             start = batch_idx * batch_size
-            batch = viids[start:start + batch_size]
+            batch = missing[start:start + batch_size]
             vendors, had_error = self._get_vendors_for_items(page, batch)
             if had_error:
                 batch_errors += 1
@@ -491,6 +529,16 @@ class CoupangCrawler:
                 reason="error",
             )
 
+        if store is not None and (all_vendors or saved):
+            restored = _by_vendor_id(saved.values())
+            restored.update(all_vendors)
+            by_viid = {
+                payload.get("vendorItemId"): payload
+                for payload in restored.values()
+                if isinstance(payload, dict) and payload.get("vendorItemId")
+            }
+            store.save_mapping(by_viid)
+            return restored
         return all_vendors
 
     def _get_vendors_for_items(self, page, vendor_item_ids: list[str]) -> tuple[dict, bool]:
@@ -560,8 +608,32 @@ class CoupangCrawler:
     ) -> None:
         total = len(vendor_ids)
         consecutive_errors = 0
+        # 진행 기록에 확인된 판매자가 있으면 건너뛰고 남은 판매자만 처리한다
+        # (작업지시서 §3.3). 오류·타임아웃은 저장하지 않아 재개 대상에 남는다.
+        store = getattr(self.config, "resume_store", None)
+        saved_sellers = store.confirmed_sellers() if store is not None else {}
         for i, vendor_id in enumerate(vendor_ids):
             self.control.checkpoint()
+            if vendor_id in saved_sellers:
+                status, saved_record = saved_sellers[vendor_id]
+                if status == "confirmed":
+                    summary.records.append(saved_record)
+                    summary.business_info_success += 1
+                    if saved_record.get("power_seller"):
+                        summary.power_sellers += 1
+                    if saved_record.get("store_name"):
+                        summary.store_name_present += 1
+                    else:
+                        summary.store_name_missing += 1
+                    _safe_callback(self._on_record, "on_record", self._on_log, saved_record)
+                    self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: (저장됨 — API 호출 없이 복원)")
+                else:
+                    summary.brand_seller_skipped += 1
+                    self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: (brand seller - 저장된 판정)")
+                self._progress("business_info", i + 1, total)
+                self._emit_stats(summary)
+                continue
+
             data = self._get_store_review(page, vendor_id)
 
             if data and data.get("name"):
@@ -576,6 +648,8 @@ class CoupangCrawler:
                     summary.store_name_present += 1
                 else:
                     summary.store_name_missing += 1
+                if store is not None:
+                    store.record_seller_confirmed(vendor_id, record.to_dict())
                 _safe_callback(self._on_record, "on_record", self._on_log, record.to_dict())
                 power = " [POWER]" if record.power_seller else ""
                 self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: {record.company_name}{power}")
@@ -583,6 +657,8 @@ class CoupangCrawler:
                 # 브랜드 셀러 응답(200 정상) — API 는 살아있으므로 연속 실패 카운터 리셋
                 consecutive_errors = 0
                 summary.brand_seller_skipped += 1
+                if store is not None:
+                    store.record_seller_brand(vendor_id)
                 self._log(f"  [{i + 1:3d}/{total}] {vendor_id}: (brand seller - 스킵)")
             else:
                 summary.request_errors += 1

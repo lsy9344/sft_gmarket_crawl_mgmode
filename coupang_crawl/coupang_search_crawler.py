@@ -48,6 +48,7 @@ _OUTCOME_TO_EXIT = {
     RunOutcome.CANCELLED: EXIT_CANCELLED,
     RunOutcome.ERROR: EXIT_ERROR,
     RunOutcome.NO_RECORDS: EXIT_NO_RECORDS,
+    RunOutcome.PARTIAL: EXIT_OK,
     RunOutcome.SUCCESS: EXIT_OK,
 }
 

@@ -30,10 +30,9 @@ class CoupangRunConfig:
     # (SEARCH_POC_FINDINGS 가설 A). False 면 기존의 매 실행 신규 세션 방식.
     use_persistent_profile: bool = True
     profile_dir: Path | None = None  # None → <프로젝트 루트>/runtime_profile
-    # Bright Data ISP 프록시 (playwright/Camoufox proxy dict) — None 이면 직접 접속.
-    # 설정 탭에서 활성화한 경우에만 주입된다. 1차 목록은 프록시 IP로 돌고, 엔진이
-    # 2차 판매자정보 직전에 회선 IP 세션으로 자동 전환한다(getStoreReview 는
-    # 프록시 IP에서 403 실측 — BRIGHTDATA_AKAMAI_REVIEW §9). 기본값은 끔.
+    # 프록시 (playwright/Camoufox proxy dict) — None 이면 직접 접속.
+    # Coupang 카테고리 탭은 Decodo 스티키 세션을 주입한다. 1차 목록은 프록시 IP,
+    # 2차 판매자정보는 회선 IP 세션으로 엔진이 전환한다.
     proxy: dict | None = None
 
     def __post_init__(self) -> None:
@@ -131,6 +130,8 @@ class CoupangRunSummary:
     save_error: str | None = None
     cleanup_error: str | None = None
     termination_reason: str = ""
+    # 회선 IP(판매자 단계) 차단 — Decodo 회선 교체 재시도 대상이 아님(§3.3)
+    blocked_direct: bool = False
 
     @property
     def store_name_coverage(self) -> float:

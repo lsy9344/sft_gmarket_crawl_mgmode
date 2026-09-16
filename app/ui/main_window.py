@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.core import brightdata
+from app.core import brightdata, decodo
 from app.core.base import Control
 from app.core.config import DEFAULT_OUTPUT_DIR
 from app.core.coupang.categories import (
@@ -23,6 +23,8 @@ from app.core.coupang.categories import (
     CategoryTreeCache,
     count_nodes,
 )
+from app.core.coupang.decodo_run import category_run_dir
+from app.core.coupang.resume_store import peek_resume
 from app.core.crawler import reconcile_leftover_checkpoints
 from app.core.gmarket_categories import (
     DEFAULT_SEED_CACHE_PATH as GMARKET_SEED_CACHE_PATH,
@@ -47,7 +49,6 @@ from app.ui.widgets.progress_panel import ProgressPanel
 from app.ui.widgets.result_table import ResultTable
 from app.ui.widgets.settings_panel import SettingsPanel
 from app.workers.category_worker import CategoryWorker
-from app.workers.coupang_login_worker import CoupangLoginWorker
 from app.workers.coupang_worker import CoupangWorker
 from app.workers.crawl_worker import CrawlWorker
 from app.workers.foodspring_worker import FoodSpringWorker
@@ -86,8 +87,6 @@ class MainWindow(QMainWindow):
         # Coupang 카테고리 상태
         self.category_control: Control | None = None
         self.category_worker: SearchWorker | None = None
-        self.category_login_control: Control | None = None
-        self.category_login_worker: CoupangLoginWorker | None = None
         self.categories_control: Control | None = None
         self.categories_worker: CategoryWorker | None = None
         self.category_cache = CategoryTreeCache(
@@ -192,7 +191,6 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.category_panel, "Coupang 카테고리")
 
         self.category_panel.btn_refresh_categories.clicked.connect(self.on_categories_refresh)
-        self.category_panel.btn_login.clicked.connect(self.on_category_login)
         self.category_panel.btn_start.clicked.connect(self.on_category_start)
         self.category_panel.btn_pause.clicked.connect(self.on_category_pause)
         self.category_panel.btn_resume.clicked.connect(self.on_category_resume)
@@ -214,8 +212,7 @@ class MainWindow(QMainWindow):
             self._on_gmcat_open_result
         )
 
-        # 설정 탭 (2026-09-09 신규: Bright Data 계정 키 입력 — 두 탭의
-        # Bright Data 사용량(Web Unlocker/ISP 프록시)을 입력된 계정 키로 차감)
+        # 설정 탭: Gmarket은 Bright Data(Web Unlocker), Coupang 카테고리는 Decodo.
         self.brightdata_panel = BrightDataPanel()
         self.tab_widget.addTab(self.brightdata_panel, "설정")
 
@@ -258,7 +255,7 @@ class MainWindow(QMainWindow):
     def _active_worker(self):
         for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker,
                        self.foodspring_worker, self.category_worker, self.categories_worker,
-                       self.category_login_worker, self.gmcat_worker,
+                       self.gmcat_worker,
                        self.gmcat_crawl_worker):
             if worker is not None and worker.isRunning():
                 return worker
@@ -273,8 +270,6 @@ class MainWindow(QMainWindow):
             return self.category_control
         if self.categories_worker is not None and self.categories_worker.isRunning():
             return self.categories_control
-        if self.category_login_worker is not None and self.category_login_worker.isRunning():
-            return self.category_login_control
         if self.gmcat_worker is not None and self.gmcat_worker.isRunning():
             return self.gmcat_control
         if self.gmcat_crawl_worker is not None and self.gmcat_crawl_worker.isRunning():
@@ -298,14 +293,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Coupang 런타임 미준비", result.message)
             return False
         return True
-
-    def _set_category_login_busy(self, busy: bool) -> None:
-        """로그인 중에는 현재 탭의 취소 버튼만 남기고 다른 탭을 잠근다."""
-        self._set_gmarket_busy(busy)
-        self.coupang_panel.set_external_busy(busy)
-        self.foodspring_panel.set_external_busy(busy)
-        self.gmarket_category_panel.set_external_busy(busy)
-        self.brightdata_panel.set_external_busy(busy)
 
     # ── Gmarket: 사전 조사 ─────────────────────────────────────────
     def _make_storage(self) -> Storage | None:
@@ -787,8 +774,12 @@ class MainWindow(QMainWindow):
                 "no_new_items": "피드 자연 종료 (신규 없음)",
                 "page_limit": "페이지 상한 도달 (전량 보장 안 함)",
             }.get(summary.termination_reason, summary.termination_reason)
-            self.coupang_panel.append_log(f"[완료] {reason_msg} | {stats}")
-            self._show_status(f"Coupang 완료 ({summary.business_info_success}명)")
+            if outcome == RunOutcome.PARTIAL:
+                self.coupang_panel.append_log(f"[일부 수집] {reason_msg} | {stats}")
+                self._show_status(f"Coupang 일부 수집 ({summary.business_info_success}명)")
+            else:
+                self.coupang_panel.append_log(f"[완료] {reason_msg} | {stats}")
+                self._show_status(f"Coupang 완료 ({summary.business_info_success}명)")
 
     def _on_coupang_thread_done(self) -> None:
         from app.core.coupang.outcome import RunOutcome, determine_outcome
@@ -1355,61 +1346,6 @@ class MainWindow(QMainWindow):
     def _on_categories_thread_done(self) -> None:
         self.category_panel.set_loading_categories(False)
 
-    def on_category_login(self) -> None:
-        """쿠팡 로그인 세션 준비 — 영속 프로필 브라우저에서 직접 로그인 (1회)."""
-        if self._closing or self._close_prompt_active:
-            return
-        if self._active_worker() is not None:
-            return
-
-        if not self._coupang_runtime_ready():
-            return
-
-        self.category_login_control = Control()
-        worker = CoupangLoginWorker(self.category_login_control)
-        worker.log_message.connect(self.category_panel.append_log)
-        worker.login_finished.connect(self._on_category_login_result)
-        worker.error_occurred.connect(self._on_category_login_error)
-        worker.finished.connect(self._on_category_login_thread_done)
-        worker.finished.connect(self._maybe_close_after_worker)
-        self.category_login_worker = worker
-
-        self.category_panel.set_state("logging_in")
-        self._set_category_login_busy(True)
-        self._show_status("쿠팡 로그인 대기 중 — 브라우저에서 로그인을 완료하세요.")
-        self.category_panel.append_log(
-            "[로그인] 브라우저를 열고 로그인을 진행하세요 (최대 5분 대기).")
-        try:
-            worker.start()
-        except Exception as e:  # noqa: BLE001 - QThread 시작 경계 복구
-            self.category_login_worker = None
-            self.category_login_control = None
-            self.category_panel.set_state("failed")
-            self._set_category_login_busy(False)
-            self.category_panel.append_log(f"[오류] 로그인 작업 시작 실패: {e}")
-            self._show_status("쿠팡 로그인 시작 실패")
-            QMessageBox.critical(self, "쿠팡 로그인 시작 실패", str(e))
-
-    def _on_category_login_result(self, completed: bool) -> None:
-        if completed:
-            self.category_panel.append_log(
-                "[로그인] 완료 — 이제 '로그인 세션으로 수집'을 체크하고 수집할 수 있습니다.")
-            self._show_status("쿠팡 로그인 완료")
-        else:
-            self.category_panel.append_log(
-                "[로그인] 완료되지 않았습니다. 필요하면 다시 시도하세요.")
-            self._show_status("쿠팡 로그인 미완료")
-
-    def _on_category_login_error(self, msg: str) -> None:
-        self.category_panel.append_log(f"[오류] {msg}")
-        self._show_status("쿠팡 로그인 실패")
-
-    def _on_category_login_thread_done(self) -> None:
-        self.category_login_worker = None
-        self.category_login_control = None
-        self.category_panel.set_state("idle")
-        self._set_category_login_busy(False)
-
     def on_category_start(self) -> None:
         if self._closing or self._close_prompt_active:
             return
@@ -1420,28 +1356,20 @@ class MainWindow(QMainWindow):
         if config is None:
             QMessageBox.warning(
                 self, "설정 오류",
-                "카테고리를 선택하고 출력 폴더를 지정한 뒤 설정 값을 확인하세요.",
+                "카테고리 하나를 선택하고 출력 폴더를 지정하세요.",
             )
             return
 
-        # 하위 포함 시 규모·예상 시간 안내 (빈 페이지 조기 종료로 실제는 더 짧음)
-        total_cats = 1 + len(config.subcategories)
-        if total_cats > 1:
-            per_page = (config.page_delay_min + config.page_delay_max) / 2 + 10
-            cooldown = (config.category_cooldown_min + config.category_cooldown_max) / 2
-            est_min = int(total_cats * (config.max_pages * per_page + cooldown) / 60)
-            est_txt = (f"{est_min // 60}시간 {est_min % 60}분" if est_min >= 60
-                       else f"{est_min}분")
-            reply = QMessageBox.question(
-                self, "하위 카테고리 포함 수집",
-                f"선택 카테고리 + 하위 총 {total_cats}개를 수집합니다.\n"
-                f"최대 예상 시간: 약 {est_txt} 이상\n"
-                f"(빈 페이지가 일찍 나오면 실제로는 더 짧게 끝납니다)\n\n"
-                f"오래 걸려도 진행할까요? 중간에 취소해도 모은 결과는 저장됩니다.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        decodo_settings = decodo.load_settings()
+        if not decodo.credentials_ready(decodo_settings):
+            QMessageBox.warning(
+                self, "Decodo 계정 필요",
+                "Coupang 카테고리 수집에는 Decodo 계정이 필요합니다.\n\n"
+                "① 설정 탭 → Decodo 사용자명·비밀번호 입력\n"
+                "② 'Decodo 계정 저장'\n"
+                "③ 이 탭에서 다시 '수집 시작'",
             )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            return
 
         try:
             config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1460,35 +1388,42 @@ class MainWindow(QMainWindow):
         if not self._coupang_runtime_ready():
             return
 
+        # 진행 기록 재개 확인 — 같은 카테고리 폴더에 미완료 작업이 있으면
+        # 이어서 수집할지 처음부터 다시 할지 사용자에게 묻는다(작업지시서 §3.4).
+        run_dir = category_run_dir(
+            config.output_dir, config.category_id, config.category_name,
+        )
+        start_fresh = False
+        resume_note = peek_resume(run_dir)
+        if resume_note:
+            choice = self._ask_resume_mode(run_dir, resume_note)
+            if choice == "cancel":
+                return
+            start_fresh = choice == "fresh"
+
         self.category_control = Control()
         self.category_panel.clear_results()
+        self.category_panel.append_log(
+            f"[Decodo] 계정 {decodo_settings.username} — "
+            f"{config.category_name} ({config.category_id}) 만 수집합니다. "
+            "목록은 한국 회선 확인 후 진행하고, 판매자 정보는 이 PC 회선입니다. "
+            "결과는 카테고리별 하위 폴더에 저장됩니다. "
+            "실패하면 회선을 바꿔 최대 3번, 저장된 지점부터 이어서 시도합니다."
+        )
+        if resume_note and not start_fresh:
+            self.category_panel.append_log(f"[재개] 이어서 수집 — {resume_note}")
 
-        # 설정 탭에서 활성화한 Bright Data ISP 프록시 주입 — 사용량은 입력된
-        # 계정 키에서 차감된다. 자격이 불완비하면 직접 접속으로 진행하고
-        # 그 이유를 로그로 남긴다.
-        bd_settings = brightdata.load_settings()
-        proxy = brightdata.isp_proxy_dict(bd_settings)
-        if proxy:
-            config.proxy = proxy
-            self.category_panel.append_log(
-                f"[Bright Data] ISP 프록시 경유: "
-                f"{brightdata.isp_proxy_summary(proxy)} "
-                f"(토큰 {brightdata.masked_token(brightdata.resolve_api_token(bd_settings))} 계정 차감) — "
-                f"1차 목록은 프록시 IP, 2차 판매자정보는 회선 IP 세션으로 진행됩니다"
-            )
-        elif bd_settings.isp_enabled:
-            self.category_panel.append_log(
-                "[Bright Data] ISP 프록시 사용 설정이지만 계정 ID/존/비밀번호가 "
-                "불완비합니다 — 직접 접속으로 진행합니다. 설정 탭에서 완성하세요."
-            )
-
-        worker = SearchWorker(config, self.category_control)
+        worker = SearchWorker(
+            config, self.category_control, decodo_settings=decodo_settings,
+            start_fresh=start_fresh,
+        )
         worker.phase_changed.connect(self.category_panel.set_phase)
         worker.progress_changed.connect(self._on_category_progress)
         worker.log_message.connect(self.category_panel.append_log)
         worker.item_collected.connect(self.category_panel.add_record)
         worker.stats_changed.connect(self._on_category_stats)
         worker.error_occurred.connect(self._on_category_error)
+        worker.attempt_started.connect(self._on_category_attempt_started)
         worker.finished_crawl.connect(self._on_category_finished)
         worker.finished.connect(self._on_category_thread_done)
         worker.finished.connect(self._maybe_close_after_worker)
@@ -1497,6 +1432,30 @@ class MainWindow(QMainWindow):
         self.category_panel.set_state("running")
         self._show_status("Coupang 카테고리 수집 진행 중...")
         worker.start()
+
+    def _ask_resume_mode(self, run_dir, resume_note: str) -> str:
+        """미완료 진행 기록 발견 — 이어서/처음부터/취소를 묻는다.
+
+        반환값: "resume" | "fresh" | "cancel"
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("이어서 수집")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(
+            "이 카테고리 폴더에 미완료 진행 기록이 있습니다.\n\n"
+            f"{resume_note}\n\n"
+            "어디부터 수집할까요?"
+        )
+        btn_resume = box.addButton("이어서 수집", QMessageBox.ButtonRole.YesRole)
+        btn_fresh = box.addButton("처음부터 다시 수집", QMessageBox.ButtonRole.NoRole)
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_fresh:
+            return "fresh"
+        if clicked is btn_resume:
+            return "resume"
+        return "cancel"
 
     def on_category_pause(self) -> None:
         if self.category_control and not self.category_control.is_paused():
@@ -1513,18 +1472,16 @@ class MainWindow(QMainWindow):
             self._show_status("Coupang 카테고리 수집 진행 중...")
 
     def on_category_cancel(self) -> None:
-        if self.category_login_worker is not None and self.category_login_worker.isRunning():
-            if self.category_login_control:
-                self.category_login_control.request_cancel()
-            self.category_panel.set_state("cancelling")
-            self.category_panel.append_log("[로그인] 취소 요청 — 브라우저를 닫는 중입니다.")
-            self._show_status("쿠팡 로그인 취소 중...")
-            return
         if self.category_control:
             self.category_control.request_cancel()
             self.category_panel.set_state("cancelling")
             self.category_panel.append_log("[제어] 취소 요청 — 현재 요청 완료 후 중지합니다.")
             self._show_status("Coupang 카테고리 수집 취소 중...")
+
+    def _on_category_attempt_started(self, attempt: int, total: int) -> None:
+        if attempt > 1:
+            self.category_panel.clear_result_table()
+        self.category_panel.set_progress_text(f"시도 {attempt}/{total}")
 
     def _on_category_progress(self, kind: str, current: int, total: int) -> None:
         self.category_panel.set_progress_text(f"{kind}: {current}/{total}")
@@ -1555,6 +1512,7 @@ class MainWindow(QMainWindow):
 
     def _on_category_finished(self, summary) -> None:
         from app.core.coupang.outcome import RunOutcome, determine_outcome
+        from app.core.coupang.search_crawler import PLP_MAX_PAGES_LIMIT
 
         stats = (
             f"상품 {summary.products_seen} | 판매자 {summary.unique_vendors} | "
@@ -1584,16 +1542,82 @@ class MainWindow(QMainWindow):
             self.category_panel.append_log(f"[실패] {msg}")
             self._show_status(f"Coupang 카테고리 실패: {msg}")
             if summary.termination_reason == "blocked":
-                QMessageBox.warning(
-                    self, "쿠팡 차단 감지",
-                    "쿠팡이 접근을 차단했습니다.\n수집을 중단하고 충분한 쿨다운(수 시간) 후 재시도하세요.",
-                )
+                if getattr(summary, "blocked_direct", False):
+                    QMessageBox.warning(
+                        self, "쿠팡 접근 거부",
+                        "판매자 정보 단계에서 이 PC 회선이 막혔습니다.\n"
+                        "회선을 바꿔도 같은 차단이므로 재시도하지 않았습니다.\n"
+                        "충분한 쿨다운(약 12시간) 뒤 다시 시작하면\n"
+                        "저장된 판매자부터 이어서 수집합니다.",
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, "쿠팡 접근 거부",
+                        "이 회선으로는 목록을 열지 못했습니다.\n"
+                        "다시 시작하면 다른 회선으로 최대 3번,\n"
+                        "저장된 지점부터 이어서 시도합니다.",
+                    )
         elif outcome == RunOutcome.NO_RECORDS:
             reason_msg = {
                 "no_items": "수집된 상품 없음",
             }.get(summary.termination_reason, summary.termination_reason)
             self.category_panel.append_log(f"[실패] {reason_msg}")
             self._show_status(f"Coupang 카테고리 실패: {reason_msg}")
+        elif outcome == RunOutcome.PARTIAL:
+            if summary.termination_reason == "resume_shifted":
+                partial_label = "일부 수집(재개·목록 변동 미확인)"
+            elif summary.termination_reason == "resume_pending":
+                partial_label = "일부 수집(재개·미확인 판매자)"
+            elif summary.termination_reason == "mapping_pending":
+                partial_label = "일부 수집(매핑 누락)"
+            else:
+                partial_label = "일부 수집"
+            self.category_panel.append_log(
+                f"[{partial_label}] — {stats}"
+            )
+            self._show_status(
+                f"Coupang 카테고리 {partial_label} ({summary.business_info_success}명)"
+            )
+            used = PLP_MAX_PAGES_LIMIT
+            cfg = getattr(self.category_worker, "config", None)
+            raw = getattr(cfg, "max_pages", None) if cfg is not None else None
+            if isinstance(raw, int):
+                used = raw
+            resume_hints = {
+                "resume_pending": (
+                    "같은 카테고리로 다시 시작하면 저장된 지점부터 이어서 수집합니다."
+                ),
+                "resume_shifted": (
+                    "목록 순서가 바뀌어 누락 여부를 확인할 수 없습니다. "
+                    "다시 시작하면 저장된 지점부터 이어서 확인합니다."
+                ),
+                "mapping_pending": (
+                    "매핑이 누락된 상품의 판매자가 결과에 없습니다. "
+                    "다시 시작하면 남은 매핑·판매자부터 이어서 수집합니다."
+                ),
+            }
+            hint = resume_hints.get(summary.termination_reason)
+            if hint is None:
+                if used < PLP_MAX_PAGES_LIMIT:
+                    hint = (
+                        f"최대 페이지를 {PLP_MAX_PAGES_LIMIT}까지 늘린 뒤 "
+                        "다시 실행하면 더 모을 수 있습니다."
+                    )
+                else:
+                    hint = (
+                        f"페이지 한도({PLP_MAX_PAGES_LIMIT})에 닿아 더 늘릴 수 없습니다. "
+                        "이 한도 뒤에 상품이 있다면 이번에 포함되지 않았습니다."
+                    )
+            if summary.termination_reason == "page_limit":
+                lead = (
+                    "설정한 최대 페이지까지 읽었는데 목록이 더 남아 있을 수 있습니다.\n"
+                    "지금까지 모은 결과는 일부 수집으로 저장되어 있습니다. "
+                )
+            else:
+                lead = (
+                    "중단된 지점까지의 결과는 일부 수집으로 저장되어 있습니다.\n"
+                )
+            QMessageBox.information(self, "일부 수집", lead + hint)
         else:
             self.category_panel.append_log(f"[완료] {stats}")
             self._show_status(f"Coupang 카테고리 수집 완료 ({summary.business_info_success}명)")

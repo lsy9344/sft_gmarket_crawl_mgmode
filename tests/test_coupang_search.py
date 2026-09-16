@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.core.base import Control
+from app.core.base import CancelledError, Control
 from app.core.coupang import blockguard
 from app.core.coupang.crawler import COUPANG_HOME
 from app.core.coupang.search_crawler import SearchCrawler, SearchRunConfig
@@ -168,6 +168,27 @@ class FakeBrowser:
         self.closed = True
 
 
+class ClosedDuringGotoPage(FakeSearchPage):
+    """2차 브라우저가 열린 직후 닫히는 실제 TargetClosedError 재현."""
+
+    def __init__(self):
+        super().__init__()
+        self.goto_calls = 0
+
+    def goto(self, url, **kwargs):
+        from playwright._impl._errors import TargetClosedError
+
+        self.goto_calls += 1
+        raise TargetClosedError("Page.goto: Target page, context or browser has been closed")
+
+
+class ClosedDuringContentPage(FakeSearchPage):
+    def content(self):
+        from playwright._impl._errors import TargetClosedError
+
+        raise TargetClosedError("Page.content: Target page, context or browser has been closed")
+
+
 class FastSearchCrawler(SearchCrawler):
     _backoff_seconds = (0, 0, 0)
 
@@ -192,7 +213,8 @@ class SellerErrorPage(FakeSearchPage):
 
 def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocket=True,
          content_html=_OK_HTML, include_price_bands=False, category_id="", max_pages=3,
-         keyword="뷰티", category_name="", subcategories=(), require_login=False):
+         keyword="뷰티", category_name="", subcategories=(), require_login=False,
+         proxy=None):
     config = SearchRunConfig(
         output_dir=Path(tmp_dir),
         output_prefix="search_test",
@@ -204,6 +226,7 @@ def _run(tmp_dir, page, sorters=("saleCountDesc", "salePriceAsc"), exclude_rocke
         category_id=category_id,
         subcategories=subcategories,
         require_login=require_login,
+        proxy=proxy,
         category_cooldown_min=0,
         category_cooldown_max=0,
         max_pages=max_pages,
@@ -319,6 +342,9 @@ class SearchPipelineTest(unittest.TestCase):
             summary = _run(tmp, page, sorters=("saleCountDesc",),
                            category_id="176522", max_pages=10)
             self.assertIsNone(summary.error)
+            self.assertEqual(summary.termination_reason, "success")
+            self.assertTrue(summary.json_path)
+            self.assertNotIn("_partial", summary.json_path)
             plp_urls = [u for u in page.goto_urls if "/np/categories/176522" in u]
             self.assertEqual(len(plp_urls), 2)  # 10페이지 안 가고 빈 페이지 2회에 종료
 
@@ -386,6 +412,47 @@ class SearchPipelineTest(unittest.TestCase):
             self.assertTrue(any("page=1" in u for u in plp_urls))
             self.assertEqual(summary.termination_reason, "success")
 
+    def test_page_cap_with_remaining_items_is_partial(self):
+        """한도 페이지에도 상품이 있으면 성공이 아니라 일부 수집이다."""
+        from app.core.coupang.outcome import RunOutcome, determine_outcome
+
+        rows_seq = [
+            [_row("11"), _row("22")],
+            [_row("33")],
+        ]
+        page = FakeSearchPage(sorter_rows=rows_seq, viids=["11", "22", "33"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(
+                tmp, page, keyword="", category_id="221934",
+                category_name="출산/유아동", max_pages=2,
+            )
+        self.assertIsNone(summary.error)
+        self.assertEqual(summary.products_seen, 3)
+        self.assertEqual(summary.termination_reason, "page_limit")
+        self.assertEqual(determine_outcome(summary), RunOutcome.PARTIAL)
+        self.assertIn("_partial", summary.json_path)
+
+    def test_page_cap_with_first_empty_is_partial(self):
+        """한도 페이지에서 빈 페이지가 처음 나와도 목록 끝을 확인하지 못한다."""
+        from app.core.coupang.outcome import RunOutcome, determine_outcome
+
+        rows_seq = [
+            [_row("11"), _row("22")],
+            [],
+        ]
+        page = FakeSearchPage(sorter_rows=rows_seq, viids=["11", "22"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(
+                tmp, page, keyword="", category_id="221934",
+                category_name="출산/유아동", max_pages=2,
+            )
+            self.assertIsNotNone(summary.json_path)
+            self.assertIn("_partial", summary.json_path)
+        self.assertIsNone(summary.error)
+        self.assertEqual(summary.products_seen, 2)
+        self.assertEqual(summary.termination_reason, "page_limit")
+        self.assertEqual(determine_outcome(summary), RunOutcome.PARTIAL)
+
     def test_blocked_akamai_page_is_classified(self):
         """Akamai 거부 응답은 분류 메시지와 스냅샷으로 진단된다."""
         page = FakeSearchPage(sorter_rows=[[_row("11")]], content_html=_AKAMAI_HTML)
@@ -430,6 +497,52 @@ class SearchPipelineTest(unittest.TestCase):
             self.assertEqual(second.termination_reason, "block_cooldown")
             self.assertIn("쿨다운", second.error)
             self.assertEqual(len(page.goto_urls), gotos_after_first)
+
+    def test_proxy_listing_block_skips_home_ip_cooldown(self):
+        """목록 단계 프록시 거부는 12시간 쿨다운을 걸지 않아 회선 교체가 가능하다."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], content_html=_AKAMAI_HTML)
+        proxy = {
+            "server": "http://gate.decodo.com:7000",
+            "username": "user-sp-session-t1-sessionduration-1440-country-kr",
+            "password": "pw",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            first = _run(tmp, page, proxy=proxy)
+            self.assertEqual(first.termination_reason, "blocked")
+            self.assertIsNone(blockguard.read_block_state(Path(tmp)))
+            second = _run(tmp, page, proxy=proxy)
+            self.assertEqual(second.termination_reason, "blocked")
+            self.assertNotEqual(second.termination_reason, "block_cooldown")
+
+    def test_listing_does_not_swallow_cancel_from_interaction(self):
+        """목록 로드의 바깥 except 가 사용자 취소를 삼키면 안 된다."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]])
+        with tempfile.TemporaryDirectory() as tmp:
+            config = SearchRunConfig(
+                output_dir=Path(tmp),
+                output_prefix="search_test",
+                keyword="뷰티",
+                warmup_time=0,
+                page_delay_min=0,
+                page_delay_max=0,
+                delay_min=0,
+                delay_max=0,
+                max_pages=2,
+                category_cooldown_min=0,
+                category_cooldown_max=0,
+            )
+            crawler = FastSearchCrawler(
+                config=config,
+                control=Control(),
+                browser_factory=lambda: FakeBrowser(page),
+            )
+            crawler._natural_interaction = lambda *a, **k: (_ for _ in ()).throw(
+                CancelledError()
+            )
+            with self.assertRaises(CancelledError):
+                crawler._load_listing_page(
+                    page, "https://www.coupang.com/np/categories/1?page=1", "p1",
+                )
 
 
 class LoginPolicyTest(unittest.TestCase):
@@ -585,7 +698,7 @@ class SearchConfigTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", max_pages=0)
             with self.assertRaises(ValueError):
-                SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", max_pages=51)
+                SearchRunConfig(output_dir=Path(tmp), keyword="뷰티", max_pages=201)
 
 
 class ShellSequencePage(FakeSearchPage):
@@ -761,6 +874,48 @@ class ProxyPhaseSplitTest(unittest.TestCase):
             self.assertIn(COUPANG_HOME, seller_page.goto_urls)
             self.assertTrue(any("2차 전환" in m for m in logs))
             self.assertTrue(any("회선 IP" in m for m in logs))
+
+    def test_closed_direct_session_is_reopened_once(self):
+        collection_page = FakeSearchPage(sorter_rows=[[_row("11")]])
+        closed_page = ClosedDuringGotoPage()
+        seller_page = FakeSearchPage(viids=["11"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, browsers, logs, calls = self._run_split(
+                tmp, [collection_page, closed_page, seller_page], proxy=self._proxy())
+            self.assertIsNone(summary.error)
+            self.assertEqual(summary.business_info_success, 1)
+            self.assertEqual(calls["browser_factory"], 3)
+            self.assertTrue(browsers[1].closed)
+            self.assertTrue(any("2차 세션을 다시 엽니다" in m for m in logs))
+
+    def test_closed_listing_page_is_not_retried(self):
+        page = ClosedDuringGotoPage()
+        with tempfile.TemporaryDirectory() as tmp:
+            config = SearchRunConfig(
+                output_dir=Path(tmp), output_prefix="closed", keyword="",
+                category_id="194276", category_name="과일", max_pages=1,
+                warmup_time=0, page_delay_min=0, page_delay_max=0,
+            )
+            crawler = FastSearchCrawler(config, Control())
+            from playwright._impl._errors import TargetClosedError
+
+            with self.assertRaises(TargetClosedError):
+                crawler._load_listing_page(page, "https://example.test", "closed")
+        self.assertEqual(page.goto_calls, 1)
+
+    def test_closed_warmup_page_is_not_ignored(self):
+        page = ClosedDuringContentPage()
+        with tempfile.TemporaryDirectory() as tmp:
+            config = SearchRunConfig(
+                output_dir=Path(tmp), output_prefix="closed", keyword="",
+                category_id="194276", category_name="과일", max_pages=1,
+                warmup_time=0, page_delay_min=0, page_delay_max=0,
+            )
+            crawler = FastSearchCrawler(config, Control())
+            from playwright._impl._errors import TargetClosedError
+
+            with self.assertRaises(TargetClosedError):
+                crawler._verify_warmup_ok(page)
 
     def test_no_proxy_keeps_single_session(self):
         page = FakeSearchPage(sorter_rows=[[_row("11")]], viids=["11"])

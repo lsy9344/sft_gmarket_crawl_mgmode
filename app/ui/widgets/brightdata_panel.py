@@ -1,22 +1,23 @@
 """Bright Data 계정 설정 탭 패널 — API 토큰·존 입력, 검증, 저장.
 
-사용자가 자신의 Bright Data 계정 API 토큰을 입력하면 두 탭의 Bright Data
-사용량(Web Unlocker 요청 과금 / ISP 프록시 대역폭 과금)이 그 계정 키에서
-차감된다. 자격 증명은 저장소 밖 output/brightdata_settings.json 에만
-저장된다(.gitignore) — 절대 저장소에 커밋되지 않는다.
+Gmarket 카테고리 탭의 Web Unlocker 사용량이 입력한 계정 키에서 차감된다.
+Coupang 카테고리 탭은 Decodo 계정을 쓰며 Bright Data ISP는 쓰지 않는다.
+자격 증명은 저장소 밖 output/brightdata_settings.json 에만 저장된다
+(.gitignore) — 절대 저장소에 커밋되지 않는다.
 
 검증 경로(2026-09-09 보강):
 - API 토큰 — "잔액 조회·토큰 검증" 버튼 + 저장 버튼이 새 토큰을 먼저 검증
   (401/403 거부 시 확인 대화상자, 네트워크 오류는 미검증 명시 후 저장).
 - ISP 프록시 3요소(계정 ID/존/비밀번호) — "프록시 테스트" 버튼이 실제 프록시
   연결로 출발 IP 를 확인한다. 잔액 조회만으로는 이 자격을 검증할 수 없다.
+  쿠팡 수집 경로에는 적용되지 않는다.
 - API 호출은 QThread 워커로 실행한다 — UI 스레드가 타임아웃(최대 90초) 동안
   멈추지 않고, 조회 중에는 버튼이 잠긴다.
 
 참고 실측 문서:
 - docs/gmarket/ACCESS_ROUTES_RESEARCH_20260908.md §6 (Web Unlocker)
-- docs/coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md §3·§7·§9 (ISP 프록시
-  하이브리드 통과, 판매자정보 API getStoreReview 는 프록시 IP에서 403)
+- docs/coupang/DECODO_PROXY_METHODOLOGY_20260910.md (쿠팡 수집)
+- docs/coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md §12 (쿠팡 도메인 게이트)
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.core import brightdata
+from app.core import brightdata, decodo
 from app.core.applog import log_line
 
 # Bright Data API 토큰이 있는 설정 페이지 — 일반 사용자가 발급 경로를
@@ -91,6 +92,7 @@ class BrightDataPanel(QWidget):
         self._worker: _BrightDataCallWorker | None = None
         self._build_ui()
         self.load_from_settings()
+        self.load_from_decodo()
 
     # ── UI 구성 ─────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -119,10 +121,9 @@ class BrightDataPanel(QWidget):
         layout.addLayout(guide_row)
 
         info = QLabel(
-            "Bright Data(brightdata.com) 계정의 API 토큰을 입력하면 Gmarket 카테고리 탭의 "
-            "Web Unlocker 요청과 Coupang 카테고리 탭의 ISP 프록시 사용량이 "
-            "입력된 계정 키에서 차감됩니다. 토큰은 이 PC의 output 폴더에만 저장되며 "
-            "저장소(소스 코드)에는 포함되지 않습니다."
+            "Bright Data 토큰은 Gmarket 카테고리 탭에 쓰입니다. "
+            "Coupang 카테고리 탭은 아래 Decodo 계정을 씁니다. "
+            "자격 증명은 이 PC의 output 폴더에만 저장됩니다."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -164,12 +165,12 @@ class BrightDataPanel(QWidget):
 
         layout.addWidget(acct_box)
 
-        # ── ISP 프록시 (Coupang 카테고리 탭 — 선택) ──────────────────────
-        isp_box = QGroupBox("ISP 프록시 — Coupang 카테고리 탭 (선택)")
+        # ── ISP 프록시 — Bright Data (쿠팡에는 사용하지 않음) ──────────────
+        isp_box = QGroupBox("ISP 프록시 — Bright Data (쿠팡에는 사용하지 않음)")
         isp_form = QFormLayout(isp_box)
 
         self.chk_isp_enabled = QCheckBox(
-            "Coupang 카테고리 수집 시 Bright Data ISP 프록시(한국 고정 IP) 경유"
+            "Bright Data ISP 프록시 사용 (Coupang 카테고리 탭에는 적용되지 않음)"
         )
         isp_form.addRow(self.chk_isp_enabled)
 
@@ -200,16 +201,38 @@ class BrightDataPanel(QWidget):
         isp_form.addRow("자격 검증", self.btn_test_proxy)
 
         isp_note = QLabel(
-            "프록시를 켜면 1차 목록 수집은 프록시 IP(회선 IP 보호)로 진행되고, "
-            "2차 판매자정보는 회선 IP 세션으로 자동 전환됩니다 — 실측상 "
-            "판매자정보 API(getStoreReview)는 프록시 IP에서 403 입니다. "
-            "로그인 세션을 함께 쓰면 계정 보안 경보 가능성이 있으니 비로그인 "
-            "수집에 사용하세요."
+            "Bright Data ISP 프록시는 쿠팡 도메인에서 막혀 카테고리 수집에 "
+            "쓰이지 않습니다. 쿠팡은 아래 Decodo 계정을 사용하세요."
         )
         isp_note.setWordWrap(True)
         isp_form.addRow(isp_note)
 
         layout.addWidget(isp_box)
+
+        # ── Decodo (Coupang 카테고리 탭) ────────────────────────────────
+        decodo_box = QGroupBox("Decodo — Coupang 카테고리 탭")
+        decodo_form = QFormLayout(decodo_box)
+        decodo_note = QLabel(
+            "쿠팡 카테고리 수집은 Decodo 한국 고정 회선이 필요합니다. "
+            "대시보드 Authentication 의 사용자명·비밀번호를 넣으세요. "
+            "앱이 세션 형식을 붙입니다."
+        )
+        decodo_note.setWordWrap(True)
+        decodo_form.addRow(decodo_note)
+
+        self.edit_decodo_user = QLineEdit()
+        self.edit_decodo_user.setPlaceholderText("예: sp3xxxxx (user- 접두사는 빼도 됩니다)")
+        decodo_form.addRow("Decodo 사용자명", self.edit_decodo_user)
+
+        self.edit_decodo_password = QLineEdit()
+        self.edit_decodo_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_decodo_password.setPlaceholderText("비밀번호")
+        decodo_form.addRow("Decodo 비밀번호", self.edit_decodo_password)
+
+        self.btn_save_decodo = QPushButton("Decodo 계정 저장")
+        self.btn_save_decodo.clicked.connect(self.on_save_decodo)
+        decodo_form.addRow(self.btn_save_decodo)
+        layout.addWidget(decodo_box)
 
         # ── 저장 ─────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -338,8 +361,8 @@ class BrightDataPanel(QWidget):
         country = str(result.get("country", "") or "").strip()
         country_txt = f" ({country.upper()})" if country else ""
         self._set_status(
-            f"ISP 프록시 통과 — 출발 IP {ip}{country_txt}. 이 자격으로 Coupang "
-            "1차 목록 수집이 진행됩니다. (2차 판매자정보는 자동으로 회선 IP 세션)",
+            f"ISP 프록시 통과 — 출발 IP {ip}{country_txt}. "
+            "쿠팡 카테고리 수집에는 쓰이지 않습니다(Decodo 사용).",
             error=False,
         )
 
@@ -410,7 +433,7 @@ class BrightDataPanel(QWidget):
         if stored.isp_enabled and not (stored.isp_customer_id and stored.isp_zone
                                        and stored.isp_password):
             isp_warn = (" ⚠ ISP 프록시 사용 설정이지만 계정 ID/존/비밀번호가 비어 "
-                        "있어 Coupang 탭에서는 프록시 없이(직접 접속) 진행됩니다 — "
+                        "있어 프록시 없이 진행됩니다 — "
                         "'프록시 테스트'로 자격을 완성하세요.")
         self._set_status(
             f"저장됨: {alias_txt}"
@@ -462,6 +485,49 @@ class BrightDataPanel(QWidget):
                              error=False)
         self._update_banner()
 
+    def load_from_decodo(self) -> None:
+        s = decodo.load_settings()
+        self.edit_decodo_user.setText(s.username)
+        self.edit_decodo_password.setPlaceholderText(
+            f"저장됨 ({decodo.masked_secret(s.password)}) — 변경할 때만 입력"
+            if s.password else "비밀번호"
+        )
+
+    def on_save_decodo(self) -> None:
+        stored = decodo.load_settings()
+        password = self.edit_decodo_password.text().strip() or stored.password
+        settings = decodo.DecodoSettings(
+            username=self.edit_decodo_user.text().strip(),
+            password=password,
+            host=stored.host,
+            port=stored.port,
+            country=stored.country,
+        ).sanitized()
+        if not decodo.credentials_ready(settings):
+            QMessageBox.warning(
+                self, "Decodo 계정 필요",
+                "사용자명과 비밀번호를 모두 입력하세요.",
+            )
+            self._set_status("Decodo 저장 취소 — 사용자명/비밀번호가 비어 있습니다.",
+                             error=True)
+            return
+        try:
+            path = decodo.save_settings(settings)
+        except OSError as e:
+            QMessageBox.critical(self, "저장 실패",
+                                 f"Decodo 설정을 쓸 수 없습니다:\n{e}")
+            self._set_status(f"Decodo 저장 실패: {e}", error=True)
+            return
+        self.edit_decodo_password.clear()
+        self.load_from_decodo()
+        log_line(f"[설정] Decodo 계정 저장: {settings.username} ({path})")
+        self._set_status(
+            f"Decodo 저장됨: {settings.username} "
+            f"({decodo.masked_secret(settings.password)}) — "
+            "Coupang 카테고리 탭에서 이 계정 회선을 사용합니다.",
+            error=False,
+        )
+
     def collect_settings_preserving_stored(self) -> brightdata.BrightDataSettings:
         """저장 버튼 경로 — 빈 토큰/비밀번호는 기존 저장값을 유지한다.
 
@@ -480,10 +546,11 @@ class BrightDataPanel(QWidget):
         """수집 실행 중 자격 증명 변경 잠금 (다른 탭의 규율과 동일)."""
         for w in (self.edit_token, self.edit_account_name, self.edit_unlocker_zone,
                   self.edit_country, self.chk_isp_enabled, self.edit_customer_id,
-                  self.edit_isp_zone, self.edit_isp_password, self.chk_show_token):
+                  self.edit_isp_zone, self.edit_isp_password, self.chk_show_token,
+                  self.edit_decodo_user, self.edit_decodo_password):
             w.setEnabled(not busy)
         for b in (self.btn_save, self.btn_balance, self.btn_fetch_password,
-                  self.btn_test_proxy, self.btn_open_token_page):
+                  self.btn_test_proxy, self.btn_open_token_page, self.btn_save_decodo):
             b.setEnabled(not busy)
 
     # ── 비동기 호출 공통 ─────────────────────────────────────────────────

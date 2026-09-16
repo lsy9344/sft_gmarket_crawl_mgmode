@@ -15,11 +15,12 @@ class RunOutcome(Enum):
     CANCELLED = "cancelled"
     ERROR = "error"
     NO_RECORDS = "no_records"
+    PARTIAL = "partial"
     SUCCESS = "success"
 
 
 def determine_outcome(summary: CoupangRunSummary) -> RunOutcome:
-    """우선순위: save_error > cleanup_error > cancelled > no_records > error > success."""
+    """우선순위: save_error > cleanup_error > cancelled > no_records > error > partial > success."""
     if getattr(summary, "save_error", None):
         return RunOutcome.SAVE_ERROR
     if getattr(summary, "cleanup_error", None):
@@ -32,4 +33,12 @@ def determine_outcome(summary: CoupangRunSummary) -> RunOutcome:
         return RunOutcome.ERROR
     if not summary.records:
         return RunOutcome.NO_RECORDS
+    # resume_shifted: 재개 뒤 목록 변동 미확인 / resume_pending: 미확인 판매자
+    # 잔존 / mapping_pending: 매핑 누락 vendorItemId 잔존 — 누락 증명이 없으므로
+    # '완료'가 아니라 일부 수집으로 표시한다
+    # (WORK_ORDER_CATEGORY_RESUME §3.4·§5.6).
+    if summary.termination_reason in (
+        "page_limit", "resume_shifted", "resume_pending", "mapping_pending",
+    ):
+        return RunOutcome.PARTIAL
     return RunOutcome.SUCCESS

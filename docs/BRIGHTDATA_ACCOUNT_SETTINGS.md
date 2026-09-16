@@ -1,12 +1,14 @@
 # Bright Data 계정 설정 기능 — API 키 입력·사용량 차감 (2026-09-09)
 
 > 요구: "이 플랫폼(Bright Data)의 API를 넣을 수 있는 기능을 만들어서 그 키에서
-> 차감되게끔 한다." 두 탭(Coupang 카테고리 / Gmarket 카테고리)에 Bright Data
-> 기술이 들어가 있으므로, 앱 사용자가 **자신의 계정 키**를 입력하면 두 탭의
-> 사용량이 그 키에서 차감되도록 한다.
+> 차감되게끔 한다." **Gmarket 카테고리 탭**이 Bright Data Web Unlocker를 쓰므로,
+> 앱 사용자가 **자신의 계정 키**를 입력하면 그 사용량이 그 키에서 차감된다.
+> **Coupang 카테고리 탭은 Decodo** 한국 고정 회선을 쓴다(Bright Data ISP는
+> 쿠팡 도메인 게이트로 사용하지 않음).
 > 근거 문서: [`docs/gmarket/ACCESS_ROUTES_RESEARCH_20260908.md`](gmarket/ACCESS_ROUTES_RESEARCH_20260908.md) §6·§8
-> (Web Unlocker 스펙·실측), [`docs/coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md`](coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md) §3·§7·§9
-> (ISP 프록시 하이브리드 실측·판정)
+> (Web Unlocker 스펙·실측), [`docs/coupang/DECODO_PROXY_METHODOLOGY_20260910.md`](coupang/DECODO_PROXY_METHODOLOGY_20260910.md)
+> (쿠팡 수집 플레이북), [`docs/coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md`](coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md) §12
+> (Bright Data 쿠팡 도메인 게이트)
 
 ## 1. 요약 (한눈에)
 
@@ -15,7 +17,7 @@
 | UI | 새 **"설정" 탭** — API 토큰·Unlocker 존·출발 국가, ISP 프록시(계정 ID/존/비밀번호) 입력, 잔액 조회·토큰 검증 버튼, 저장 버튼 |
 | 저장 위치 | `output/brightdata_settings.json` (`.gitignore` — 저장소 밖, POSIX 0600) |
 | Gmarket 카테고리 탭 | Phase A 리스팅이 입력된 토큰 + 입력된 존으로 `POST /request` 호출 — **요청 단위 과금이 입력 계정에서 차감** |
-| Coupang 카테고리 탭 | 설정에서 활성화 시 Camoufox 실행에 ISP 프록시 주입 — **대역폭 과금이 입력 계정에서 차감** (기본값: 끔 — 아래 유의점) |
+| Coupang 카테고리 탭 | **Decodo** 한국 고정 회선(설정 탭 Decodo 사용자명/비밀번호). Bright Data ISP는 쿠팡에 적용되지 않음 |
 | 토큰 우선순위 | 설정 파일(UI 입력) → 환경변수 `BRIGHTDATA_API_TOKEN` → 기존 `output/brightdata_token.txt` (하위 호환) |
 | 핵심 모듈 | `app/core/brightdata.py` (Qt 비의존), `app/ui/widgets/brightdata_panel.py` (탭 UI) |
 
@@ -39,10 +41,10 @@
 - **잔액 조회·토큰 검증 버튼**: `GET https://api.brightdata.com/customer/balance`
   (Bearer 토큰) → 잔액·다음 청구 예정 표시. 401/403 은 "토큰 거부"로 안내.
   공식 문서: docs.brightdata.com — Account Management API "Total balance".
-- **ISP 프록시 — Coupang 카테고리 탭(선택)**: 사용 체크박스, 계정 ID(`/status`
+- **ISP 프록시(선택, 쿠팡 미사용)**: 사용 체크박스, 계정 ID(`/status`
   의 `customer`, 예 `hl_22fb0228`), ISP 존명, 존 비밀번호. **"토큰으로 가져오기"**
   버튼은 `GET /zone/passwords?zone=<존명>`(2026-09-08 실측 엔드포인트)으로
-  비밀번호를 자동 채운다.
+  비밀번호를 자동 채운다. 쿠팡 카테고리 수집에는 적용되지 않는다.
 - **프록시 테스트 버튼 (2026-09-09 신규)**: 입력한 계정 ID·존·비밀번호로
   실제 프록시 연결을 1회 시험(`lumtest.com/myip.json`, 네트워크 오류 시
   ipify 폴백)해 출발 IP·국가를 표시한다. 잔액 조회는 계정 토큰만 검증하므로
@@ -56,7 +58,7 @@
   빈 토큰 위젯은 기존 저장값 유지(검증 없이 저장).
 - **ISP 불완비 저장 경고 (2026-09-09 신규)**: 프록시 사용 체크 상태로
   저장했는데 ID/존/비밀번호가 하나라도 비어 있으면, 저장은 되지만 상태에
-  "Coupang 탭에서 프록시 없이(직접 접속) 진행된다"는 경고를 남긴다.
+  자격 미완비 경고를 남긴다. 쿠팡 수집 경로에는 영향이 없다.
 - **비동기 호출**: 위 검증·조회 버튼은 모두 QThread 워커로 실행된다 — 응답이
   늦어도 UI 가 멈추지 않고, 실행 중에는 동작 버튼이 잠겨 중복 호출을 막는다.
 - **저장**: 즉시 파일 반영. 토큰·비밀번호 위젯은 보안상 전체 값을 복원하지
@@ -72,29 +74,18 @@
 폴백이 됨). 토큰이 전혀 없으면 설정 탭 안내와 함께 즉시 실패한다 —
 요청당 약 $0.003 이 **입력된 계정 키**에서 차감된다.
 
-### 2.3 Coupang 카테고리 탭 연동 (ISP 프록시 + 단계별 IP 분리)
+### 2.3 Coupang 카테고리 탭 연동 (Decodo — Bright Data ISP 미사용)
 
-- `CoupangRunConfig.proxy` (신규, playwright 형식 dict) — 설정 탭에서
-  활성화 + 자격 완비(계정 ID/존/비밀번호)일 때만 `SearchRunConfig` 에 주입.
-- `CoupangCrawler._create_browser()` 가 `Camoufox(..., proxy=...)` 로 전달.
-  `geoip=True` 가 프록시 IP 기준 locale/타임존/지리를 자동 동기화한다
-  (Akamai 교차 검증 신호 일관성 — BRIGHTDATA_AKAMAI_REVIEW §7.2 권장 조합).
-- 영속 프로필 경로에도 동일하게 프록시가 적용된다(기동 실패 시 신규 세션
-  폴백도 프록시 유지). 프록시 경유 사실은 로그에 사용자명만 남기고
-  비밀번호는 기록하지 않는다.
-- **단계별 IP 분리(2026-09-09 추가, 실측 §9)**: 1차 목록은 프록시 IP 로
-  돌리고(회선 IP 보호), 2차 판매자정보 직전에 엔진이 프록시 세션을 닫고
-  같은 영속 프로필의 **회선 IP 세션을 새로 열어** 웜업 후 진행한다 —
-  판매자정보 API(`getStoreReview`)는 프록시 IP 에서 403, 회선 IP 에서
-  200 실측. 프록시 미사용 시 기존처럼 단일 세션(회귀 없음).
-- **부트스트랩 셸 규칙(§3·§8)**: 목록 로드에서 상품 0건 + 작은 본문
-  (10KB 미만 — 정상 목록 ~600KB+, 셸 471B~3.4KB)은 차단이 아니라 JS 부트
-  페이지로 보고 대기 후 같은 URL 을 재내비게이션한다(최대 2회, 1~2회
-  회복 실측). 셸이 끝까지 지속하면 실제 목록 끝으로 판정해 빈 페이지로
-  처리한다. 차단 키워드(Access Denied/사용권한 등)는 기존처럼 즉시 중단.
-- **기본값이 '끔'인 이유**: 프록시는 회선 IP 를 소모하는 유료 자원이고
-  로그인 세션과 조합하면 계정 보안 경보 가능성이 있다(§7.4). 로그인 강제
-  수집 중 프록시를 켜면 엔진이 경고 로그를 남긴다.
+쿠팡 카테고리 수집은 **설정 탭의 Decodo 계정**(한국 고정 회선)으로 상품
+목록을 열고, 판매자 정보는 이 PC 회선으로 받는다. 시작 전에 실제 출발
+국가가 한국인지 확인하고, 아니면 회선을 바꾼다. 결과는 사용자가 고른
+폴더 아래 **카테고리별 하위 폴더**에 저장한다(프로필·차단 기록 격리).
+
+Bright Data ISP 프록시는 쿠팡 도메인 게이트(§12)로 **적용되지 않는다.**
+설정 탭의 ISP 입력은 남아 있으나 쿠팡 수집 경로에 주입되지 않는다.
+
+단계별 IP 분리·부트스트랩 셸 규칙은 엔진 동작으로 유지된다 — 상세는
+[`docs/coupang/DECODO_PROXY_METHODOLOGY_20260910.md`](coupang/DECODO_PROXY_METHODOLOGY_20260910.md).
 
 ### 2.4 보안·프라이버시
 
@@ -126,17 +117,15 @@
 2. 앱 **설정 탭**에 토큰 입력 → "잔액 조회·토큰 검증"으로 확인 → 저장.
 3. Web Unlocker 존 생성은 계정에서 1회(관리 API `POST /api/zone`, `plan`은
    객체 — ACCESS_ROUTES §6). 존 이름을 설정 탭의 "Unlocker 존"에 입력.
-4. Coupang ISP 프록시를 쓰려면 ISP 존 생성(`plan.bandwidth:"payperusage"` +
-   `country:"kr"` + `ips:1` 필수 — ACCESS_ROUTES §8) 후 설정 탭에
-   계정 ID/존/비밀번호 입력. 비밀번호는 "토큰으로 가져오기"로 채움.
-5. Gmarket 카테고리 탭은 즉시 입력 키로 차감되며, Coupang 카테고리 탭은
-   "ISP 프록시 경유" 체크가 켜져 있을 때만 프록시로 나간다.
+4. Coupang 카테고리 탭은 설정 탭 **Decodo** 사용자명/비밀번호를 저장한 뒤
+   수집한다. Bright Data ISP 존은 쿠팡에 쓰지 않는다.
+5. Gmarket 카테고리 탭은 즉시 입력 키로 차감된다.
 
 ## 5. 남은 검증 (라이브)
 
 - 배포 환경에서 사용자 소유 계정 키로 Unlocker 요청 1건 → `budget`/잔액으로
   차감 확인 (개발 계정이 아닌 별도 계정 필요 — 로컬 검증은 mock 응답 기반).
-- ISP 존 보유 계정에서 Coupang 목록 수집 1사이클 → 차감·IP 확인.
+- Decodo 계정으로 쿠팡 카테고리 1건: 한국 회선 확인 후 수집 1사이클.
 
 ## 6. 재배포 기록 (2026-09-09)
 

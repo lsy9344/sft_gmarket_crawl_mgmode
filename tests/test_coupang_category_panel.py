@@ -1,4 +1,4 @@
-"""카테고리 탭 패널 UI 테스트 — 트리 렌더·선택·하위 포함 설정 (offscreen)."""
+"""카테고리 탭 패널 UI 테스트 — 트리 렌더·단일 카테고리 선택 (offscreen)."""
 
 import os
 import sys
@@ -60,18 +60,12 @@ class CategoryPanelTest(unittest.TestCase):
         self.assertEqual(tree.topLevelItem(0).childCount(), 1)  # 헬스/건강식품
         self.assertEqual(tree.topLevelItem(0).child(0).childCount(), 2)
 
-    def test_select_parent_includes_all_descendants(self):
+    def test_select_is_single_category_only(self):
         self._select("305798")
         self.assertEqual(self.panel.selected_category(), ("305798", "헬스/건강식품"))
-        subs = self.panel.selected_subcategories()
-        self.assertEqual([s[0] for s in subs], ["310632", "310637", "310655"])
+        self.assertIn("이 카테고리만", self.panel.selected_label.text())
 
-    def test_include_subs_toggle(self):
-        self._select("305798")
-        self.panel.chk_include_subs.setChecked(False)
-        self.assertEqual(self.panel.selected_subcategories(), [])
-
-    def test_build_config_with_subcategories(self):
+    def test_build_config_one_category_no_subs_or_login(self):
         self._select("305798")
         with tempfile.TemporaryDirectory() as tmp:
             self.panel.output_dir_edit.setText(tmp)
@@ -80,9 +74,12 @@ class CategoryPanelTest(unittest.TestCase):
         self.assertTrue(config.category_only)
         self.assertEqual(config.category_id, "305798")
         self.assertEqual(config.category_name, "헬스/건강식품")
-        self.assertEqual([c[0] for c in config.subcategories],
-                         ["310632", "310637", "310655"])
+        self.assertEqual(config.subcategories, ())
+        self.assertFalse(config.require_login)
+        self.assertFalse(config.exclude_rocket)
         self.assertIn("coupang_category_", config.output_prefix)
+        self.assertFalse(hasattr(self.panel, "btn_login"))
+        self.assertFalse(hasattr(self.panel, "chk_include_subs"))
 
     def test_build_config_requires_selection_and_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -92,9 +89,9 @@ class CategoryPanelTest(unittest.TestCase):
         self.panel.output_dir_edit.setText("")
         self.assertIsNone(self.panel.build_config())  # 폴더 미지정
 
-    def test_leaf_selection_no_subcategories(self):
+    def test_leaf_selection(self):
         self._select("310655")
-        self.assertEqual(self.panel.selected_subcategories(), [])
+        self.assertEqual(self.panel.selected_category(), ("310655", "건강식품"))
 
 
 if __name__ == "__main__":

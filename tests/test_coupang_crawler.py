@@ -840,7 +840,7 @@ class ConfigValidationTest(unittest.TestCase):
         self.assertEqual(kwargs["proxy"], proxy)
         # 프록시 경유 로그 — 비밀번호는 노출되지 않는다
         joined = "\n".join(logs)
-        self.assertIn("[Bright Data]", joined)
+        self.assertIn("[프록시]", joined)
         self.assertNotIn("pw", joined)
 
     def test_create_browser_with_proxy_false_opens_direct_session(self):
@@ -863,6 +863,27 @@ class ConfigValidationTest(unittest.TestCase):
         kwargs = fake_camoufox.call_args.kwargs
         self.assertIsNone(kwargs["proxy"])
         self.assertTrue(any("회선 IP 직접 접속" in m for m in logs))
+
+
+class NaturalInteractionCancelTest(unittest.TestCase):
+    """행동 시뮬레이션이 사용자 취소를 페이지 전환으로 삼키지 않아야 한다."""
+
+    def test_cancel_during_sleep_is_not_logged_as_page_transition(self):
+        class _SleepCancel(Control):
+            def checkpoint(self):
+                return
+
+            def sleep(self, seconds, poll_interval=0.1):
+                raise CancelledError()
+
+        logs: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            crawler = CoupangCrawler(
+                _make_config(tmp), _SleepCancel(), on_log=logs.append,
+            )
+            with self.assertRaises(CancelledError):
+                crawler._natural_interaction(FakePage(), 5.0)
+        self.assertFalse(any("행동 시뮬레이션 건너뜀" in m for m in logs))
 
 
 class ControlSleepTest(unittest.TestCase):

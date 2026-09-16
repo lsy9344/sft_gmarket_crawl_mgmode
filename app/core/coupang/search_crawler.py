@@ -26,9 +26,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-from app.core.base import CancelledError  # noqa: F401 - 호출 측 예외 계약 재노출
 from app.core.coupang import blockguard
 from app.core.coupang.crawler import CoupangCrawler, _RunError, _safe_callback
+from app.core.coupang.resume_store import (
+    STATUS_LISTING_DONE,
+    ResumeStore,
+    product_from_payload,
+)
 from app.core.coupang.search_parser import (
     DOM_EXTRACTION_JS,
     SearchProduct,
@@ -66,7 +70,15 @@ PLP_EMPTY_TOLERANCE = 2
 # PLP 최대 페이지 — 상한 자체는 종료 판정(빈 페이지 연속 2회 + 셸 지속)이
 # 담당하므로 목록 끝 이후의 여분 페이지는 471B 셸로 빠르게 끝난다(§8 실측).
 # 구버전 "실측 상한 ~17" 주석은 §8(냉동과일 19페이지 유효)로 폐기.
-PLP_MAX_PAGES_LIMIT = 50
+# 한도는 안전장치다. 목록 끝은 빈 페이지 연속 2회로만 확정한다. 한도에
+# 닿았는데 그 확인이 안 되면(마지막에 상품이 있거나 빈 페이지가 1회뿐)
+# 일부 수집으로 알린다.
+PLP_MAX_PAGES_LIMIT = 200
+
+
+def _is_target_closed_error(error: Exception) -> bool:
+    return type(error).__name__ == "TargetClosedError"
+
 
 # 부트스트랩 셸 — Camoufox+프록시 내비게이션의 ~1/3 빈도로 오는 JS 부트 페이지.
 # 실측(2026-09-09, BRIGHTDATA_AKAMAI_REVIEW §3·§8): 셸 본문 471B~3.4KB,
@@ -141,14 +153,17 @@ class SearchRunConfig(CoupangRunConfig):
     page_delay_max: float = 20.0
     include_price_bands: bool = True
     category_id: str = ""
-    # 큰 카테고리는 17페이지를 넘는다(§8: 냉동과일 19페이지 유효). 종료 판정
-    # (빈 페이지 연속 2회 + 셸 지속)이 실제 목록 끝을 담당하므로 여분 페이지의
-    # 비용은 셸 1~2장뿐이다 — 기본값은 여유 있게 30.
-    max_pages: int = 30
+    # 종료 판정(빈 페이지 연속 2회 + 셸 지속)이 실제 목록 끝을 담당한다.
+    # 기본값은 큰 카테고리도 끝까지 읽도록 한도에 가깝게 둔다.
+    max_pages: int = PLP_MAX_PAGES_LIMIT
     # 하위 카테고리 포함 수집 — (카테고리ID, 이름) 순서 쌍 (부모 다음 순회)
     subcategories: tuple[tuple[str, str], ...] = ()
     category_cooldown_min: float = 30.0
     category_cooldown_max: float = 60.0
+    # 진행 저장·재개 (WORK_ORDER_CATEGORY_RESUME) — None 이면 재개 없이 기존 동작.
+    # decodo_run 이 카테고리 폴더의 ResumeStore 를 주입하며, 시도(회선) 간에
+    # 같은 저장소를 공유한다. 키워드 모드에서는 무시한다.
+    resume_store: ResumeStore | None = None
     # 로그인 세션 강제 — True 면 비로그인 세션에서 수집을 거부한다
     # (전용 계정 1회 로그인 후 사용. 로그인 세션은 Akamai 신뢰 한도가 높다).
     require_login: bool = False
@@ -219,17 +234,35 @@ class SearchCrawler(CoupangCrawler):
             self._emit_stats(summary)
             return summary
         self._last_block_reference = ""
+        self._direct_session = False
         summary = super().run()
         if summary.termination_reason == "blocked":
-            path = blockguard.record_block(
-                self.config.output_dir,
-                reason=summary.error or "",
-                reference=self._last_block_reference,
+            proxy_listing_block = (
+                bool(getattr(self.config, "proxy", None))
+                and not getattr(self, "_direct_session", False)
             )
-            self._log(
-                f"  차단 상태 기록: {path} — "
-                f"{blockguard.DEFAULT_BLOCK_COOLDOWN_HOURS:.0f}시간 쿨다운 후 재시도하세요."
-            )
+            if proxy_listing_block:
+                # Decodo 플래그 IP 거부(F2) — 홈 IP 12시간 쿨다운을 걸면
+                # 같은 폴더에서 회선 교체 재시도가 막힌다.
+                self._log(
+                    "  프록시 회선 거부 — 12시간 쿨다운을 기록하지 않습니다. "
+                    "다른 회선으로 재시도할 수 있습니다."
+                )
+            else:
+                path = blockguard.record_block(
+                    self.config.output_dir,
+                    reason=summary.error or "",
+                    reference=self._last_block_reference,
+                )
+                # 회선 IP(판매자 단계) 차단임을 표시 — decodo_run 이 이 사유로는
+                # Decodo 회선을 교체하지 않는다(작업지시서 §3.3: 목록 단계까지
+                # 되돌리지 않는다). 브라우저 세션이 아니라 홈 IP 가 막힌 것이므로
+                # 회선 교체·목록 재요청은 무의미하다.
+                summary.blocked_direct = True
+                self._log(
+                    f"  차단 상태 기록: {path} — "
+                    f"{blockguard.DEFAULT_BLOCK_COOLDOWN_HOURS:.0f}시간 쿨다운 후 재시도하세요."
+                )
         return summary
 
     def _phase(self, name: str) -> None:
@@ -250,6 +283,35 @@ class SearchCrawler(CoupangCrawler):
         products: dict[str, SearchProduct] = {}
         rocket_removed = 0
         page1_html = ""
+
+        # 진행 저장·재개 (WORK_ORDER_CATEGORY_RESUME) — 카테고리 전용 모드에서만.
+        # 저장된 상품을 먼저 복원하고, 목록 단계 완료 상태면 목록을 다시 읽지
+        # 않는다(작업지시서 §3.3).
+        store = getattr(config, "resume_store", None)
+        store_active = (
+            store is not None
+            and config.category_only
+            and bool(config.category_id.strip())
+        )
+        resuming_listing = False
+        if store_active:
+            for payload in store.load_products():
+                restored = product_from_payload(payload)
+                products.setdefault(restored.dedup_key, restored)
+            if store.status == STATUS_LISTING_DONE and store.has_state():
+                resuming_listing = False
+                if products:
+                    self._log(
+                        f"[재개] 목록 단계는 이미 완료 — 저장된 상품 {len(products):,}개를 "
+                        "사용합니다 (목록 재요청 없음)"
+                    )
+            elif store.has_state():
+                resuming_listing = True
+                self._log(
+                    f"[재개] 이어서 수집 — {store.preview_text()} | "
+                    f"페이지 {store.last_item_page}을 경계로 다시 확인한 뒤 이어갑니다"
+                )
+                store.reset_empty_streak()
 
         # Phase 2: 층1 — SRP 정렬별 수집 (키워드 모드만)
         self._phase("search_collect")
@@ -310,43 +372,106 @@ class SearchCrawler(CoupangCrawler):
             label0 = config.category_name.strip() or config.category_id
             queue.append((config.category_id.strip(), label0))
         queue.extend((str(cid).strip(), str(name)) for cid, name in config.subcategories)
-        if queue:
+        hit_page_cap = False
+        # 재개: 목록 단계가 이미 완료된 실행이면 목록을 다시 읽지 않는다.
+        skip_listing = store_active and store.status == STATUS_LISTING_DONE
+        if skip_listing:
+            hit_page_cap = store.listing_end_reason == "page_cap"
+            if not products:
+                raise _RunError(
+                    "저장된 상품 목록이 없습니다 — 진행 기록이 손상되었을 수 있습니다. "
+                    "'처음부터 다시 수집'을 사용하세요.",
+                    reason="no_items",
+                )
+        elif queue:
             self._log(f"Phase 4: 카테고리 PLP 수집 — {queue[0][1]} 외 {len(queue) - 1}개 "
                       f"(카테고리당 최대 {config.max_pages}페이지)")
-            for cidx, (cid, cname) in enumerate(queue):
-                self._log(f"  [{cidx + 1}/{len(queue)}] 카테고리 '{cname}' ({cid}) 시작")
-                # 세션 내 첫 PLP 진입만 홈 메뉴 클릭으로 시도 (딥링크 회피).
-                # 이후 카테고리/페이지는 이미 신뢰가 형성된 세션에서 이동한다.
-                click_entry = (self._click_entry_first_page(page, cid)
-                               if cidx == 0 else False)
-                empty_streak = 0
-                for pno in range(1, config.max_pages + 1):
-                    self.control.checkpoint()
-                    url = CATEGORY_URL.format(cid=cid, page=pno)
-                    self._log(f"    [page {pno}] 로드...")
-                    items, _ = self._load_listing_page(
-                        page, url, f"{cname} p{pno}",
-                        retry_empty=False,
-                        skip_goto=(pno == 1 and click_entry))
-                    kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
-                    rocket_removed += len(items) - len(kept)
-                    fresh = self._merge(products, kept)
-                    self._log(f"    [page {pno}] 신규 {fresh}개 (누적 {len(products)})")
-                    self._progress("category_collect", pno, config.max_pages)
-                    if not items:
-                        empty_streak += 1
-                        if empty_streak >= PLP_EMPTY_TOLERANCE:
-                            self._log(f"    빈 페이지 {empty_streak}회 연속 — '{cname}' 종료")
-                            break
+        for cidx, (cid, cname) in enumerate(queue if not skip_listing else ()):
+            self._log(f"  [{cidx + 1}/{len(queue)}] 카테고리 '{cname}' ({cid}) 시작")
+            resume_here = (
+                store_active
+                and cidx == 0
+                and str(store.category_id) == cid
+            )
+            # 세션 내 첫 PLP 진입만 홈 메뉴 클릭으로 시도 (딥링크 회피).
+            # 이후 카테고리/페이지는 이미 신뢰가 형성된 세션에서 이동한다.
+            # 재개 시에는 1페이지가 아닌 깊은 페이지로 곧장 이동하므로 클릭
+            # 진입 규칙을 적용하지 않는다.
+            click_entry = (
+                False
+                if (resume_here and resuming_listing)
+                else (self._click_entry_first_page(page, cid) if cidx == 0 else False)
+            )
+            empty_streak = 0
+            start_page = 1
+            if resume_here and resuming_listing:
+                boundary = store.last_item_page
+                start_page = boundary + 1
+                if boundary > 0:
+                    # 경계 페이지 재확인 — 새 회선에서 마지막 저장 페이지를 다시
+                    # 읽어 상품 ID로 중복 제거한 뒤 미완료 페이지로 간다(§3.2).
+                    self._log(
+                        f"  [재개] 저장된 경계 페이지 {boundary}을 다시 확인합니다..."
+                    )
+                    url_b = CATEGORY_URL.format(cid=cid, page=boundary)
+                    items_b, _ = self._load_listing_page(
+                        page, url_b, f"{cname} p{boundary}(경계확인)", retry_empty=False,
+                    )
+                    kept_b = [p for p in items_b if not (config.exclude_rocket and p.rocket)]
+                    fresh_b = self._merge(products, kept_b)
+                    store.record_page(boundary, kept_b)
+                    if fresh_b > 0:
+                        store.set_listing_shifted()
+                        self._log(
+                            f"  [재개] 경계 페이지에서 신규 상품 {fresh_b}개 — 목록 순서가 "
+                            "바뀌었습니다. 누락 여부 확인이 불가하면 일부 수집으로 표시합니다"
+                        )
                     else:
-                        empty_streak = 0
-                    self._delay_between_pages(is_last=(pno == config.max_pages))
-                if cidx < len(queue) - 1:
-                    cooldown = random.uniform(config.category_cooldown_min,
-                                              config.category_cooldown_max)
-                    self._log(f"  카테고리 전환 쿨다운 {cooldown:.0f}초...")
-                    self.control.sleep(cooldown)
-        else:
+                        self._log("  [재개] 경계 페이지 일치 — 이어서 수집합니다")
+            for pno in range(start_page, config.max_pages + 1):
+                self.control.checkpoint()
+                url = CATEGORY_URL.format(cid=cid, page=pno)
+                self._log(f"    [page {pno}] 로드...")
+                items, _ = self._load_listing_page(
+                    page, url, f"{cname} p{pno}",
+                    retry_empty=False,
+                    skip_goto=(pno == 1 and click_entry))
+                kept = [p for p in items if not (config.exclude_rocket and p.rocket)]
+                rocket_removed += len(items) - len(kept)
+                fresh = self._merge(products, kept)
+                self._log(f"    [page {pno}] 신규 {fresh}개 (누적 {len(products)})")
+                self._progress("category_collect", pno, config.max_pages)
+                # 정상으로 읽은 페이지는 한 거래로 저장 — 저장 전에는 다음 페이지로
+                # 넘어가지 않는다(작업지시서 §3.2). 저장 실패 시 예외가 올라와
+                # 이 페이지는 미완료로 남는다.
+                if resume_here:
+                    store.record_page(pno, kept)
+                if not items:
+                    empty_streak += 1
+                    if empty_streak >= PLP_EMPTY_TOLERANCE:
+                        self._log(f"    빈 페이지 {empty_streak}회 연속 — '{cname}' 종료")
+                        break
+                else:
+                    empty_streak = 0
+                self._delay_between_pages(is_last=(pno == config.max_pages))
+            else:
+                if empty_streak < PLP_EMPTY_TOLERANCE:
+                    hit_page_cap = True
+                    self._log(
+                        f"    '{cname}' 최대 {config.max_pages}페이지에 도달 — "
+                        "빈 페이지 연속으로 목록 끝을 확인하지 못해 "
+                        "일부 수집으로 표시합니다"
+                    )
+            if resume_here:
+                # 목록 단계 완료 기록 — 이후 판매자 단계에서 끊겨도 목록을
+                # 다시 읽지 않는다(작업지시서 §3.3).
+                store.mark_listing_done("page_cap" if hit_page_cap else "empty")
+            if cidx < len(queue) - 1:
+                cooldown = random.uniform(config.category_cooldown_min,
+                                          config.category_cooldown_max)
+                self._log(f"  카테고리 전환 쿨다운 {cooldown:.0f}초...")
+                self.control.sleep(cooldown)
+        if not queue:
             self._log("Phase 4: 카테고리 수집 — 미지정, 건너뜀")
 
         # 수집 완료 집계
@@ -386,8 +511,57 @@ class SearchCrawler(CoupangCrawler):
 
         self._phase("save")
         self._log("Phase 7: 결과 저장...")
-        self._save_results(summary, partial=bool(summary.error))
+        if hit_page_cap and not summary.termination_reason:
+            summary.termination_reason = "page_limit"
         summary.termination_reason = summary.termination_reason or "success"
+        partial = bool(summary.error) or summary.termination_reason == "page_limit"
+        if store_active and summary.termination_reason == "success":
+            # 보수적 판정(작업지시서 §3.4·§5.6) — 누락 증명이 없으면 '완료'로
+            # 쓰지 않는다: ① 재개 뒤 경계 페이지에서 목록 변동이 관측됐거나
+            # ② 확인되지 못한 판매자·매핑 누락 vendorItemId 가 남아 있으면
+            # 일부 수집으로 표시한다.
+            saved_mapping = store.load_mapping()
+            mapped_vendors = {
+                payload.get("vendorId")
+                for payload in saved_mapping.values()
+                if isinstance(payload, dict)
+            } - {None}
+            confirmed = store.confirmed_sellers()
+            pending = [v for v in unique_vendor_ids
+                       if v in mapped_vendors and v not in confirmed]
+            unmapped = [v for v in viids if v not in saved_mapping]
+            if pending:
+                summary.termination_reason = "resume_pending"
+                self._log(
+                    f"  [재개] 미확인 판매자 {len(pending)}명 남음 — "
+                    "'일부 수집(재개·미확인 판매자)'으로 표시합니다"
+                )
+            elif unmapped:
+                # 개별정보 배치가 연속 한도 미만으로 실패해 매핑이 부분 완료된
+                # 상태다(2026-09-16 검토). 이 판매자들은 결과에 없으므로
+                # '완료'로 쓰고 진행 파일을 봉인하면 누락이 확정된다.
+                summary.termination_reason = "mapping_pending"
+                self._log(
+                    f"  [재개] 매핑 누락 vendorItemId {len(unmapped)}건 — "
+                    "'일부 수집(매핑 누락)'으로 표시하고 재개 대상에 남깁니다"
+                )
+            elif store.listing_shifted:
+                summary.termination_reason = "resume_shifted"
+                self._log(
+                    "  [재개] 목록 변동 감지 — "
+                    "'일부 수집(재개·목록 변동 미확인)'으로 표시합니다"
+                )
+        if summary.termination_reason in (
+            "resume_shifted", "resume_pending", "mapping_pending",
+        ):
+            partial = True
+        self._save_results(summary, partial=partial)
+        if (store_active
+                and summary.json_path
+                and not summary.save_error
+                and not summary.error
+                and summary.termination_reason == "success"):
+            store.mark_finished()
 
     # ── 수집 헬퍼 ──────────────────────────────────────────────────────────
 
@@ -412,15 +586,15 @@ class SearchCrawler(CoupangCrawler):
         규칙을 둔다. 프록시 세션을 닫고 같은 영속 프로필로 비프록시 세션을
         새로 열어 웜업한 뒤, 새 page 를 반환한다(scratchpad 2-pass 방식).
         """
+        self._direct_session = True
         self._log(
-            "  [Bright Data] 2차 전환 — 판매자 API 단계는 회선 IP 세션으로 진행 "
+            "  [프록시] 2차 전환 — 판매자 API 단계는 회선 IP 세션으로 진행 "
             "(프록시 IP getStoreReview 403 실측)"
         )
         if getattr(self.config, "require_login", False):
             self._log(
-                "  [Bright Data] 주의: 로그인 세션 + 프록시 조합은 계정 보안 경보 "
-                "가능성이 있습니다(BRIGHTDATA_AKAMAI_REVIEW §7.4). 가능하면 "
-                "비로그인 목록 수집에만 프록시를 사용하세요."
+                "  [프록시] 주의: 로그인 세션 + 프록시 조합은 계정 보안 경보 "
+                "가능성이 있습니다. 비로그인 목록 수집에만 프록시를 사용하세요."
             )
         old_browser, old_cm = self._browser, self._cm
         try:
@@ -430,14 +604,33 @@ class SearchCrawler(CoupangCrawler):
                 old_browser.close()
         except Exception as e:  # noqa: BLE001 - 이전 세션 정리는 진행을 막지 않음
             self._log(f"  이전 세션 종료 실패({type(e).__name__}: {e}) — 새 세션으로 진행")
-        browser, cm = self._create_browser(with_proxy=False)
-        self._browser, self._cm = browser, cm
-        new_page = browser.new_page()
-        self._attach_http_status_logger(new_page)
-        self._log("Phase 4.5: 2차 세션 웜업 (회선 IP)...")
-        self._warmup_home(new_page)
-        self._log("  2차 세션 준비 완료.")
-        return new_page
+        for direct_attempt in (1, 2):
+            browser = None
+            cm = None
+            try:
+                browser, cm = self._create_browser(with_proxy=False)
+                self._browser, self._cm = browser, cm
+                new_page = browser.new_page()
+                self._attach_http_status_logger(new_page)
+                self._log("Phase 4.5: 2차 세션 웜업 (회선 IP)...")
+                self._warmup_home(new_page)
+                self._log("  2차 세션 준비 완료.")
+                return new_page
+            except Exception as e:  # noqa: BLE001 - 외부 브라우저 기동 경계
+                if not _is_target_closed_error(e) or direct_attempt >= 2:
+                    raise
+                self._log("  2차 브라우저가 닫혔습니다 — 2차 세션을 다시 엽니다.")
+                try:
+                    if cm is not None:
+                        cm.__exit__(None, None, None)
+                    elif browser is not None:
+                        browser.close()
+                except Exception:  # noqa: BLE001 - 실패한 세션 정리 best-effort
+                    pass
+                self._browser, self._cm = None, None
+                self.control.sleep(2 * self._wait_scale)
+
+        raise RuntimeError("2차 세션을 열지 못했습니다")
 
     def _check_login_state(self, page) -> None:
         """홈에서 로그인 세션 여부를 확인하고 require_login 정책을 적용한다.
@@ -476,6 +669,8 @@ class SearchCrawler(CoupangCrawler):
         try:
             html = page.content()
         except Exception as e:  # noqa: BLE001 - 브라우저 경계 오류 시 검사 생략
+            if _is_target_closed_error(e):
+                raise
             self._log(f"  홈 콘텐츠 확인 실패({type(e).__name__}) — 차단 검사 생략")
             return
         blocked, reason = is_blocked(html)
@@ -548,6 +743,8 @@ class SearchCrawler(CoupangCrawler):
             self._log("    [진입] 홈 메뉴 클릭으로 PLP 진입")
             return True
         except Exception as e:  # noqa: BLE001 - 클릭 진입은 최선 노력 (goto 폴백 있음)
+            if _is_target_closed_error(e):
+                raise
             self._log(f"    [진입] 메뉴 클릭 실패({type(e).__name__}) — 직접 접속으로 진행")
             return False
 
@@ -572,6 +769,8 @@ class SearchCrawler(CoupangCrawler):
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 except Exception as e:  # noqa: BLE001 - 브라우저 경계 오류 구조화
+                    if _is_target_closed_error(e):
+                        raise
                     last_error = f"{type(e).__name__}: {e}"
                     self._log(f"    [{name}] 로드 실패: {last_error}")
                     if attempt < len(self._backoff_seconds):
@@ -603,6 +802,8 @@ class SearchCrawler(CoupangCrawler):
             try:
                 rows = page.evaluate(DOM_EXTRACTION_JS)
             except Exception as e:  # noqa: BLE001 - evaluate 경계
+                if _is_target_closed_error(e):
+                    raise
                 rows = []
                 last_error = f"DOM 추출 실패: {type(e).__name__}: {e}"
                 self._log(f"    {last_error}")

@@ -27,7 +27,7 @@ except Exception:  # noqa: BLE001 - PyQt6 미설치 환경
 if _QT_OK:
     from PyQt6.QtWidgets import QMessageBox
 
-    from app.core import brightdata
+    from app.core import brightdata, decodo
     from app.ui.widgets import brightdata_panel as panel_module
     from app.ui.widgets.brightdata_panel import BrightDataPanel
 
@@ -88,6 +88,19 @@ class BrightDataPanelTest(unittest.TestCase):
         self.assertTrue(raw["isp_enabled"])
         self.assertIn("검증 완료", self.panel.lbl_status.text())
         self.assertIn("본사 계정", self.panel.lbl_status.text())
+
+    def test_save_decodo_writes_settings_file(self):
+        dpath = os.path.join(self._tmp.name, "decodo_settings.json")
+        with mock.patch.object(decodo, "default_settings_path", lambda: dpath):
+            self.panel.edit_decodo_user.setText("user-sp3id")
+            self.panel.edit_decodo_password.setText("secretpw")
+            self.panel.on_save_decodo()
+        with open(dpath, encoding="utf-8") as f:
+            raw = json.load(f)
+        self.assertEqual(raw["username"], "sp3id")
+        self.assertEqual(raw["password"], "secretpw")
+        self.assertIn("Decodo 저장됨", self.panel.lbl_status.text())
+        self.assertNotIn("secretpw", self.panel.lbl_status.text())
 
     def test_banner_warns_without_token(self):
         # 토큰이 없으면 눈에 띄는 경고 배너 — 수집 시작이 막힌다는 사실을 명시

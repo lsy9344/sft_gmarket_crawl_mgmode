@@ -19,8 +19,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app.core.base import Control
-
 try:
     from PyQt6.QtGui import QCloseEvent
     from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -55,7 +53,7 @@ class _MainWindowTestCase(unittest.TestCase):
         self.win.coupang_worker = None
         self.win.category_worker = None
         self.win.categories_worker = None
-        self.win.category_login_worker = None
+
         self.win._closing = False
         self.win._close_prompt_active = False
         self.win.close()
@@ -173,63 +171,17 @@ class CloseEventRaceTest(_MainWindowTestCase):
         self.assertFalse(self.win._closing)  # 완전히 닫혔으므로 원상 복귀
 
 
-class CoupangLoginCoordinationTest(_MainWindowTestCase):
-    def _start_fake_login(self) -> Control:
-        control = Control()
-        worker = MagicMock()
-        worker.isRunning.return_value = True
-        self.win.category_login_control = control
-        self.win.category_login_worker = worker
-        return control
-
-    def test_close_requests_login_cancel(self) -> None:
-        control = self._start_fake_login()
-
-        with patch.object(
-            QMessageBox,
-            "question",
-            return_value=QMessageBox.StandardButton.Yes,
-        ):
-            event = QCloseEvent()
-            self.win.closeEvent(event)
-
-        self.assertTrue(control.is_cancelled())
-        self.assertFalse(event.isAccepted())
-
-    def test_login_start_disables_other_tabs(self) -> None:
-        from app.core.coupang.preflight import PreflightResult, PreflightStatus
-
-        ready = PreflightResult(PreflightStatus.OK, "ok")
+class CoupangCategoryDecodoStartTest(_MainWindowTestCase):
+    def test_start_without_decodo_credentials_does_not_create_worker(self):
         with (
-            patch("app.core.coupang.preflight.check_runtime", return_value=ready),
-            patch("app.ui.main_window.CoupangLoginWorker") as worker_cls,
+            patch("app.ui.main_window.decodo.credentials_ready", return_value=False),
+            patch.object(QMessageBox, "warning") as warning,
         ):
-            worker_cls.return_value.isRunning.return_value = True
-            self.win.on_category_login()
+            self.win.category_panel.build_config = lambda: object()  # type: ignore[method-assign]
+            self.win.on_category_start()
 
-        self.assertFalse(self.win.btn_prescan.isEnabled())
-        self.assertFalse(self.win.coupang_panel.btn_start.isEnabled())
-        self.assertFalse(self.win.foodspring_panel.btn_start.isEnabled())
-        self.assertTrue(self.win.category_panel.btn_cancel.isEnabled())
-
-    def test_login_start_failure_restores_other_tabs(self) -> None:
-        from app.core.coupang.preflight import PreflightResult, PreflightStatus
-
-        ready = PreflightResult(PreflightStatus.OK, "ok")
-        with (
-            patch("app.core.coupang.preflight.check_runtime", return_value=ready),
-            patch("app.ui.main_window.CoupangLoginWorker") as worker_cls,
-            patch.object(QMessageBox, "critical") as critical,
-        ):
-            worker_cls.return_value.start.side_effect = RuntimeError("start failed")
-            self.win.on_category_login()
-
-        critical.assert_called_once()
-        self.assertIsNone(self.win.category_login_worker)
-        self.assertTrue(self.win.btn_prescan.isEnabled())
-        self.assertTrue(self.win.coupang_panel.btn_start.isEnabled())
-        self.assertTrue(self.win.foodspring_panel.btn_start.isEnabled())
-        self.assertEqual(self.win.category_panel._state, "failed")
+        warning.assert_called_once()
+        self.assertIsNone(self.win.category_worker)
 
 
 class OnStartReconcileBlockingTest(_MainWindowTestCase):
@@ -474,6 +426,60 @@ class CoupangFinishTest(_MainWindowTestCase):
                 self.assertEqual(self.win.coupang_panel._state, expect_state)
                 self.assertIn(status_substr, self.win.statusBar().currentMessage())
 
+
+class CoupangCategoryFinishTest(_MainWindowTestCase):
+    def _worker_with_summary(self, summary, max_pages=200):
+        worker = MagicMock()
+        worker.isRunning.return_value = False
+        worker.summary = summary
+        worker.config.max_pages = max_pages
+        return worker
+
+    def test_page_limit_at_cap_does_not_ask_to_increase(self) -> None:
+        from app.models.coupang_records import CoupangRunSummary
+
+        summary = CoupangRunSummary()
+        summary.records = [{"vendor_id": "V1"}]
+        summary.products_seen = 10
+        summary.business_info_success = 1
+        summary.json_path = "/tmp/cat_partial.json"
+        summary.csv_path = "/tmp/cat_partial.csv"
+        summary.termination_reason = "page_limit"
+
+        self.win.category_worker = self._worker_with_summary(summary, max_pages=200)
+
+        with patch.object(QMessageBox, "information") as info_mock:
+            self.win._on_category_finished(summary)
+            self.win._on_category_thread_done()
+
+        info_mock.assert_called_once()
+        shown = " ".join(str(a) for a in info_mock.call_args.args)
+        self.assertIn("일부 수집", shown)
+        self.assertIn("더 늘릴 수 없습니다", shown)
+        self.assertIn("상품이 있다면", shown)
+        self.assertNotIn("늘린 뒤 다시 실행", shown)
+        self.assertEqual(self.win.category_panel._state, "finished")
+
+    def test_page_limit_below_cap_suggests_increase(self) -> None:
+        from app.models.coupang_records import CoupangRunSummary
+
+        summary = CoupangRunSummary()
+        summary.records = [{"vendor_id": "V1"}]
+        summary.products_seen = 10
+        summary.business_info_success = 1
+        summary.json_path = "/tmp/cat_partial.json"
+        summary.termination_reason = "page_limit"
+
+        self.win.category_worker = self._worker_with_summary(summary, max_pages=50)
+
+        with patch.object(QMessageBox, "information") as info_mock:
+            self.win._on_category_finished(summary)
+            self.win._on_category_thread_done()
+
+        info_mock.assert_called_once()
+        shown = " ".join(str(a) for a in info_mock.call_args.args)
+        self.assertIn("200까지 늘린 뒤", shown)
+        self.assertNotIn("더 늘릴 수 없습니다", shown)
 
 if __name__ == "__main__":
     unittest.main()
