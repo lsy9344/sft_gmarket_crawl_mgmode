@@ -1,0 +1,32 @@
+name: CI
+
+# 빌드 PC(Windows)와 배포 기준이 같은 Python 3.12 에서 전체 회귀 테스트를 돌린다.
+# 테스트는 실제 브라우저·네트워크 없이 페이크/스텁으로 동작하므로 브라우저
+# 설치 단계는 필요 없다 (conftest 가 프록시 조회를 스텁 처리).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
