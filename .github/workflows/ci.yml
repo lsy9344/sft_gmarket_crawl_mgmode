@@ -3,6 +3,12 @@ name: CI
 # 빌드 PC(Windows)와 배포 기준이 같은 Python 3.12 에서 전체 회귀 테스트를 돌린다.
 # 테스트는 실제 브라우저·네트워크 없이 페이크/스텁으로 동작하므로 브라우저
 # 설치 단계는 필요 없다 (conftest 가 프록시 조회를 스텁 처리).
+#
+# 실행 위치: 로컬 WSL 셀프호스티드 러너(사용자 systemd 서비스
+# github-actions-runner). GitHub 호스티드 러너는 이 저장소(비공개)의 Actions
+# 예산 소진으로 시작되지 않는다("Actions budget is preventing further use").
+# 러너가 꺼져 있으면 CI는 queued 에 머문다 — 재기동:
+#   systemctl --user start github-actions-runner
 on:
   push:
     branches: [main]
@@ -10,7 +16,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 20
     env:
       QT_QPA_PLATFORM: offscreen
