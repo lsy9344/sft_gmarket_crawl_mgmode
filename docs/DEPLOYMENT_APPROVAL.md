@@ -149,3 +149,67 @@ AliExpress 카테고리 수집 기능(7번째 탭)의 완성 및 전체 7개 탭
 - **Milestone R4 정식 릴리스**: **GO (배포 승인)**
 - **승인자 확인**: `lsy9344` (프로젝트 소유자/운영 책임자)
 
+
+---
+
+## 2026-09-18 Ali 카테고리 차단·재개 규율 정비 재배포 (검토 반영분)
+
+- **기록 시각**: 2026-09-18 08:35 KST
+- **배포 커밋**: `2af5eee` (main) — feat: Ali 카테고리 차단 안전 중단·우회 재개 규율 정비
+- **실행·기록자**: ZCode (`lsy9344`의 "검토 후 반영 개선해서 커밋 푸시 재배포" 지시에 근거)
+
+### 1. 배포 내용
+
+- **재개 경계 규율(쿠팡 search_crawler 준용)**: 재개 경계를 상품이 확인된 마지막
+  페이지(`last_item_page`)로 잡고 경계 페이지를 다시 확인한 뒤 다음 페이지부터
+  수집 — 소프트 차단·렌더 지연으로 0건 기록된 페이지의 상품 영구 누락 방지.
+  재개 시 `empty_streak` 리셋 — 이월된 빈 페이지 카운트로 목록이 조기 봉인되는 누락 방지.
+- **IP 차단 안전 중단·우회 재개 종단**: punish/tmd 감지 → 회선 자동 교체·연속 차단
+  안전 중단(저장 지점 보존) → 재시작 시 [이어서 수집]으로 중단 지점부터 재개.
+  Decodo 스티키 세션 자동 순환·한국 출발 회선 검증·mtop 미수신 상품 기록 금지 포함.
+- 신규 종단 테스트: `tests/test_aliexpress_block_resume.py` (punish 회전, 소프트
+  차단 기록 금지, 취소 재개, 경계 재확인, streak 리셋, 한국 회선 검증 등)
+
+### 2. 자동화 검증 결과
+
+- **Linux (WSL2) pytest**: `667 passed, 1 skipped, 3 warnings, 27 subtests passed`
+- **Windows (빌드 PC, Python 3.12.10, 클린 .venv-win) pytest**:
+  `659 passed, 6 failed, 3 skipped, 27 subtests passed`
+  - 6건 실패는 `247a82d` 동일 환경 재실행에서 **동일하게 재현되는 선존재 환경
+    문제**다 — sqlite 파일 잠금 WinError 32 5건(corrupted-DB 정리 경로),
+    chmod 권한 시뮬레이션 무효 1건. 본 변경(`247a82d`→`2af5eee`)으로 인한
+    신규 실패는 0건(통과 627→659, +32).
+  - 참고: `python -m unittest discover` 실행 시 conftest 의 프록시 스텁
+    (pytest 전용 fixture)이 적용되지 않아 AliExpress 수집 흐름 테스트가 추가로
+    실패한다. 빌드 게이트 판정은 pytest 기준으로 한다. (`scripts/build_windows.bat`
+    의 unittest 게이트는 별도 조정 권장)
+- **Frozen 스모크 (Linux)**: `./dist/SellerCollector --verify-runtime` → **exit 0**
+  (camoufox 0.5.4, 브라우저 152.0.4-beta.28, GeoIP, Patchright Chromium 정상)
+- **Frozen 스모크 (Windows)**: `SellerCollector.exe --verify-runtime` → **비정상 종료**
+  - 원인: 빌드 PC 런타임 캐시의 camoufox 브라우저가 `152.0.4-beta.30`으로
+    올라가 있음 — 계약 요구값은 `152.0.4-beta.28`
+    (`app/core/coupang/preflight.py` `PINNED_BROWSER_VERSION` 고정, 본 변경과 무관).
+  - 조치: 해당 PC에서 `SellerCollector.exe --setup-runtime` 1회 실행으로 정렬.
+
+### 3. 암호화 산출물 무결성
+
+| 파일 | 플랫폼 | 크기 (bytes) | SHA-256 Checksum |
+|---|---|---:|---|
+| `SellerCollector` | Linux x86_64 ELF | 200,209,824 | `45d71d27ddb955eb7dc3b580086f162c02862a780d13efb1b0438481d1b8e2aa` |
+| `CoupangRuntimeSetup` | Linux x86_64 ELF | 131,322,872 | `9fabfa7f675d75d147dedf80bdff391bb01c1ed1c49ed4bbb84026767365f343` |
+| `SellerCollector.exe` | Windows x64 PE | 142,751,686 | `bec2397bc922f275b9fd4507c2892a6d2b349d7c4f70381c9e8e3e89ab3d5a49` |
+| `CoupangRuntimeSetup.exe` | Windows x64 PE | 69,034,025 | `4a4006528395473f5aa7c9393b032e5633758637b5e1373e1ab6398c9eab907e` |
+| `SHA256SUMS.txt` | Text Manifest | 269 | `96da3336db71fdfcb0c0db41b0dda3b6ab51f17c75882fabfe8a60fb3385301b` |
+
+- 빌드 원본: `C:\Users\dltnd\Desktop\gmarket_build_ali_resume_20260918\dist\`
+  (git archive `2af5eee` 기준, Windows 클린 venv + PyInstaller 6.21.0)
+- Linux 빌드: WSL2 저장소 dist/ (PyInstaller 6.21.0)
+
+### 4. 결론
+
+- **재배포 GO** — 소스 커밋 `2af5eee` 기준 Linux/Windows 바이너리 재생성 및
+  `SHA256SUMS.txt` 갱신 완료. 신규 회귀 없음.
+- **미해결(배포 게이트 유지)**: ① Windows 빌드 PC 런타임 캐시 정렬
+  (`--setup-runtime` 1회) ② 실제 프록시 회선에서 차단→우회 재시작→중단 지점
+  재개 1사이클 라이브 실측(유닛·시나리오 테스트로는 검증됨)
+  ③ 조직 외부 배포·라이브 자동 수집은 기존 HOLD 유지.
