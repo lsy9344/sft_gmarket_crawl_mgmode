@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -22,10 +23,15 @@ except Exception:  # noqa: BLE001
     _QT_OK = False
 
 if _QT_OK:
+    from PyQt6.QtWidgets import QMessageBox
+
+    from app.core import decodo
     from app.core.aliexpress_category_crawler import (
+        AliexpressCategoryCrawler,
         AliexpressCategoryRunConfig,
         AliexpressCrawlSummary,
     )
+    from app.core.base import CancelledError, Control
     from app.ui.aliexpress_category_panel import AliexpressCategoryPanel
     from app.workers.aliexpress_category_crawl_worker import AliexpressCategoryCrawlWorker
 
@@ -155,6 +161,67 @@ class AliexpressCategoryPanelTest(unittest.TestCase):
         self.assertIn("프리미엄 견과류", self.panel.selected_target_label.text())
 
 
+    def test_finished_and_failed_states_reenable_start(self):
+        """완료·실패 종료 상태에서 시작 버튼과 설정 위젯이 다시 활성화되어야 한다.
+
+        IP 차단으로 중단된 뒤에도 우회 회선을 골라 다시 시작할 수 있어야 하므로
+        finished/failed 는 idle 과 같은 '다시 시작 가능' 상태다(쿠팡 탭 동일 규율).
+        """
+        for state in ("finished", "failed"):
+            self.panel.set_state(state)
+            self.assertTrue(
+                self.panel.btn_start.isEnabled(),
+                f"{state} 상태에서 시작 버튼이 다시 활성화되어야 합니다",
+            )
+            self.assertTrue(self.panel.spin_max_pages.isEnabled())
+            self.assertTrue(self.panel.spin_rotation_batch.isEnabled())
+            self.assertFalse(self.panel.btn_pause.isEnabled())
+            self.assertFalse(self.panel.btn_resume.isEnabled())
+            self.assertFalse(self.panel.btn_cancel.isEnabled())
+
+        # cancelling 은 종료 상태가 아니므로 시작·폴더 열기 모두 잠긴다
+        self.panel.set_state("cancelling")
+        self.assertFalse(self.panel.btn_start.isEnabled())
+        self.assertFalse(self.panel.btn_open_folder.isEnabled())
+        self.panel.set_state("idle")
+
+    def test_open_output_button_emits_typed_path(self):
+        """📁 결과 폴더 열기 버튼이 입력된 경로 그대로 open_output_requested(str) 을 방출하는지 검증."""
+        emitted: list[str] = []
+        self.panel.open_output_requested.connect(lambda p: emitted.append(p))
+        self.panel.edit_output_dir.setText("/tmp/ali_open_folder_test")
+        self.panel.btn_open_folder.click()
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0], "/tmp/ali_open_folder_test")
+
+    def test_open_output_button_without_path_does_not_emit(self):
+        """저장 폴더가 비어 있을 때는 시그널을 방출하지 않고 안내 로그만 남기는지 검증."""
+        emitted: list[str] = []
+        self.panel.open_output_requested.connect(lambda p: emitted.append(p))
+        self.panel.edit_output_dir.setText("   ")
+        self.panel.btn_open_folder.click()
+
+        self.assertEqual(len(emitted), 0)
+        self.assertIn("[폴더 열기 오류]", self.panel.log_text.toPlainText())
+
+    def test_start_click_does_not_clear_results(self):
+        """시작 클릭 시 패널이 결과 테이블을 비우지 않아야 한다.
+
+        결과 화면 비우기는 시작이 수락된 뒤 main_window 가 담당하므로,
+        시작 대화상자에서 취소하면 이전 결과가 보존된다.
+        """
+        self.panel.add_record({"company_name": "(주)보존", "email": "keep@x.com"})
+        self.panel.input_tabs.setCurrentIndex(1)
+        self.panel.input_direct_name.setText("보존테스트")
+        self.panel.input_direct_url.setText("https://ko.aliexpress.com/w/keep.html")
+
+        self.panel._on_start_clicked()
+        self.assertEqual(
+            self.panel.result_table.rowCount(), 1,
+            "시작 클릭만으로 결과 테이블이 비워져서는 안 됩니다",
+        )
+
     def test_category_tree_fallback_when_missing(self):
         """카테고리 트리 파일이 없을 때 안내 문구를 출력하고 직접 URL 입력 탭으로 자동 전환해야 한다."""
         from unittest.mock import patch
@@ -278,6 +345,176 @@ class MainWindowAliExpressIntegrationTest(unittest.TestCase):
             self.assertIsNotNone(self.win.alicat_worker)
             self.assertTrue(self.win.alicat_worker.config.start_fresh)
             self.win.alicat_worker = None
+
+    def test_start_acceptance_clears_results_only_after_acceptance(self):
+        """결과 화면 비우기가 시작 수락 이후에만 일어나는지 검증.
+
+        시작 대화상자에서 취소하면 이전 결과가 보존되고, 시작이 수락되어
+        워커가 기동될 때 비워진다(쿠팡 탭과 동일한 규율).
+        """
+        panel = self.win.aliexpress_category_panel
+        panel.add_record({"company_name": "(주)이전결과", "email": "old@x.com"})
+        cfg = AliexpressCategoryRunConfig(
+            output_dir=Path("/tmp/ali_test_out"),
+            category_name="화면정리",
+            category_url="https://ko.aliexpress.com/w/clear.html",
+        )
+
+        # 1. 수집 방식 대화상자에서 취소 → 워커 미기동, 이전 결과 보존
+        with patch("app.core.decodo.load_settings", return_value=decodo.DecodoSettings(username="", password="")), \
+             patch.object(QMessageBox, "exec", lambda b: None), \
+             patch.object(QMessageBox, "clickedButton", lambda b: None):
+            self.win.on_alicat_start(cfg)
+            self.assertIsNone(self.win.alicat_worker)
+            self.assertEqual(panel.result_table.rowCount(), 1, "취소 시 이전 결과가 보존되어야 합니다")
+
+        # 2. 시작 수락(자격 증명 있음) → 워커 기동과 함께 결과 화면 정리
+        with patch("app.core.decodo.load_settings"), \
+             patch("app.core.decodo.credentials_ready", return_value=True), \
+             patch.object(AliexpressCategoryCrawlWorker, "start"):
+            self.win.on_alicat_start(cfg)
+            self.assertIsNotNone(self.win.alicat_worker)
+            self.assertEqual(panel.result_table.rowCount(), 0, "시작 수락 후 결과 화면이 비워져야 합니다")
+            self.win.alicat_worker = None
+
+    def test_finished_blocked_summary_shows_warning_and_failed_state(self):
+        """차단(blocked) 요약 종료 시 IP 차단 의심 경고 대화상자와 failed 상태 전환 검증.
+
+        소프트 차단으로 안전 중단된 실행은 재개 안내가 담긴 warning 다이얼로그를
+        보여야 하며, 패널은 failed 상태로 전환돼 다시 시작할 수 있어야 한다.
+        """
+        summary = AliexpressCrawlSummary(
+            collected_items=7,
+            unique_vendors=3,
+            has_email=5,
+            has_business_number=6,
+            termination_reason="blocked",
+            error="IP 차단이 해소되지 않아 수집을 중단했습니다. 다시 시작할 때 우회 회선(Decodo)을 선택하세요.",
+        )
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win._on_alicat_finished(summary)
+
+        mock_warn.assert_called_once()
+        self.assertIn("IP 차단", mock_warn.call_args.args[1])
+        self.assertEqual(self.win.aliexpress_category_panel._state, "failed")
+        self.assertTrue(
+            self.win.aliexpress_category_panel.btn_start.isEnabled(),
+            "차단 중단 뒤에도 다시 시작할 수 있어야 합니다",
+        )
+
+    def test_finished_error_summary_shows_critical_dialog(self):
+        """일반 오류 요약 종료 시 critical 다이얼로그와 failed 상태 전환 검증."""
+        summary = AliexpressCrawlSummary(
+            collected_items=1,
+            termination_reason="error",
+            error="RuntimeError: 붕괴",
+        )
+        with patch.object(QMessageBox, "critical") as mock_crit, \
+             patch.object(QMessageBox, "warning") as mock_warn:
+            self.win._on_alicat_finished(summary)
+
+        mock_crit.assert_called_once()
+        mock_warn.assert_not_called()
+        self.assertEqual(self.win.aliexpress_category_panel._state, "failed")
+
+    def test_finished_cancelled_summary_logs_resume_guidance(self):
+        """취소 요약 종료 시 재개 안내 로그와 finished 상태 전환 검증."""
+        summary = AliexpressCrawlSummary(
+            collected_items=5,
+            unique_vendors=2,
+            cancelled=True,
+            termination_reason="cancelled",
+        )
+        with patch.object(QMessageBox, "warning") as mock_warn, \
+             patch.object(QMessageBox, "critical") as mock_crit:
+            self.win._on_alicat_finished(summary)
+
+        mock_warn.assert_not_called()
+        mock_crit.assert_not_called()
+        self.assertEqual(self.win.aliexpress_category_panel._state, "finished")
+        self.assertIn("[재개 안내]", self.win.aliexpress_category_panel.log_text.toPlainText())
+
+    def test_finished_success_summary_keeps_finished_state(self):
+        """정상 완료 요약은 다이얼로그 없이 finished 상태로 종료 검증."""
+        summary = AliexpressCrawlSummary(
+            collected_items=9,
+            unique_vendors=4,
+            has_email=8,
+            has_business_number=9,
+            termination_reason="success",
+        )
+        with patch.object(QMessageBox, "warning") as mock_warn, \
+             patch.object(QMessageBox, "critical") as mock_crit:
+            self.win._on_alicat_finished(summary)
+
+        mock_warn.assert_not_called()
+        mock_crit.assert_not_called()
+        self.assertEqual(self.win.aliexpress_category_panel._state, "finished")
+
+
+@unittest.skipUnless(_QT_OK, "PyQt6 필요")
+class AliexpressCrawlWorkerSummaryTest(unittest.TestCase):
+    """워커가 어떤 종료 경로에서도 finished_crawl 로 요약을 내보내는지 검증.
+
+    성공·취소·예외 모두 AliexpressCrawlSummary 를 정확히 1회 방출해야 하며,
+    요약에는 cancelled(bool) / termination_reason(str) 이 실려 있다.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.config = AliexpressCategoryRunConfig(
+            output_dir=Path(self.tmp_dir.name),
+            category_name="워커요약",
+            category_url="https://ko.aliexpress.com/category/321/worker.html",
+        )
+        self.control = Control()
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def _run_and_collect(self) -> list:
+        summaries: list = []
+        worker = AliexpressCategoryCrawlWorker(self.config, control=self.control)
+        worker.finished_crawl.connect(lambda s: summaries.append(s))
+        worker.run()
+        return summaries
+
+    def test_success_summary_passes_through_with_reason(self):
+        """정상 종료 시 크롤러 요약이 그대로 1회 방출되는지 검증."""
+        expected = AliexpressCrawlSummary(
+            total_items=3,
+            collected_items=3,
+            unique_vendors=2,
+            termination_reason="success",
+        )
+        with patch.object(AliexpressCategoryCrawler, "crawl", return_value=expected):
+            summaries = self._run_and_collect()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertIs(summaries[0], expected)
+        self.assertEqual(summaries[0].termination_reason, "success")
+        self.assertFalse(summaries[0].cancelled)
+
+    def test_cancelled_crawl_still_emits_summary(self):
+        """취소 예외로 끊겨도 cancelled 요약을 1회 방출하는지 검증 (요약 None 금지)."""
+        with patch.object(AliexpressCategoryCrawler, "crawl", side_effect=CancelledError()):
+            summaries = self._run_and_collect()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertIsInstance(summaries[0], AliexpressCrawlSummary)
+        self.assertTrue(summaries[0].cancelled)
+        self.assertEqual(summaries[0].termination_reason, "cancelled")
+
+    def test_crash_still_emits_error_summary(self):
+        """크롤러 예외로 끊겨도 error 요약을 1회 방출하는지 검증 (요약 None 금지)."""
+        with patch.object(AliexpressCategoryCrawler, "crawl", side_effect=RuntimeError("붕괴")):
+            summaries = self._run_and_collect()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertIsInstance(summaries[0], AliexpressCrawlSummary)
+        self.assertEqual(summaries[0].termination_reason, "error")
+        self.assertIn("붕괴", str(summaries[0].error))
+        self.assertFalse(summaries[0].cancelled)
 
 
 class AliexpressResumeStoreTest(unittest.TestCase):

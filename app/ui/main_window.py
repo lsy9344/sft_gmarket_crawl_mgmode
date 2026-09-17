@@ -115,7 +115,6 @@ class MainWindow(QMainWindow):
         # AliExpress 카테고리 상태
         self.alicat_control: Control | None = None
         self.alicat_worker: AliexpressCategoryCrawlWorker | None = None
-        self._alicat_had_error = False
 
         self._build_ui()
         self._set_ui_state("idle")
@@ -1400,7 +1399,8 @@ class MainWindow(QMainWindow):
         if resume_note and not start_fresh:
             self.aliexpress_category_panel.append_log(f"[재개] 이어서 수집 — {resume_note}")
 
-        self._alicat_had_error = False
+        # 시작이 수락된 뒤에 결과 화면을 비운다 — 대화상자 취소 시 이전 결과 보존
+        self.aliexpress_category_panel.clear_results()
         control = Control()
         self.alicat_control = control
 
@@ -1426,7 +1426,6 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_alicat_error(self, msg: str) -> None:
-        self._alicat_had_error = True
         self.aliexpress_category_panel.append_log(f"[오류] {msg}")
 
     def on_alicat_pause(self) -> None:
@@ -1453,27 +1452,46 @@ class MainWindow(QMainWindow):
     def _on_alicat_finished(self, summary) -> None:
         panel = self.aliexpress_category_panel
         if summary is None:
+            # 구버전 워커 호환 방어 — 요약 없는 종료
             panel.set_state("finished")
             panel.append_log("[종료] 수집 대상이 없거나 취소되어 중단되었습니다.")
             self._show_status("AliExpress 카테고리 수집 종료")
             return
 
-        crashed = bool(getattr(summary, "error", None))
         cancelled = bool(getattr(summary, "cancelled", False))
-        head = "수집 취소됨" if cancelled else ("수집 실패" if crashed else "수집 완수")
+        reason = str(getattr(summary, "termination_reason", "") or "")
+        error_text = str(getattr(summary, "error", "") or "")
+        crashed = bool(error_text) and not cancelled
+        blocked = (not cancelled) and (reason == "blocked" or "차단" in error_text)
+        head = "수집 취소됨" if cancelled else ("수집 중단(차단)" if blocked else ("수집 실패" if crashed else "수집 완수"))
 
         panel.append_log(
             f"[{head}] 총 상품 {summary.collected_items:,}건 / "
             f"고유 사업자 {summary.unique_vendors:,}개사 "
             f"(이메일 확보 {summary.has_email:,}건, 사업자번호 {summary.has_business_number:,}건)"
         )
-        if crashed:
+        if cancelled:
+            panel.set_state("finished")
+            self._show_status(f"AliExpress 카테고리 {head} ({summary.collected_items:,}건)")
+            if summary.collected_items > 0:
+                panel.append_log("[재개 안내] 다시 시작하면 저장된 지점부터 이어서 수집됩니다.")
+            return
+
+        if blocked or crashed:
             panel.set_state("failed")
-            self._show_status(f"AliExpress 카테고리 수집 실패: {summary.error}")
-            QMessageBox.critical(
-                self, "AliExpress 수집 실패",
-                f"{summary.error}\n\n그때까지 확보된 데이터는 결과 파일에 저장되었습니다.",
-            )
+            self._show_status(f"AliExpress 카테고리 수집 실패: {error_text}")
+            if blocked:
+                QMessageBox.warning(
+                    self, "AliExpress 수집 중단(IP 차단 의심)",
+                    f"{error_text}\n\n"
+                    f"그때까지 확보된 {summary.collected_items:,}건은 저장되어 있습니다.\n"
+                    "다시 [시작]을 눌러 우회 회선(Decodo)을 선택하면 중단 지점부터 이어서 수집됩니다.",
+                )
+            else:
+                QMessageBox.critical(
+                    self, "AliExpress 수집 실패",
+                    f"{error_text}\n\n그때까지 확보된 데이터는 결과 파일에 저장되었습니다.",
+                )
         else:
             panel.set_state("finished")
             self._show_status(f"AliExpress 카테고리 {head} ({summary.collected_items:,}건)")

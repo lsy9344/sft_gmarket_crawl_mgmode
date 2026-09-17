@@ -2,6 +2,9 @@
 
 AliexpressCategoryCrawler 를 백그라운드 QThread 로 실행하며
 UI 스레드에 진행 상태, 실시간 레코드, 통계, 로그를 시그널로 전달한다.
+
+취소·예외가 나도 finished_crawl 로 항상 요약(AliexpressCrawlSummary)을
+내보낸다 — UI 가 "대상 없음"과 "실패"를 구분해 안내할 수 있도록.
 """
 
 from __future__ import annotations
@@ -15,7 +18,21 @@ from app.core.aliexpress_category_crawler import (
     AliexpressCategoryCrawler,
     AliexpressCategoryRunConfig,
     AliexpressCrawlSummary,
+    ali_category_run_dir,
 )
+
+
+def build_summary_for_config(config: AliexpressCategoryRunConfig) -> AliexpressCrawlSummary:
+    """설정에서 결과 파일 경로만 채운 요약 — 취소·예외 시의 최소 요약."""
+    safe_name = ""
+    import re as _re
+
+    safe_name = _re.sub(r'[\\/*?:"<>| ]', "_", config.category_name)
+    run_dir = ali_category_run_dir(config.output_dir, config.category_name, config.category_url)
+    return AliexpressCrawlSummary(
+        csv_file=run_dir / f"ali_category_{safe_name}.csv",
+        json_file=run_dir / f"ali_category_{safe_name}.json",
+    )
 
 
 class AliexpressCategoryCrawlWorker(QThread):
@@ -27,13 +44,7 @@ class AliexpressCategoryCrawlWorker(QThread):
     item_collected = pyqtSignal(dict)
     stats_changed = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
-    finished_crawl = pyqtSignal(object)  # AliexpressCrawlSummary | None
-
-    # 별칭 호환성 시그널
-    log_emitted = log_message
-    record_collected = item_collected
-    stats_updated = stats_changed
-    crawl_finished = finished_crawl
+    finished_crawl = pyqtSignal(object)  # AliexpressCrawlSummary — 항상 요약을 내보낸다
 
     def __init__(
         self,
@@ -66,10 +77,19 @@ class AliexpressCategoryCrawlWorker(QThread):
             self.summary = summary
             self.finished_crawl.emit(summary)
         except CancelledError:
+            # 크롤러가 보통 취소 요약으로 승화하지만, 그 전에 끊긴 경우의 안전망
+            summary = build_summary_for_config(self.config)
+            summary.cancelled = True
+            summary.termination_reason = "cancelled"
+            self.summary = summary
             self.log_message.emit("[Ali 카테고리] 사용자에 의해 수집이 취소되었습니다.")
-            self.finished_crawl.emit(None)
+            self.finished_crawl.emit(summary)
         except Exception as e:
             err_msg = f"{e}\n{traceback.format_exc()}"
             self.log_message.emit(f"[치명적 오류] {err_msg}")
             self.error_occurred.emit(str(e))
-            self.finished_crawl.emit(None)
+            summary = build_summary_for_config(self.config)
+            summary.termination_reason = "error"
+            summary.error = str(e)
+            self.summary = summary
+            self.finished_crawl.emit(summary)

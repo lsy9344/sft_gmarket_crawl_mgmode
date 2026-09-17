@@ -187,6 +187,22 @@ class AliexpressResumeStore:
             raise ResumeStoreError(f"진행 기록을 읽을 수 없습니다: {e}") from e
 
     @property
+    def last_item_page(self) -> int:
+        """상품이 확인된 마지막 페이지 — 재개 경계(다시 확인할 페이지).
+
+        0건으로 기록된 페이지(소프트 차단·렌더 지연)는 경계에 포함하지 않는다.
+        재개 시 이 페이지를 다시 확인한 뒤 다음 페이지부터 이어간다
+        (쿠팡 resume_store.last_item_page 규율 동일).
+        """
+        try:
+            row = self.conn.execute(
+                "SELECT MAX(page_no) FROM pages WHERE item_count > 0"
+            ).fetchone()
+            return int(row[0] or 0)
+        except sqlite3.Error as e:
+            raise ResumeStoreError(f"진행 기록을 읽을 수 없습니다: {e}") from e
+
+    @property
     def product_count(self) -> int:
         try:
             row = self.conn.execute("SELECT COUNT(*) FROM products").fetchone()
@@ -237,9 +253,18 @@ class AliexpressResumeStore:
         )
 
     # ── Phase 1: 페이지 단위 원자적 저장 ─────────────────────────────────
-    def record_page(self, page_no: int, items: list[dict]) -> None:
-        """페이지 1건을 단일 트랜잭션으로 저장."""
+    def record_page(self, page_no: int, items: list[dict], new_count: int | None = None) -> None:
+        """페이지 1건을 단일 트랜잭션으로 저장.
+
+        ``new_count`` 를 넘기면 빈 페이지 판정을 크롤러와 같은 기준
+        (신규 상품 0개면 빈 페이지)으로 맞춘다. 재개 시 이 값이 없으면
+        페이지에 상품만 있는지로 판정하는 구버전 기준을 유지한다.
+        """
         empty_streak = self.empty_streak
+        if new_count is None:
+            new_streak = 0 if items else empty_streak + 1
+        else:
+            new_streak = 0 if (items and new_count > 0) else empty_streak + 1
         try:
             with self.conn:
                 for item in items:
@@ -259,7 +284,6 @@ class AliexpressResumeStore:
                     "completed_at = excluded.completed_at",
                     (int(page_no), len(items), _now()),
                 )
-                new_streak = 0 if items else empty_streak + 1
                 self.conn.execute(
                     "INSERT INTO meta (key, value) VALUES ('empty_streak', ?) "
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",

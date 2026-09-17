@@ -12,8 +12,6 @@
 from __future__ import annotations
 
 import json
-import os
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -82,7 +80,7 @@ class AliexpressCategoryPanel(QWidget):
     pause_requested = pyqtSignal()
     resume_requested = pyqtSignal()
     cancel_requested = pyqtSignal()
-    open_output_requested = pyqtSignal()
+    open_output_requested = pyqtSignal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -606,36 +604,40 @@ class AliexpressCategoryPanel(QWidget):
             rotation_batch_size=self.spin_rotation_batch.value(),
         )
 
-        self.clear_results()
+        # 결과 화면 비우기는 시작이 수락된 뒤 main_window 에서 한다 —
+        # 대화상자에서 취소하면 이전 결과가 보존된다(쿠팡 탭과 동일).
         self.start_requested.emit(cfg)
 
     def _open_output_folder(self) -> None:
         folder = self.edit_output_dir.text().strip()
-        if os.path.exists(folder):
-            import subprocess
-            subprocess.Popen(["xdg-open", folder])
-        else:
-            self.append_log(f"[폴더 열기 오류] 폴더가 존재하지 않습니다: {folder}")
+        if not folder:
+            self.append_log("[폴더 열기 오류] 저장 폴더가 비어 있습니다.")
+            return
+        self._last_output_dir = folder
+        self.open_output_requested.emit(folder)
 
     def set_state(self, state: str) -> None:
         self._state = state
         self._apply_state()
 
     def _apply_state(self) -> None:
-        is_idle = self._state == "idle"
+        # 완료·실패는 다시 시작할 수 있는 종료 상태다(쿠팡 탭과 동일).
+        # IP 차단으로 중단된 뒤에도 우회 회선을 골라 다시 시작할 수 있어야 한다.
+        is_startable = self._state in ("idle", "finished", "failed")
         is_running = self._state == "running"
         is_paused = self._state == "paused"
 
-        self.btn_start.setEnabled(is_idle)
+        self.btn_start.setEnabled(is_startable)
         self.btn_pause.setEnabled(is_running)
         self.btn_resume.setEnabled(is_paused)
         self.btn_cancel.setEnabled(is_running or is_paused)
+        self.btn_open_folder.setEnabled(self._state != "cancelling")
 
-        self.spin_max_pages.setEnabled(is_idle)
-        self.spin_rotation_batch.setEnabled(is_idle)
-        self.edit_output_dir.setEnabled(is_idle)
-        self.category_tree.setEnabled(is_idle)
-        self.input_tabs.setEnabled(is_idle)
+        self.spin_max_pages.setEnabled(is_startable)
+        self.spin_rotation_batch.setEnabled(is_startable)
+        self.edit_output_dir.setEnabled(is_startable)
+        self.category_tree.setEnabled(is_startable)
+        self.input_tabs.setEnabled(is_startable)
 
     def set_external_busy(self, busy: bool) -> None:
         """다른 탭 작업 실행 시 조작을 안전하게 잠금 처리."""
