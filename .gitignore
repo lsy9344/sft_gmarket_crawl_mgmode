@@ -19,6 +19,8 @@ dist/
 .qoder/
 .codegraph/
 .omx/
+.agents/
+.claude/
 
 # Crawl output data
 output/

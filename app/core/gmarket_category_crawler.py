@@ -118,15 +118,20 @@ def build_result_from_codes(
     """goodscode 목록 + collected_ids 대조 → PrescanResult (Prescanner 와 동일 판정).
 
     blocked=True 는 fetch 자체가 실패(네트워크/403/봇)한 경우 — 빈 결과여도
-    '상품 없음'이 아니라 '차단/오류'로 표기해 재시도를 유도한다.
+    '상품 없음'이 아니라 '차단/오류'로 표기해 재시도를 유도한다. 기확보
+    codes 가 있어도 fetch 가 실패한 페이지가 있는 것이므로 '수집 가능'이
+    아니라 '차단/오류'로 표기해 재시도를 유도한다 — 절반만 읽은 목록을
+    정상 완료로 오판해 나머지를 영구 누락시키지 않기 위함이다.
     """
     total = len(codes)
     new_codes = [c for c in codes if c not in collected]
     new_count = len(new_codes)
     already = total - new_count
 
-    if total == 0:
-        status = STATUS_BLOCKED if blocked else STATUS_EMPTY
+    if blocked:
+        status = STATUS_BLOCKED
+    elif total == 0:
+        status = STATUS_EMPTY
     elif new_count == 0:
         status = STATUS_COMPLETED
     else:

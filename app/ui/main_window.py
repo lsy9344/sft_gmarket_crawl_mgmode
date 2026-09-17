@@ -37,7 +37,14 @@ from app.core.gmarket_categories import (
 )
 from app.core.plan import build_crawl_plan
 from app.core.storage import LoadStatus, Storage
+import dataclasses
+from app.core.aliexpress_category_crawler import AliexpressCategoryRunConfig
+from app.core.aliexpress_resume_store import (
+    ali_category_run_dir,
+    peek_resume as ali_peek_resume,
+)
 from app.models.records import PrescanResult
+from app.ui.aliexpress_category_panel import AliexpressCategoryPanel
 from app.ui.category_panel import CategoryPanel
 from app.ui.coupang_panel import CoupangPanel
 from app.ui.foodspring_panel import FoodSpringPanel
@@ -48,6 +55,7 @@ from app.ui.widgets.prescan_table import PrescanTable
 from app.ui.widgets.progress_panel import ProgressPanel
 from app.ui.widgets.result_table import ResultTable
 from app.ui.widgets.settings_panel import SettingsPanel
+from app.workers.aliexpress_category_crawl_worker import AliexpressCategoryCrawlWorker
 from app.workers.category_worker import CategoryWorker
 from app.workers.coupang_worker import CoupangWorker
 from app.workers.crawl_worker import CrawlWorker
@@ -103,6 +111,11 @@ class MainWindow(QMainWindow):
             seed_path=GMARKET_SEED_CACHE_PATH,
         )
         self._gmcat_had_error = False
+
+        # AliExpress 카테고리 상태
+        self.alicat_control: Control | None = None
+        self.alicat_worker: AliexpressCategoryCrawlWorker | None = None
+        self._alicat_had_error = False
 
         self._build_ui()
         self._set_ui_state("idle")
@@ -212,6 +225,18 @@ class MainWindow(QMainWindow):
             self._on_gmcat_open_result
         )
 
+        # Ali 카테고리 탭 (2026-09-17 신규: Decodo 고정 회선 세션 회전 + 스마트 판매자 캐싱)
+        self.aliexpress_category_panel = AliexpressCategoryPanel()
+        self.tab_widget.addTab(self.aliexpress_category_panel, "Ali 카테고리")
+
+        self.aliexpress_category_panel.start_requested.connect(self.on_alicat_start)
+        self.aliexpress_category_panel.pause_requested.connect(self.on_alicat_pause)
+        self.aliexpress_category_panel.resume_requested.connect(self.on_alicat_resume)
+        self.aliexpress_category_panel.cancel_requested.connect(self.on_alicat_cancel)
+        self.aliexpress_category_panel.open_output_requested.connect(
+            self._on_alicat_open_result
+        )
+
         # 설정 탭: Gmarket은 Bright Data(Web Unlocker), Coupang 카테고리는 Decodo.
         self.brightdata_panel = BrightDataPanel()
         self.tab_widget.addTab(self.brightdata_panel, "설정")
@@ -243,12 +268,13 @@ class MainWindow(QMainWindow):
         if not crawling:
             self.btn_pause.setText("일시정지")
 
-        # Cross-tab: Gmarket 실행 중이면 Coupang/Foodspring 차단
+        # Cross-tab: Gmarket 실행 중이면 Coupang/Foodspring/AliExpress 차단
         gmarket_busy = state in ("prescanning", "crawling")
         self.coupang_panel.set_external_busy(gmarket_busy)
         self.foodspring_panel.set_external_busy(gmarket_busy)
         self.category_panel.set_external_busy(gmarket_busy)
         self.gmarket_category_panel.set_external_busy(gmarket_busy)
+        self.aliexpress_category_panel.set_external_busy(gmarket_busy)
         self.brightdata_panel.set_external_busy(gmarket_busy)
 
     # ── 전역 단일 워커 ─────────────────────────────────────────────
@@ -256,7 +282,8 @@ class MainWindow(QMainWindow):
         for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker,
                        self.foodspring_worker, self.category_worker, self.categories_worker,
                        self.gmcat_worker,
-                       self.gmcat_crawl_worker):
+                       self.gmcat_crawl_worker,
+                       self.alicat_worker):
             if worker is not None and worker.isRunning():
                 return worker
         return None
@@ -274,6 +301,8 @@ class MainWindow(QMainWindow):
             return self.gmcat_control
         if self.gmcat_crawl_worker is not None and self.gmcat_crawl_worker.isRunning():
             return self.gmcat_control
+        if self.alicat_worker is not None and self.alicat_worker.isRunning():
+            return self.alicat_control
         return self.control
 
     def _coupang_runtime_ready(self) -> bool:
@@ -671,7 +700,9 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_state("running")
         self._set_gmarket_busy(True)
         self.foodspring_panel.set_external_busy(True)
+        self.category_panel.set_external_busy(True)
         self.gmarket_category_panel.set_external_busy(True)
+        self.aliexpress_category_panel.set_external_busy(True)
         self._show_status("Coupang 수집 진행 중...")
         worker.start()
 
@@ -786,7 +817,9 @@ class MainWindow(QMainWindow):
 
         self._set_gmarket_busy(False)
         self.foodspring_panel.set_external_busy(False)
+        self.category_panel.set_external_busy(False)
         self.gmarket_category_panel.set_external_busy(False)
+        self.aliexpress_category_panel.set_external_busy(False)
         self._set_ui_state("prescanned" if self.prescan_results else "idle")
         summary = self.coupang_worker.summary if self.coupang_worker else None
         if summary is None:
@@ -874,7 +907,9 @@ class MainWindow(QMainWindow):
         self.foodspring_panel.set_state("running")
         self._set_gmarket_busy(True)
         self.coupang_panel.set_external_busy(True)
+        self.category_panel.set_external_busy(True)
         self.gmarket_category_panel.set_external_busy(True)
+        self.aliexpress_category_panel.set_external_busy(True)
         self._show_status("Foodspring 수집 진행 중...")
         try:
             worker.start()
@@ -883,6 +918,9 @@ class MainWindow(QMainWindow):
             self.foodspring_panel.set_state("failed")
             self._set_gmarket_busy(False)
             self.coupang_panel.set_external_busy(False)
+            self.category_panel.set_external_busy(False)
+            self.gmarket_category_panel.set_external_busy(False)
+            self.aliexpress_category_panel.set_external_busy(False)
             self.foodspring_panel.append_log(f"[오류] 워커 시작 실패: {e}")
             self._show_status("Foodspring 시작 실패")
             QMessageBox.critical(self, "Foodspring 시작 실패", str(e))
@@ -987,7 +1025,9 @@ class MainWindow(QMainWindow):
 
         self._set_gmarket_busy(False)
         self.coupang_panel.set_external_busy(False)
+        self.category_panel.set_external_busy(False)
         self.gmarket_category_panel.set_external_busy(False)
+        self.aliexpress_category_panel.set_external_busy(False)
         summary = self.foodspring_worker.summary if self.foodspring_worker else None
         if summary is None:
             self.foodspring_panel.set_state("failed")
@@ -1191,6 +1231,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(True)
         self.foodspring_panel.set_external_busy(True)
         self.category_panel.set_external_busy(True)
+        self.aliexpress_category_panel.set_external_busy(True)
         self._show_status("Gmarket 카테고리 수집 진행 중...")
         worker.start()
 
@@ -1278,6 +1319,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(False)
         self.foodspring_panel.set_external_busy(False)
         self.category_panel.set_external_busy(False)
+        self.aliexpress_category_panel.set_external_busy(False)
 
     def _on_gmcat_open_result(self) -> None:
         path = self.gmarket_category_panel.output_dir()
@@ -1291,6 +1333,174 @@ class MainWindow(QMainWindow):
             os.startfile(path)
         else:
             subprocess.Popen(["xdg-open", path])
+
+    # ── AliExpress 카테고리 ─────────────────────────────────────────
+    def on_alicat_start(self, config: AliexpressCategoryRunConfig) -> None:
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            QMessageBox.warning(self, "작업 중복 실행 방지", "다른 수집 작업이 이미 실행 중입니다.")
+            return
+
+        decodo_settings = decodo.load_settings()
+        if not decodo.credentials_ready(decodo_settings):
+            box = QMessageBox(self)
+            box.setWindowTitle("수집 방식 선택")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText(
+                "Decodo 프록시 계정이 설정되어 있지 않습니다.\n\n"
+                "① 로컬 회선으로 안전 수집: 소량 수집에 적합하며 비용이 들지 않습니다.\n"
+                "② 설정 탭으로 이동: 대량 무인 수집을 위한 프록시 계정을 등록합니다."
+            )
+            btn_local = box.addButton("로컬 회선으로 안전 수집", QMessageBox.ButtonRole.YesRole)
+            btn_settings = box.addButton("설정 탭으로 이동", QMessageBox.ButtonRole.NoRole)
+            box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is btn_settings:
+                if hasattr(self, "brightdata_panel"):
+                    self.tab_widget.setCurrentWidget(self.brightdata_panel)
+                return
+            elif clicked is btn_local:
+                config = dataclasses.replace(config, use_proxy=False, delay=3.5)
+                self.aliexpress_category_panel.append_log(
+                    "[수집 모드] 로컬 회선 안전 수집 모드 시작 (안전 딜레이 3.5초, 비용 0원)"
+                )
+            else:
+                return
+
+        try:
+            config.output_dir.mkdir(parents=True, exist_ok=True)
+            import tempfile as _tf
+
+            fd, tmp_path = _tf.mkstemp(dir=str(config.output_dir), prefix=".preflight_")
+            os.close(fd)
+            os.unlink(tmp_path)
+        except OSError as e:
+            QMessageBox.critical(
+                self, "출력 경로 오류",
+                f"출력 폴더에 쓸 수 없습니다:\n{config.output_dir}\n\n{e}",
+            )
+            return
+
+        run_dir = ali_category_run_dir(
+            config.output_dir, config.category_name, config.category_url
+        )
+        start_fresh = False
+        resume_note = ali_peek_resume(run_dir)
+        if resume_note:
+            choice = self._ask_resume_mode(run_dir, resume_note)
+            if choice == "cancel":
+                return
+            start_fresh = choice == "fresh"
+
+        if start_fresh:
+            config = dataclasses.replace(config, start_fresh=True)
+
+        if resume_note and not start_fresh:
+            self.aliexpress_category_panel.append_log(f"[재개] 이어서 수집 — {resume_note}")
+
+        self._alicat_had_error = False
+        control = Control()
+        self.alicat_control = control
+
+        worker = AliexpressCategoryCrawlWorker(config, control=control, start_fresh=start_fresh)
+        worker.progress_changed.connect(self.aliexpress_category_panel.set_progress)
+        worker.phase_changed.connect(self.aliexpress_category_panel.set_phase)
+        worker.log_message.connect(self.aliexpress_category_panel.append_log)
+        worker.item_collected.connect(self.aliexpress_category_panel.add_record)
+        worker.stats_changed.connect(self.aliexpress_category_panel.update_stats)
+        worker.error_occurred.connect(self._on_alicat_error)
+        worker.finished_crawl.connect(self._on_alicat_finished)
+        worker.finished.connect(self._on_alicat_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.alicat_worker = worker
+
+        self.aliexpress_category_panel.set_state("running")
+        self._set_gmarket_busy(True)
+        self.coupang_panel.set_external_busy(True)
+        self.foodspring_panel.set_external_busy(True)
+        self.category_panel.set_external_busy(True)
+        self.gmarket_category_panel.set_external_busy(True)
+        self._show_status(f"AliExpress 카테고리 수집 진행 중... ({config.category_name})")
+        worker.start()
+
+    def _on_alicat_error(self, msg: str) -> None:
+        self._alicat_had_error = True
+        self.aliexpress_category_panel.append_log(f"[오류] {msg}")
+
+    def on_alicat_pause(self) -> None:
+        if self.alicat_control and not self.alicat_control.is_paused():
+            self.alicat_control.pause()
+            self.aliexpress_category_panel.set_state("paused")
+            self.aliexpress_category_panel.append_log("[제어] 일시정지 (현재 진행 중인 건 완료 후 대기)")
+            self._show_status("AliExpress 카테고리 수집 일시정지됨")
+
+    def on_alicat_resume(self) -> None:
+        if self.alicat_control and self.alicat_control.is_paused():
+            self.alicat_control.resume()
+            self.aliexpress_category_panel.set_state("running")
+            self.aliexpress_category_panel.append_log("[제어] 수집 재개")
+            self._show_status("AliExpress 카테고리 수집 진행 중...")
+
+    def on_alicat_cancel(self) -> None:
+        if self.alicat_control:
+            self.alicat_control.request_cancel()
+            self.aliexpress_category_panel.set_state("cancelling")
+            self.aliexpress_category_panel.append_log("[제어] 취소 요청 — 현재 항목 저장 후 안전하게 중지합니다.")
+            self._show_status("AliExpress 카테고리 수집 취소 중...")
+
+    def _on_alicat_finished(self, summary) -> None:
+        panel = self.aliexpress_category_panel
+        if summary is None:
+            panel.set_state("finished")
+            panel.append_log("[종료] 수집 대상이 없거나 취소되어 중단되었습니다.")
+            self._show_status("AliExpress 카테고리 수집 종료")
+            return
+
+        crashed = bool(getattr(summary, "error", None))
+        cancelled = bool(getattr(summary, "cancelled", False))
+        head = "수집 취소됨" if cancelled else ("수집 실패" if crashed else "수집 완수")
+
+        panel.append_log(
+            f"[{head}] 총 상품 {summary.collected_items:,}건 / "
+            f"고유 사업자 {summary.unique_vendors:,}개사 "
+            f"(이메일 확보 {summary.has_email:,}건, 사업자번호 {summary.has_business_number:,}건)"
+        )
+        if crashed:
+            panel.set_state("failed")
+            self._show_status(f"AliExpress 카테고리 수집 실패: {summary.error}")
+            QMessageBox.critical(
+                self, "AliExpress 수집 실패",
+                f"{summary.error}\n\n그때까지 확보된 데이터는 결과 파일에 저장되었습니다.",
+            )
+        else:
+            panel.set_state("finished")
+            self._show_status(f"AliExpress 카테고리 {head} ({summary.collected_items:,}건)")
+
+    def _on_alicat_thread_done(self) -> None:
+        self.alicat_worker = None
+        self._set_gmarket_busy(False)
+        self.coupang_panel.set_external_busy(False)
+        self.foodspring_panel.set_external_busy(False)
+        self.category_panel.set_external_busy(False)
+        self.gmarket_category_panel.set_external_busy(False)
+
+    def _on_alicat_open_result(self, folder_path: str = "") -> None:
+        if not folder_path and hasattr(self, "aliexpress_category_panel"):
+            folder_path = self.aliexpress_category_panel._last_output_dir
+        if not folder_path or not os.path.exists(folder_path):
+            self.aliexpress_category_panel.append_log("[결과 열기] 저장 폴더가 아직 생성되지 않았거나 존재하지 않습니다.")
+            return
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            os.startfile(folder_path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", folder_path], check=False)
+        else:
+            subprocess.run(["xdg-open", folder_path], check=False)
 
     # ── Coupang 검색 탭 ──────────────────────────────────────────
 
@@ -1430,6 +1640,11 @@ class MainWindow(QMainWindow):
         self.category_worker = worker
 
         self.category_panel.set_state("running")
+        self._set_gmarket_busy(True)
+        self.coupang_panel.set_external_busy(True)
+        self.foodspring_panel.set_external_busy(True)
+        self.gmarket_category_panel.set_external_busy(True)
+        self.aliexpress_category_panel.set_external_busy(True)
         self._show_status("Coupang 카테고리 수집 진행 중...")
         worker.start()
 
@@ -1624,6 +1839,12 @@ class MainWindow(QMainWindow):
 
     def _on_category_thread_done(self) -> None:
         from app.core.coupang.outcome import RunOutcome, determine_outcome
+
+        self._set_gmarket_busy(False)
+        self.coupang_panel.set_external_busy(False)
+        self.foodspring_panel.set_external_busy(False)
+        self.gmarket_category_panel.set_external_busy(False)
+        self.aliexpress_category_panel.set_external_busy(False)
 
         summary = self.category_worker.summary if self.category_worker else None
         if summary is None:

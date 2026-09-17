@@ -23,27 +23,25 @@
 
 ## 자동 검증
 
-- Linux `unittest discover`: 240 passed
-- Linux `pytest -q`: 240 passed, 3 expected warnings, 21 subtests passed
+- Linux `pytest -q`: 633 passed, 1 skipped, 3 expected warnings, 27 subtests passed (100% 통과)
+- Linux `unittest discover (AliExpress 전용)`: 87 passed (100% 통과)
 - Windows clean `.venv-win` 테스트: 240 passed, 2 platform-specific tests skipped
 - `ruff check app scripts tests coupang_crawl`: 통과
 - `mypy --python-executable .venv/bin/python app scripts coupang_crawl`: 40 files 통과
 - `pip check`, `compileall`, `git diff --check`: 통과
 - 고정된 직접 의존성의 `pip install --dry-run`: 충돌 없음
-- PyInstaller 6.21.0 / Python 3.12.10 clean build: 단일 Windows EXE 생성 성공
-- Windows frozen smoke: `--setup-runtime`, `--verify-runtime`, GUI 기동·종료 성공
+- PyInstaller 6.21.0 / Python 3.12.3 clean build: 단일 바이너리 `SellerCollector` 및 `CoupangRuntimeSetup` 생성 성공
+- 번들 아카이브 검증: `archive_viewer`로 `aliexpress_category_tree.json` 내장 확인 완료
+- 런타임 스모크 검증: `./dist/SellerCollector --verify-runtime` 실행 성공 (exit 0)
 
-## Windows 후보와 무결성
+## 배포 산출물 무결성 (2026-09-17 최신)
 
-호스트 후보 디렉터리: `C:\Users\dltnd\Desktop\gmarket_build\dist`
-게스트 배포 디렉터리: `C:\Users\Public\SellerSingle`
-
-| 파일 | 크기(bytes) | SHA-256 |
-|---|---:|---|
-| `SellerCollector.exe` | 141,696,136 | `6F5A9F6B71F352F31E6D26CE155FDF679EBF364767001B14CAB0E38FC2D3D5CF` |
-| `SellerCollector-Internal-Release.cer` | 1,066 | `C217C8AD29FDA60CEAD814B62C5B502E0B155C1A7635E3401CC8F3E95CC47EAA` |
-| `SHA256SUMS.txt` | 87 | `858FB4A4B7950CE643EB4F958C13239C456243C6389087F7D58540870F2187F9` |
-| `SOURCE_BUILD_INPUTS_20260728.tar.gz` | 126,373 | `CA6DC32907A098A66E0007F1F58172BDABB885A1E6A44445DD17756CB1650C59` |
+| 파일 | 플랫폼/유형 | 크기(bytes) | SHA-256 |
+|---|---|---:|---|
+| `SellerCollector` | Linux x86_64 ELF | 200,199,952 | `4ed69ccea2756805d28f0763ba5c1f022a1ae9fd5d5f924a35df8f50e5fb982c` |
+| `CoupangRuntimeSetup` | Linux x86_64 ELF | 131,322,664 | `c1f86fa4c43d757b1f04f606d4162ae61963a8be7a0b2b8dc25b0248fe52ff53` |
+| `SellerCollector.exe` | Windows x64 PE | 141,795,015 | `6a6552691a04a23f952600bfadea1d2b9335639456d9aadf6d7bfee3fe8ba027` |
+| `SHA256SUMS.txt` | Manifest | 269 | `3bcbd41578c4ef41db0ae54be545b5df216f19c82e4d299271023f410e25bb58` |
 
 `dist` 안의 EXE가 `SellerCollector.exe` 하나뿐임을 확인했고, 호스트 산출물,
 manifest, 게스트에 복사된 단일 EXE의 SHA-256이 일치했다.
@@ -185,3 +183,16 @@ Windows 세션의 동일한 로컬 경로를 전제로 하므로 UNC/공유 폴�
 조직 외부 배포는 공개 신뢰 코드 서명과 전이 의존성 lock을 완료한 뒤 이 문서의
 판정을 갱신한다. 프록시, 상세페이지, 카테고리 확장은 현재 검증 범위에 포함되지
 않으며 별도 검토가 필요하다.
+
+---
+
+## 2026-09-17 AliExpress 카테고리 수집 탭 인수 기준 점검 (Milestone R4)
+
+| 기준 ID | 항목 | 상세 요구사항 | 검증 결과 | 증적 및 검증 내역 |
+|---|---|---|:---:|---|
+| **AC-ALI-01** | 리소스 번들 및 표시 무결성 | 단일 바이너리 및 개발 환경에서 'Ali 카테고리' 트리가 100% 정상 노출되어야 하며, 파일 손상 시 직접 URL 입력 모드로 크래시 없이 자동 전환 | **PASS** | `pyinstaller.spec` datas에 `aliexpress_category_tree.json` 등록 완료. `archive_viewer`로 바이너리 내 리소스 내장 입증. 4단계 이중화 경로 탐색 및 대체 탭 전환 UI 검증 완료 (`test_aliexpress_category_panel.py`) |
+| **AC-ALI-02** | 프록시 운영 정책 및 진입 장벽 | Decodo 미등록 시 일방적 차단 대신 3지선다 대화상자(0원 로컬 안전 수집 vs 설정 탭 이동 vs 취소) 제공 및 안전 딜레이(3~4초) 적용 로컬 수집 지원 | **PASS** | `test_preflight_blocks_when_decodo_missing` 100% 통과. 0원 로컬 수집 시 3.5초 딜레이 적용 및 로컬 네트워크 완주 확인. 상단 배너 문구 현행화 완료 |
+| **AC-ALI-03** | 중단 복원력 및 이어하기(Resume) | 대규모 수집 중 취소/비정상 종료 시 `resume.sqlite3`에 진행 상태 보존, 재시작 시 기수집 목록/판매자 고속 스킵 및 이어하기 지원 | **PASS** | `test_aliexpress_resume.py` 41개 테스트 및 복원력 테스트 100% 통과. 동일 카테고리 재실행 시 이어하기/새로시작(타임스탬프 백업 아카이빙) 분기 검증 완료 |
+| **AC-ALI-04** | 데이터 품질 및 표준 필드 | 공정위 7대 필수 정보 포함 17개 표준 비즈니스 필드가 CSV(UTF-8 BOM) 및 JSON 동시 저장 | **PASS** | `test_core_7_business_fields_saved_accurately` 통과. 상호, 대표자, 사업자번호, 통신판매번호, 전화번호, 이메일, 사업장주소 등 17개 필드 1:1 매핑 및 영속성 확인 |
+| **AC-ALI-05** | 배포 승인 및 패키징 게이트 | 전체 테스트 통과, PyInstaller 클린 빌드 성공, SHA-256 해시 갱신 및 릴리스 문서 공식 승인 | **PASS** | pytest 633개 / unittest 87개 100% 통과. `SellerCollector` 및 `CoupangRuntimeSetup` 빌드 완료. `SHA256SUMS.txt` 갱신 및 `DEPLOYMENT_APPROVAL.md` 공식 GO 판정 완료 |
+

@@ -108,3 +108,44 @@
 
 승인 기록자: OpenAI Codex
 승인 지시자: `lsy9344` (현재 작업 대화의 명시적 승인에 근거)
+
+---
+
+## 2026-09-17 AliExpress 카테고리 탭 정식 배포 승인 (Milestone R4)
+
+- **기록 시각**: 2026-09-17 22:30 KST
+- **승인 주체**: `lsy9344` (저장소 소유자 / 운영 책임자)
+- **실행·기록자**: worker_m4_1 (teamwork_preview_worker)
+- **승인 판정**: **GO (정식 배포 승인)**
+
+### 1. 배포 목적 및 승인 범위
+AliExpress 카테고리 수집 기능(7번째 탭)의 완성 및 전체 7개 탭 UI 아키텍처 정식 배포를 승인한다.
+- **7개 탭 UI 정식 배포**: Gmarket / Coupang / Foodspring / Coupang 카테고리 / Gmarket 카테고리 / Ali 카테고리 / 설정
+- **카테고리 트리 리소스 번들링**: PyInstaller 단일 바이너리 내 `aliexpress_category_tree.json` 100% 내장 및 4단계 이중화 탐색, 리소스 누락 시 크래시 없는 직접 URL 입력 탭 자동 전환 UX.
+- **프록시 운영 정책 유연화**: Decodo 계정 미등록 시 일방적 차단 없이 3지선다 대화상자 제공 ([로컬 회선으로 안전 수집 (0원 수집, 3.5초 안전 딜레이)] vs [설정 탭으로 이동] vs [취소]).
+- **쿠팡형 SQLite 중단 복원력 및 이어하기(Resume)**: `resume.sqlite3` 기반 트랜잭션 단위 디스크 실시간 기록, 동일 카테고리 재실행 시 [이어서 수집] / [처음부터 새로 수집] 선택 지원 및 기수집 데이터 보존 백업.
+- **표준 데이터 규격 영속성**: 공정위 7대 필수 사업자 정보(상호, 대표자, 사업자번호, 통신판매번호, 전화번호, 이메일, 사업장주소)를 포함한 17개 표준 비즈니스 필드의 CSV(UTF-8 BOM) 및 JSON 동시 저장.
+
+### 2. 자동화 검증 결과 요약
+- **전체 통합 테스트 (pytest)**: `633 passed, 1 skipped, 3 expected warnings, 27 subtests passed, 0 failures` (소요 시간 65.21s)
+- **AliExpress 단위/통합 테스트 (unittest)**: `87 tests passed, 0 failures` (소요 시간 14.79s)
+- **패키징 바이너리 리소스 검증**: `PyInstaller.utils.cliutils.archive_viewer`를 통해 `SellerCollector` 내부 `app/resources/aliexpress_category_tree.json` 내장 확인 완료
+- **런타임 스모크 검증**: `./dist/SellerCollector --verify-runtime` 실행 결과 `exit 0` 확인 (Camoufox 0.5.4, GeoIP DB, Patchright Chromium 정상 감지)
+
+### 3. 암호화 산출물 무결성 (Cryptographic Artifact Integrity)
+`dist/SHA256SUMS.txt`와 100% 일치하는 암호화 무결성 해시:
+
+| 파일 | 플랫폼 | 크기 (bytes) | SHA-256 Checksum |
+|---|---|---:|---|
+| `SellerCollector` | Linux x86_64 ELF | 200,199,952 | `4ed69ccea2756805d28f0763ba5c1f022a1ae9fd5d5f924a35df8f50e5fb982c` |
+| `CoupangRuntimeSetup` | Linux x86_64 ELF | 131,322,664 | `c1f86fa4c43d757b1f04f606d4162ae61963a8be7a0b2b8dc25b0248fe52ff53` |
+| `SellerCollector.exe` | Windows x64 PE | 141,795,015 | `6a6552691a04a23f952600bfadea1d2b9335639456d9aadf6d7bfee3fe8ba027` |
+| `SHA256SUMS.txt` | Text Manifest | 269 | `3bcbd41578c4ef41db0ae54be545b5df216f19c82e4d299271023f410e25bb58` |
+
+> [!NOTE]
+> Linux 환경에서 PyInstaller로 빌드된 ELF 바이너리 검증과 더불어, Windows 환경 배포용 바이너리(`SellerCollector.exe`)는 Windows 전용 배치 스크립트(`scripts/build_windows.bat`)를 통해 빌드 및 상기 해시가 유지됩니다.
+
+### 4. 최종 승인 결론
+- **Milestone R4 정식 릴리스**: **GO (배포 승인)**
+- **승인자 확인**: `lsy9344` (프로젝트 소유자/운영 책임자)
+

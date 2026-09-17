@@ -1,0 +1,210 @@
+[
+  {
+    "id": "food_and_grocery",
+    "name": "식품과식료품",
+    "category_tab": "food_%26_grocery",
+    "url": "https://ko.aliexpress.com/w/wholesale-%EC%8B%9D%ED%92%88.html?categoryTab=food_%26_grocery&isFromCategory=y",
+    "children": [
+      {
+        "id": "food_vegetables",
+        "name": "야채 (채소/신선채소)",
+        "category_tab": "food_%26_grocery",
+        "keyword": "야채",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%95%BC%EC%B1%84.html?categoryTab=food_%26_grocery&isFromCategory=y",
+        "children": []
+      },
+      {
+        "id": "food_fruits",
+        "name": "과일",
+        "category_tab": "food_%26_grocery",
+        "keyword": "과일",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EA%B3%BC%EC%9D%BC.html?categoryTab=food_%26_grocery&isFromCategory=y",
+        "children": []
+      },
+      {
+        "id": "food_seafood",
+        "name": "수산물/건어물",
+        "category_tab": "food_%26_grocery",
+        "keyword": "수산",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%88%98%EC%82%B0.html?categoryTab=food_%26_grocery&isFromCategory=y",
+        "children": []
+      },
+      {
+        "id": "food_meat",
+        "name": "정육/가공육",
+        "category_tab": "food_%26_grocery",
+        "keyword": "정육",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%A0%95%EC%9C%A1.html?categoryTab=food_%26_grocery&isFromCategory=y",
+        "children": []
+      },
+      {
+        "id": "food_kimchi",
+        "name": "김치/반찬/장류",
+        "category_tab": "food_%26_grocery",
+        "keyword": "김치",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EA%B9%80%EC%B9%98.html?categoryTab=food_%26_grocery&isFromCategory=y",
+        "children": []
+      },
+      {
+        "id": "food_rice_grains",
+        "name": "쌀/잡곡",
+        "category_tab": "food_%26_grocery",
+        "keyword": "쌀",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%82%80.html?categoryTab=food_%26_grocery&isFromCategory=y",
+        "children": []
+      },
+      {
+        "id": "food_snacks",
+        "name": "간식/과자/음료",
+        "category_tab": "food_%26_grocery",
+        "keyword": "간식",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EA%B0%84%EC%8B%9D.html?categoryTab=food_%26_grocery&isFromCategory=y",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "womens_clothing",
+    "name": "여성 의류",
+    "category_tab": "women%27s_clothing",
+    "url": "https://ko.aliexpress.com/w/wholesale-%EC%97%AC%EC%84%B1%EC%9D%98%EB%A5%98.html?isFromCategory=y&categoryTab=women%27s_clothing",
+    "children": [
+      {
+        "id": "women_dresses",
+        "name": "여성 캐주얼 드레스",
+        "category_tab": "women%27s_clothing",
+        "keyword": "여성 캐주얼 드레스",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%97%AC%EC%84%B1-%EC%BA%90%EC%A3%BC%EC%96%BC-%EB%93%9C%EB%A0%88%EC%8A%A4.html?isFromCategory=y&categoryTab=women%27s_clothing",
+        "children": []
+      },
+      {
+        "id": "women_pants",
+        "name": "여성 바지",
+        "category_tab": "women%27s_clothing",
+        "keyword": "여성 바지",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%97%AC%EC%84%B1-%EB%B0%94%EC%A7%80.html?isFromCategory=y&categoryTab=women%27s_clothing",
+        "children": []
+      },
+      {
+        "id": "women_shirts",
+        "name": "블라우스 및 셔츠",
+        "category_tab": "women%27s_clothing",
+        "keyword": "블라우스",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EB%B8%94%EB%9D%BC%EC%9A%B0%EC%8A%A4.html?isFromCategory=y&categoryTab=women%27s_clothing",
+        "children": []
+      },
+      {
+        "id": "women_outerwear",
+        "name": "자켓 및 코트",
+        "category_tab": "women%27s_clothing",
+        "keyword": "여성 자켓",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%97%AC%EC%84%B1-%EC%9E%90%EC%BC%93.html?isFromCategory=y&categoryTab=women%27s_clothing",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "mens_clothing",
+    "name": "남성 의류",
+    "category_tab": "men%27s_clothing",
+    "url": "https://ko.aliexpress.com/w/wholesale-%EB%82%A8%EC%84%B1%EC%9D%98%EB%A5%98.html?isFromCategory=y&categoryTab=men%27s_clothing",
+    "children": [
+      {
+        "id": "men_shirts",
+        "name": "남성 셔츠",
+        "category_tab": "men%27s_clothing",
+        "keyword": "남성 셔츠",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EB%82%A8%EC%84%B1-%EC%85%94%EC%B8%A0.html?isFromCategory=y&categoryTab=men%27s_clothing",
+        "children": []
+      },
+      {
+        "id": "men_pants",
+        "name": "남성 바지",
+        "category_tab": "men%27s_clothing",
+        "keyword": "남성 바지",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EB%82%A8%EC%84%B1-%EB%B0%94%EC%A7%80.html?isFromCategory=y&categoryTab=men%27s_clothing",
+        "children": []
+      },
+      {
+        "id": "men_outerwear",
+        "name": "남성 아우터/자켓",
+        "category_tab": "men%27s_clothing",
+        "keyword": "남성 자켓",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EB%82%A8%EC%84%B1-%EC%9E%90%EC%BC%93.html?isFromCategory=y&categoryTab=men%27s_clothing",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "home_appliances",
+    "name": "가전제품",
+    "category_tab": "home_appliances",
+    "url": "https://ko.aliexpress.com/w/wholesale-%EA%B0%80%EC%A0%84%EC%A0%9C%ED%92%88.html?isFromCategory=y&categoryTab=home_appliances",
+    "children": [
+      {
+        "id": "kitchen_appliances",
+        "name": "주방 가전",
+        "category_tab": "home_appliances",
+        "keyword": "주방가전",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%A3%BC%EB%B0%A9%EA%B0%80%EC%A0%84.html?isFromCategory=y&categoryTab=home_appliances",
+        "children": []
+      },
+      {
+        "id": "living_appliances",
+        "name": "생활 가전",
+        "category_tab": "home_appliances",
+        "keyword": "생활가전",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%83%9d%ED%99%9c%EA%B0%80%EC%A0%84.html?isFromCategory=y&categoryTab=home_appliances",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "home_and_garden",
+    "name": "가정 및 정원",
+    "category_tab": "home_%26_garden",
+    "url": "https://ko.aliexpress.com/w/wholesale-%EA%B0%80%EC%A0%95%EC%9A%A9%ED%92%88.html?isFromCategory=y&categoryTab=home_%26_garden",
+    "children": [
+      {
+        "id": "kitchen_dining",
+        "name": "주방 및 식기",
+        "category_tab": "home_%26_garden",
+        "keyword": "주방용품",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%A3%BC%EB%B0%A9%EC%9A%A9%ED%92%88.html?isFromCategory=y&categoryTab=home_%26_garden",
+        "children": []
+      },
+      {
+        "id": "home_decor",
+        "name": "홈 인테리어/장식",
+        "category_tab": "home_%26_garden",
+        "keyword": "인테리어",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%9D%B8%ED%85%8C%EB%A6%AC%EC%96%B4.html?isFromCategory=y&categoryTab=home_%26_garden",
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "beauty_and_health",
+    "name": "뷰티 및 건강",
+    "category_tab": "beauty_%26_health",
+    "url": "https://ko.aliexpress.com/w/wholesale-%EB%B7%B0%ED%8B%B0.html?isFromCategory=y&categoryTab=beauty_%26_health",
+    "children": [
+      {
+        "id": "skin_care",
+        "name": "스킨케어",
+        "category_tab": "beauty_%26_health",
+        "keyword": "스킨케어",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EC%8A%A4%ED%82%A8%EC%BC%80%EC%96%B4.html?isFromCategory=y&categoryTab=beauty_%26_health",
+        "children": []
+      },
+      {
+        "id": "health_care",
+        "name": "건강 관리",
+        "category_tab": "beauty_%26_health",
+        "keyword": "건강관리",
+        "url": "https://ko.aliexpress.com/w/wholesale-%EA%B1%B4%EA%B0%95%EA%B4%80%EB%A6%AC.html?isFromCategory=y&categoryTab=beauty_%26_health",
+        "children": []
+      }
+    ]
+  }
+]

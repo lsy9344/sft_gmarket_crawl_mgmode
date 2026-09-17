@@ -74,6 +74,19 @@ class BuildResultTest(unittest.TestCase):
         r = build_result_from_codes("A", [], set(), blocked=True)
         self.assertEqual(r.status, STATUS_BLOCKED)
 
+    def test_blocked_with_partial_codes_stays_blocked(self):
+        # 재시도 소진 후 부분 목록만 확보된 경우 — '수집 가능'이 아니라
+        # '차단/오류'로 표기돼야 나머지 페이지가 영구 누락되지 않는다.
+        r = build_result_from_codes("A", ["111"], set(), blocked=True)
+        self.assertEqual(r.status, STATUS_BLOCKED)
+        self.assertEqual(r.total_codes, 1)
+
+    def test_blocked_wins_even_when_all_collected(self):
+        # fetch 실패는 목록이 불완전하다는 신호 — 전량 기확보여도 재시도를
+        # 유도하도록 '차단/오류'로 표기한다(정상 재조사 시 '완료'로 갱신됨).
+        r = build_result_from_codes("A", ["111"], {"111"}, blocked=True)
+        self.assertEqual(r.status, STATUS_BLOCKED)
+
 
 class RunConfigTest(unittest.TestCase):
     def test_valid(self):
