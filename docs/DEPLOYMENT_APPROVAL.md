@@ -213,3 +213,69 @@ AliExpress 카테고리 수집 기능(7번째 탭)의 완성 및 전체 7개 탭
   (`--setup-runtime` 1회) ② 실제 프록시 회선에서 차단→우회 재시작→중단 지점
   재개 1사이클 라이브 실측(유닛·시나리오 테스트로는 검증됨)
   ③ 조직 외부 배포·라이브 자동 수집은 기존 HOLD 유지.
+
+---
+
+## 2026-09-18 카테고리 탭 검토 반영 재배포 (Ali 대량 수집·포기 규율 + 쿠팡 전역 차단 게이트)
+
+- **기록 시각**: 2026-09-18 12:40 KST
+- **배포 커밋**: `448e5e2` (main) — feat: 카테고리 탭 검토 반영 — Ali 대량 수집 I/O·포기 규율, 쿠팡 자체 회선 차단 전역 기록
+- **실행·기록자**: ZCode (`lsy9344`의 "검토사항 반영하여 수정/보완/개선하고 커밋/푸시", "커밋/푸시/재배포 진행", "윈도우에서 사용하기때문에 윈도우에 빌드해야합니다" 지시에 근거)
+
+### 1. 배포 내용 (검토 4건 반영)
+
+- **[P2] Ali 결과 JSON 매건 전체 재작성(O(n²)) 완화**: 50건 주기 플러시
+  (`JSON_FLUSH_INTERVAL`) + 중단·완료 시점 재작성. CSV 매건 append 유지.
+  통계(이메일·사업자번호·대표자) 증분 집계.
+- **[P3] Ali 영구 실패 상품 포기 규율**: `resume.sqlite3` `item_failures`
+  누적 `ITEM_GIVE_UP_RUNS`(3)회 도달 시 재시도 포기 — 삭제·변경 SKU 의
+  무한 재시도 비수렴 해소. 포기 상품은 실패 잔여에 불포함 → 완료 봉인 가능.
+  요약 `given_up_items` 추가, 로그·UI 안내 표시.
+- **[P3] Ali 요약·취소 안내 보강**: 목록 단계 중단·취소 시 저장 누적분
+  요약 반영, 취소 재개 안내를 저장소 기준(`peek_resume`)으로 판단.
+- **[P3] Coupang 이 PC 회선 차단 전역 기록·게이트**: 판매자 단계(회선 IP)
+  차단을 출력 루트에 전역 기록, 시작 게이트가 전역 기록도 조회 — 다른
+  카테고리가 판매자 단계 연속 실패로 차단을 알아차리는 낭비 제거.
+  `decodo_run` 이 `global_block_state_dir` 주입(미주입 시 기존 동작).
+
+### 2. 자동화 검증 결과
+
+- **Linux (WSL2) pytest**: `674 passed, 1 skipped, 3 warnings, 27 subtests passed`
+- **Windows (빌드 PC, Python 3.12, 클린 .venv-win) pytest**:
+  `6 failed, 666 passed, 3 skipped, 27 subtests passed`
+  - 6건 실패는 `2af5eee` 재현분과 **동일한 선존재 환경 문제**다 — sqlite 파일
+    잠금 WinError 32 5건(`test_aliexpress_resume` 2건 + `test_coupang_resume` 3건),
+    권한 시뮬레이션 무효 1건(`test_adversarial_challenger_2`). 본 변경
+    (`2af5eee`→`448e5e2`) 신규 실패 0건(통과 659→666, +7).
+- **Frozen 스모크 (Linux)**: `./dist/SellerCollector --verify-runtime` → **exit 0**
+  (camoufox 0.5.4, 브라우저 152.0.4-beta.28-924f3109, GeoIP, Patchright Chromium)
+- **Frozen 스모크 (Windows)**: 최초 `beta.30` 불일치(전회 미해결 항목) →
+  `--setup-runtime` 1회 실행으로 정렬 → 재검증 **exit 0**
+  (브라우저 152.0.4-beta.28-386fc2f4). **전회 배포 게이트 잔여항목 ① 해소.**
+
+### 3. 암호화 산출물 무결성
+
+`dist/SHA256SUMS.txt`와 100% 일치하는 암호화 무결성 해시:
+
+| 파일 | 플랫폼 | 크기 (bytes) | SHA-256 Checksum |
+|---|---|---:|---|
+| `SellerCollector` | Linux x86_64 ELF | 200,213,480 | `73130cea2d4e13c634a2b61c07200520b712ad28cc84419f8aea9dc814eb444f` |
+| `CoupangRuntimeSetup` | Linux x86_64 ELF | 131,322,904 | `f97f17972ef2cae72aa904434c1e4912c883b066a673ec66494878453de8f5f5` |
+| `SellerCollector.exe` | Windows x64 PE | 142,750,057 | `b23a9b8b2be86d4a16810d0b9530f1e0c3c0d654ad2e6e8a1874e818e96a5a0d` |
+| `CoupangRuntimeSetup.exe` | Windows x64 PE | 69,028,906 | `c4f22e9da3fa541c709b225ba7792b01419f5b8e7d05a9f54b3106c938a3d4f6` |
+| `SHA256SUMS.txt` | Text Manifest | 269 | `f79a33d514280dafd25fd8b2ff9482f9b827a06ac34e0f9766842ddef5982c3b` |
+
+- 빌드 원본(Windows): `C:\Users\dltnd\Desktop\gmarket_build_catreview_448e5e2\dist\`
+  (git archive `448e5e2` 기준, Windows 클린 venv + PyInstaller 6.21.0 — 배포 기준
+  Windows 빌드로 생성)
+- Linux 빌드: WSL2 저장소 dist/ (PyInstaller 6.21.0)
+- 검증: 루트 `SHA256SUMS.txt` `sha256sum -c` 전 항목 OK
+
+### 4. 결론
+
+- **재배포 GO** — 소스 커밋 `448e5e2` 기준 Windows(exe)·Linux(ELF) 바이너리
+  재생성 및 `SHA256SUMS.txt` 갱신 완료. 신규 회귀 없음. 전회 미해결 런타임
+  캐시 정렬 항목은 이번 배포에서 해소(`--setup-runtime` → beta.28 재검증 통과).
+- **잔여 게이트(유지)**: ① 실제 프록시 회선에서 차단→우회 재시작→중단 지점
+  재개 1사이클 라이브 실측(유닛·시나리오 테스트로는 검증됨) ② 조직 외부
+  배포·라이브 자동 수집은 기존 HOLD 유지.
