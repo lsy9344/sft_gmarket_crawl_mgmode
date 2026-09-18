@@ -100,6 +100,11 @@ class AliexpressResumeStore:
                 payload TEXT NOT NULL,
                 completed_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS item_failures (
+                item_id TEXT PRIMARY KEY,
+                failures INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         conn.commit()
@@ -387,6 +392,44 @@ class AliexpressResumeStore:
                 except ValueError as e:
                     raise ResumeStoreError(f"저장된 상품 결과 해석 실패: {e}") from e
         return out
+
+    # ── 영구 실패 추적 (재시도 포기 판정) ────────────────────────────────
+    def record_item_failure(self, item_id: str) -> int:
+        """상품 1건의 실패 실행 수를 1 늘리고 누적값을 반환한다.
+
+        데이터를 끝내 주지 않는 상품(삭제·변경 SKU)이 재개 대상에 영원히 남아
+        완료 봉인이 불가능한 비수렴을 막기 위한 카운터다. 실행 1회(재시도 3회
+        소진)당 1씩 늘어 크롤러의 ITEM_GIVE_UP_RUNS 판정에 쓰인다.
+        """
+        try:
+            with self.conn:
+                row = self.conn.execute(
+                    "SELECT failures FROM item_failures WHERE item_id = ?", (str(item_id),)
+                ).fetchone()
+                total = int(row[0] if row else 0) + 1
+                self.conn.execute(
+                    "INSERT INTO item_failures (item_id, failures, updated_at) "
+                    "VALUES (?, ?, ?) ON CONFLICT(item_id) DO UPDATE SET "
+                    "failures = excluded.failures, updated_at = excluded.updated_at",
+                    (str(item_id), total, _now()),
+                )
+            return total
+        except sqlite3.Error as e:
+            raise ResumeStoreError(f"상품 {item_id} 실패 기록 저장 실패: {e}") from e
+
+    def item_failure_counts(self) -> dict[str, int]:
+        try:
+            rows = self.conn.execute(
+                "SELECT item_id, failures FROM item_failures"
+            ).fetchall()
+        except sqlite3.Error as e:
+            raise ResumeStoreError(f"진행 기록을 읽을 수 없습니다: {e}") from e
+        return {str(item_id): int(n) for item_id, n in rows}
+
+    def give_up_item_ids(self, threshold: int) -> set[str]:
+        """실행 누적 실패가 threshold 이상인 상품 — 더 이상 재시도하지 않는다."""
+        limit = max(1, int(threshold))
+        return {i for i, n in self.item_failure_counts().items() if n >= limit}
 
     def mark_finished(self) -> None:
         """전체 수집 완료 봉인."""

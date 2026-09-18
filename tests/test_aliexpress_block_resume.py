@@ -28,6 +28,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from app.core import decodo
 from app.core.aliexpress_category_crawler import (
     CONSECUTIVE_BLOCK_ABORT,
+    ITEM_GIVE_UP_RUNS,
+    JSON_FLUSH_INTERVAL,
     RETRY_WAIT_SECONDS,
     AliexpressCategoryCrawler,
     AliexpressCategoryRunConfig,
@@ -324,7 +326,10 @@ class TestSoftBlockGate(unittest.TestCase):
                 pdp_plan={p["id"]: ["nodata"] for p in products},
             )
             h = CrawlHarness(page, use_proxy=False)
-            _, summary = h.crawl(make_cfg(Path(tmp), use_proxy=False))
+            # 시도 1회로 제한 — 회선 교체 재시도까지 누적되면 포기 규율이
+            # 개입하므로(TestGiveUpCounter), 이 테스트는 1회차 실패만 본다.
+            with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 1):
+                _, summary = h.crawl(make_cfg(Path(tmp), use_proxy=False))
 
             self.assertEqual(summary.collected_items, 0, "데이터 없는 페이지는 기록되지 않아야 합니다")
             self.assertEqual(summary.termination_reason, "blocked")
@@ -673,6 +678,102 @@ class TestResumeBoundary(unittest.TestCase):
                 summary_b.collected_items, 3,
                 "경계 재확인으로 밀려온 x1 도 누적에 반영되어야 합니다",
             )
+
+
+class TestGiveUpCounter(unittest.TestCase):
+    """영구 실패 상품 포기 규율 — 재시도 비수렴 방지 (검토 2026-09-18)."""
+
+    URL = "https://ko.aliexpress.com/category/100/v.html"
+
+    def test_permanently_dead_item_gives_up_after_three_runs(self):
+        """실행 경계에서 반복 실패한 상품은 누적 3회차에 포기되고 완료 봉인된다."""
+        products = make_products("g", 2)  # g1 = 영구 실패, g2 = 정상
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            run_dir = ali_category_run_dir(out, "채소", self.URL)
+
+            def make_page():
+                return ScriptedPage(
+                    listing_map={1: products},
+                    pdp_payloads={"g1": None, "g2": make_mtop("S2", "회사2")},
+                    pdp_plan={"g1": ["nodata"], "g2": ["ok"]},
+                )
+
+            summaries = []
+            g1_failures = []
+            for _ in range(3):
+                h = CrawlHarness(make_page(), use_proxy=False)
+                # 실행 1회 = 시도 1회 — 실행 경계 간 누적을 명확히 보기 위해서다.
+                with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 1):
+                    _, s = h.crawl(make_cfg(out, use_proxy=False))
+                summaries.append(s)
+                with AliexpressResumeStore(run_dir) as store:
+                    g1_failures.append(store.item_failure_counts().get("g1"))
+
+            self.assertEqual(summaries[0].termination_reason, "blocked", "1회차: 실패 1 누적")
+            self.assertEqual(summaries[1].termination_reason, "blocked", "2회차: 실패 2 누적")
+            self.assertEqual(g1_failures, [1, 2, 3], "실행당 1씩 누적된다")
+            with AliexpressResumeStore(run_dir) as store:
+                self.assertEqual(store.give_up_item_ids(ITEM_GIVE_UP_RUNS), {"g1"})
+
+            # 3회차: 누적 3 도달 → 포기 → 남은 미수집 없음 → 완료 봉인
+            self.assertEqual(summaries[2].termination_reason, "success")
+            self.assertEqual(summaries[2].given_up_items, 1, "이번 실행에서 포기된 상품 수")
+            with AliexpressResumeStore(run_dir) as store:
+                self.assertEqual(store.status, "finished", "포기 후에는 봉인돼야 합니다")
+
+    def test_give_up_item_is_skipped_without_retry(self):
+        """누적 실패 상한 상품은 데이터가 살아 있어도 재시도(브라우저 요청)하지 않는다."""
+        products = make_products("u", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            run_dir = ali_category_run_dir(out, "채소", self.URL)
+            with AliexpressResumeStore(run_dir) as store:
+                store.check_config("채소", self.URL, 1)
+                store.record_page(1, products, new_count=1)
+                store.mark_listing_done()
+                for _ in range(ITEM_GIVE_UP_RUNS):
+                    store.record_item_failure("u1")
+
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={"u1": make_mtop("S1", "회사1")},
+            )
+            h = CrawlHarness(page, use_proxy=False)
+            _, summary = h.crawl(make_cfg(out, use_proxy=False))
+
+            self.assertEqual(summary.termination_reason, "success")
+            self.assertEqual(summary.given_up_items, 1)
+            self.assertNotIn(
+                "https://ko.aliexpress.com/item/u1.html", page.goto_urls,
+                "포기 상품으로는 상세 페이지를 요청하면 안 됩니다",
+            )
+            with AliexpressResumeStore(run_dir) as store:
+                self.assertEqual(store.status, "finished")
+
+
+class TestJsonFlushInterval(unittest.TestCase):
+    """결과 JSON 주기 재작성 — 매건 재작성 O(n²) 완화 (검토 2026-09-18)."""
+
+    def test_flush_interval_keeps_final_json_complete(self):
+        products = make_products("j", 3)
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={p["id"]: make_mtop(f"S{i+1}", f"회사{i+1}") for i, p in enumerate(products)},
+            )
+            h = CrawlHarness(page, use_proxy=True)
+            with patch("app.core.aliexpress_category_crawler.JSON_FLUSH_INTERVAL", 1):
+                _, summary = h.crawl(make_cfg(Path(tmp)))
+
+            self.assertEqual(summary.termination_reason, "success")
+            run_dir = ali_category_run_dir(Path(tmp), "채소", "https://ko.aliexpress.com/category/100/v.html")
+            with open(run_dir / "ali_category_채소.json", encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertEqual(len(data), 3, "주기 플러시를 써도 최종 JSON 은 전체 건수를 담는다")
+
+    def test_flush_interval_constant_is_fifty(self):
+        self.assertEqual(JSON_FLUSH_INTERVAL, 50)
 
 
 @unittest.skipUnless(_QT_OK, "PyQt6 필요")

@@ -145,5 +145,103 @@ class CooldownGateTest(unittest.TestCase):
             self.assertNotEqual(summary.termination_reason, "block_cooldown")
 
 
+class GlobalBlockStateTest(unittest.TestCase):
+    """이 PC 회선 차단의 전역 기록·게이트 — 카테고리 폴더와 별도 공유 (검토 2026-09-18).
+
+    판매자 단계(회선 IP) 차단은 기계 전역 상태다. 다른 카테고리가 목록 수집을
+    끝까지 한 뒤 판매자 단계 연속 실패로 차단을 알아차리는 낭비를 막는지 검증한다.
+    """
+
+    class _BoomBrowser:
+        def new_page(self):  # pragma: no cover - 호출되면 테스트 실패 신호
+            raise AssertionError("쿨다운 중에는 브라우저가 생성되면 안 됩니다")
+
+    @staticmethod
+    def _config(cat_dir: Path, global_dir: Path | None) -> SearchRunConfig:
+        return SearchRunConfig(
+            output_dir=cat_dir,
+            output_prefix="global_gate",
+            keyword="뷰티",
+            warmup_time=0,
+            page_delay_min=0,
+            page_delay_max=0,
+            delay_min=0,
+            delay_max=0,
+            global_block_state_dir=global_dir,
+        )
+
+    def test_global_record_gates_other_category_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            global_dir = tmp / "output"
+            global_dir.mkdir()
+            cat_dir = tmp / "cat"
+            cat_dir.mkdir()
+            blockguard.record_block(global_dir, reason="판매자 단계 차단")
+            crawler = SearchCrawler(
+                config=self._config(cat_dir, global_dir),
+                control=Control(),
+                browser_factory=lambda: self._BoomBrowser(),
+            )
+            summary = crawler.run()
+            self.assertEqual(summary.termination_reason, "block_cooldown")
+            self.assertIn("이 PC 회선 차단", summary.error, "전역 기록 출처를 알려야 합니다")
+
+    def test_no_global_record_runs_normally(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            global_dir = tmp / "output"
+            global_dir.mkdir()
+            cat_dir = tmp / "cat"
+            cat_dir.mkdir()
+
+            class _StubBrowser:
+                def new_page(self):
+                    raise RuntimeError("게이트 통과 신호")
+
+            crawler = SearchCrawler(
+                config=self._config(cat_dir, global_dir),
+                control=Control(),
+                browser_factory=lambda: _StubBrowser(),
+            )
+            summary = crawler.run()
+            self.assertNotEqual(summary.termination_reason, "block_cooldown")
+
+    def test_direct_block_records_global_state(self):
+        from app.core.coupang.crawler import _RunError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            global_dir = tmp / "output"
+            cat_dir = tmp / "cat"
+            cat_dir.mkdir(parents=True)
+
+            class _StubPage:
+                def on(self, *args, **kwargs):
+                    pass
+
+            class _StubBrowser:
+                def new_page(self):
+                    return _StubPage()
+
+            crawler = SearchCrawler(
+                config=self._config(cat_dir, global_dir),
+                control=Control(),
+                browser_factory=lambda: _StubBrowser(),
+            )
+
+            def _blocked_pipeline(page, summary):
+                # 2차(회선 IP) 세션 전환 뒤의 차단을 재현한다
+                crawler._direct_session = True
+                raise _RunError("판매자 단계 차단", reason="blocked")
+
+            crawler._run_pipeline = _blocked_pipeline
+            summary = crawler.run()
+
+            self.assertTrue(summary.blocked_direct)
+            self.assertIsNotNone(blockguard.read_block_state(cat_dir), "카테고리 폴더 기록")
+            self.assertIsNotNone(blockguard.read_block_state(global_dir), "전역 기록")
+
+
 if __name__ == "__main__":
     unittest.main()

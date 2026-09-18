@@ -164,6 +164,11 @@ class SearchRunConfig(CoupangRunConfig):
     # decodo_run 이 카테고리 폴더의 ResumeStore 를 주입하며, 시도(회선) 간에
     # 같은 저장소를 공유한다. 키워드 모드에서는 무시한다.
     resume_store: ResumeStore | None = None
+    # 이 PC 회선 차단의 전역 기록 폴더 — decodo_run 이 출력 루트를 주입한다.
+    # 판매자 단계(회선 IP) 차단은 카테고리와 무관한 기계 전역 상태이므로, 여기에도
+    # 기록·조회해 다른 카테고리가 판매자 단계 연속 실패로 차단을 알아차리는
+    # 일을 막는다(검토 2026-09-18). None 이면 카테고리 폴더 기록만 본다.
+    global_block_state_dir: Path | None = None
     # 로그인 세션 강제 — True 면 비로그인 세션에서 수집을 거부한다
     # (전용 계정 1회 로그인 후 사용. 로그인 세션은 Akamai 신뢰 한도가 높다).
     require_login: bool = False
@@ -213,21 +218,42 @@ class SearchCrawler(CoupangCrawler):
         # 마지막 차단 응답의 Akamai Reference # — run() 종료 시 차단 상태에 기록
         self._last_block_reference = ""
 
+    def _active_cooldown(self) -> tuple[Path, float]:
+        """적용할 쿨다운 (기록 폴더, 잔여초).
+
+        카테고리 폴더 기록을 먼저 보고, 없으면 전역 기록(이 PC 회선 차단 —
+        다른 카테고리·트리 로드가 남긴 것)을 본다.
+        """
+        local = Path(self.config.output_dir)
+        remaining = blockguard.cooldown_remaining_seconds(local)
+        if remaining > 0:
+            return local, remaining
+        global_dir = getattr(self.config, "global_block_state_dir", None)
+        if global_dir is None or Path(global_dir) == local:
+            return local, 0.0
+        global_dir = Path(global_dir)
+        return global_dir, blockguard.cooldown_remaining_seconds(global_dir)
+
     def run(self) -> CoupangRunSummary:
         """차단 쿨다운 게이트 + 차단 상태 기록 후 부모 파이프라인 실행.
 
         차단 감지 후 쿨다운 미경과 재실행은 실패 확률이 높을뿐 아니라 IP 평판을
         추가로 깎는다(2026-08-30 실측 — 차단 4.8시간 뒤 재실행, 재차 차단).
         """
-        remaining = blockguard.cooldown_remaining_seconds(self.config.output_dir)
+        gate_dir, remaining = self._active_cooldown()
         if remaining > 0:
-            state = blockguard.read_block_state(self.config.output_dir) or {}
+            state = blockguard.read_block_state(gate_dir) or {}
             blocked_at = str(state.get("blocked_at", "?"))
+            scope = ""
+            if gate_dir != Path(self.config.output_dir):
+                scope = (
+                    "이 기록은 다른 카테고리·트리 로드에서 감지된 이 PC 회선 차단입니다. "
+                )
             summary = CoupangRunSummary()
             summary.error = (
                 f"이전 차단({blocked_at}) 후 쿨다운 중입니다 — 약 "
                 f"{blockguard.format_remaining(remaining)} 후 재시도하세요. "
-                "쿨다운 중 재실행은 IP 평판을 더 나쁘게 만듭니다."
+                f"{scope}쿨다운 중 재실행은 IP 평판을 더 나쁘게 만듭니다."
             )
             summary.termination_reason = "block_cooldown"
             self._log(f"실행 차단: {summary.error}")
@@ -263,6 +289,18 @@ class SearchCrawler(CoupangCrawler):
                     f"  차단 상태 기록: {path} — "
                     f"{blockguard.DEFAULT_BLOCK_COOLDOWN_HOURS:.0f}시간 쿨다운 후 재시도하세요."
                 )
+                global_dir = getattr(self.config, "global_block_state_dir", None)
+                if global_dir and Path(global_dir) != Path(self.config.output_dir):
+                    # 이 PC 회선 차단은 카테고리와 무관하게 유효 — 전역 기록도
+                    # 남겨 다른 카테고리가 목록 수집을 끝까지 한 뒤 판매자 단계
+                    # 연속 실패로 차단을 알아차리는 낭비를 막는다.
+                    global_path = blockguard.record_block(
+                        global_dir,
+                        reason=summary.error or "",
+                        reference=self._last_block_reference,
+                    )
+                    if global_path:
+                        self._log(f"  전역 차단 기록: {global_path}")
         return summary
 
     def _phase(self, name: str) -> None:

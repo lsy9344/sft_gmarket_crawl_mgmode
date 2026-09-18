@@ -1473,7 +1473,13 @@ class MainWindow(QMainWindow):
         if cancelled:
             panel.set_state("finished")
             self._show_status(f"AliExpress 카테고리 {head} ({summary.collected_items:,}건)")
-            if summary.collected_items > 0:
+            # 목록 단계 진행 중 취소면 상품 결과는 0건이어도 페이지 진행이
+            # 저장돼 있으므로 저장소 기준으로 재개 안내를 판단한다.
+            resume_dir = summary.csv_file.parent if summary.csv_file else None
+            has_resume = summary.collected_items > 0 or (
+                resume_dir is not None and ali_peek_resume(resume_dir) is not None
+            )
+            if has_resume:
                 panel.append_log("[재개 안내] 다시 시작하면 저장된 지점부터 이어서 수집됩니다.")
             return
 
@@ -1495,6 +1501,11 @@ class MainWindow(QMainWindow):
         else:
             panel.set_state("finished")
             self._show_status(f"AliExpress 카테고리 {head} ({summary.collected_items:,}건)")
+            given_up = int(getattr(summary, "given_up_items", 0) or 0)
+            if given_up:
+                panel.append_log(
+                    f"[참고] 반복 실패로 재시도를 포기한 상품 {given_up:,}건은 결과에서 제외됐습니다."
+                )
 
     def _on_alicat_thread_done(self) -> None:
         self.alicat_worker = None

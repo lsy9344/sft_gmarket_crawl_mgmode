@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from app.core import config as app_config
 from app.core.base import CancelledError, Control
 from app.core.coupang.resume_store import (
     STATUS_FINISHED,
@@ -43,6 +44,19 @@ CrawlerFactory = Callable[[Any], Any]
 ExitIpFn = Callable[[dict], ExitIpInfo]
 
 _FOLDER_UNSAFE = re.compile(r"[^\w가-힣]+")
+
+
+def _global_block_state_dir(config: Any) -> Path | None:
+    """이 PC 회선 차단의 전역 기록 폴더 — 출력 루트. 카테고리 폴더와 같으면 None.
+
+    트리 로드(CategoryWorker)도 같은 위치에 차단을 기록하므로, 카테고리 수집
+    게이트가 트리 로드 차단까지 일관되게 존중하게 된다.
+    """
+    output_root = Path(getattr(config, "output_dir", ".") or ".")
+    global_dir = Path(app_config.DEFAULT_OUTPUT_DIR)
+    if global_dir == output_root:
+        return None
+    return global_dir
 
 
 def should_keep_attempt(summary: CoupangRunSummary) -> bool:
@@ -282,6 +296,9 @@ def run_category_attempts(
                 profile_dir=profile_dir,
                 use_persistent_profile=True,
                 resume_store=store,
+                # 이 PC 회선 차단의 전역 기록 — 출력 루트(트리 로드가 기록하는
+                # 위치와 같음). 다른 카테고리 시작 시 같은 쿨다운 게이트를 적용.
+                global_block_state_dir=_global_block_state_dir(config),
             )
             log(
                 f"[Decodo] 시도 {attempt}/{attempts} — 한국 고정 회선 "

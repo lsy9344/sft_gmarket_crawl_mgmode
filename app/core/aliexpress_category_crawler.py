@@ -9,6 +9,9 @@
     최대 MAX_GEO_ROTATIONS 회 새 회선으로 교체한다
   - 상품 데이터(mtop) 미수신 페이지는 기록하지 않고 같은 회선에서 재시도한다 —
     빈 껍데기를 "(상세 미기재)"로 확정 저장해 재개 대상에서 누락시키는 일을 막는다
+  - 실행 경계에서 반복 실패하는 상품(삭제·변경 SKU)은 누적 실패가
+    ITEM_GIVE_UP_RUNS 회에 도달하면 재시도를 포기한다 — 포기 상품 하나 때문에
+    완료 봉인이 영원히 불가능한 비수렴을 끊는다
   - 연속 차단이 CONSECUTIVE_BLOCK_ABORT 에 도달하면 그 지점을 저장한 채 안전 중단한다.
     다음 시작(우회 회선 선택)에서 저장된 지점부터 이어서 수집된다
 - 재개 규율(쿠팡 search_crawler 동일): 재개 경계는 상품이 확인된 마지막
@@ -18,7 +21,7 @@
 - 시도(MAX_ATTEMPTS)마다 새 회선으로 재시작하며 진행 기록(resume.sqlite3)을 공유한다.
   시도 간 대기(RETRY_WAIT_SECONDS)는 취소·일시정지 가능한 분할 대기다
 - 비동기 mtop API 인터셉트를 통한 공정위 7대 사업자 정보 추출
-- 실시간 CSV/JSON 동시 저장 (중간 유실 0건)
+- 실시간 CSV append 저장 (중간 유실 0건) + JSON 주기 재작성 (대량 수집 I/O 완화)
 """
 
 from __future__ import annotations
@@ -65,6 +68,15 @@ MAX_GEO_ROTATIONS = 3          # 세션 1개 확보 시 한국 확인 재시도 
 CONSECUTIVE_BLOCK_ABORT = 10   # 연속 차단 상한 — 도달 시 안전 중단(저장 지점 보존)
 PHASE1_PAGE_RETRIES = 3        # 목록 페이지 1장의 로드·차단 재시도 상한
 PDP_ITEM_RETRIES = 3           # 상세 페이지 1건의 재시도 상한
+# 상품별 누적 실패 실행 수 상한 — 도달한 상품은 재시도를 포기한다. 데이터를
+# 끝내 주지 않는 삭제·변경 SKU 가 재개 대상에 영원히 남아 완료 봉인이 불가능한
+# 비수렴을 끊는다(검토 2026-09-18). 회선 문제의 실패는 CONSECUTIVE_BLOCK_ABORT 가
+# 실행 자체를 조기 중단시키므로 이 카운터가 쌓일 여지가 적다.
+ITEM_GIVE_UP_RUNS = 3
+# 결과 JSON 전체 재작성 주기(건) — 매건 재작성은 대량 수집에서 O(n²) I/O 다.
+# 50건 모일 때와 중단·완료 시점에만 재작성하고, CSV 는 매건 append 로 실시간을
+# 유지한다. 재개 시 CSV/JSON 을 저장소에서 재구축하므로 유실은 없다.
+JSON_FLUSH_INTERVAL = 50
 
 HOME_WARMUP_URL = "https://ko.aliexpress.com/?spm=a2g0o.home.logo.1.6c2f52d1NGQ4SZ"
 
@@ -142,6 +154,8 @@ class AliexpressCrawlSummary:
     has_email: int = 0
     has_business_number: int = 0
     has_ceo_name: int = 0
+    # 누적 실패 ITEM_GIVE_UP_RUNS 회로 재시도를 포기해 결과에서 제외된 상품 수
+    given_up_items: int = 0
     csv_file: Path | None = None
     json_file: Path | None = None
     elapsed_seconds: float = 0.0
@@ -296,6 +310,10 @@ class AliexpressCategoryCrawler:
                     summary = live if live is not None else self._new_summary(csv_file, json_file)
                     summary.csv_file = csv_file
                     summary.json_file = json_file
+                    if int(summary.collected_items or 0) == 0:
+                        # 목록 단계 진행 중 취소 — 요약이 비어 있으면 저장 누적분을
+                        # 채워 UI 가 실제 확보 규모를 보고하게 한다.
+                        self._apply_store_stats(summary, store)
                     summary.cancelled = True
                     summary.termination_reason = "cancelled"
                     self.on_log("[Ali 카테고리] 사용자에 의해 수집이 취소되었습니다.")
@@ -323,6 +341,10 @@ class AliexpressCategoryCrawler:
                 else:
                     if summary.cancelled or summary.termination_reason in ("success", "empty"):
                         break
+                    if int(summary.collected_items or 0) == 0:
+                        # 목록 단계에서 끝난 시도 — 요약에 저장 누적분이라도
+                        # 비치도록 채운다(시도 소진 시 마지막 요약이 최종 표시된다).
+                        self._apply_store_stats(summary, store)
                     self.on_log(f"[Ali 카테고리] 시도 {attempt} 중단 ({summary.termination_reason})")
 
                 if attempt >= MAX_ATTEMPTS:
@@ -669,6 +691,9 @@ class AliexpressCategoryCrawler:
             collected_records: list[dict] = store.load_item_results()
             processed_items: set[str] = store.processed_item_ids()
             vendor_cache: dict[str, dict] = store.confirmed_sellers()
+            # 영구 실패 추적 — 누적 실패가 상한에 도달한 상품은 이번 실행에서도
+            # 재시도하지 않는다(ITEM_GIVE_UP_RUNS 주석의 비수렴 방지 규율).
+            give_up_ids = store.give_up_item_ids(ITEM_GIVE_UP_RUNS)
             req_count_in_session = 0
 
             # 기존 저장소에서 고유 판매자 시드 자동 로드
@@ -724,8 +749,13 @@ class AliexpressCategoryCrawler:
                 for r in collected_records:
                     writer.writerow(r)
 
-            with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(collected_records, f, ensure_ascii=False, indent=2)
+            def flush_json() -> None:
+                """누적 결과 전체를 JSON 에 기록 — 주기 도달·중단·완료 시점 호출."""
+                with open(json_file, "w", encoding="utf-8") as f:
+                    json.dump(collected_records, f, ensure_ascii=False, indent=2)
+
+            flush_json()
+            records_since_flush = 0
 
             unprocessed = [itm for itm in product_targets if itm["id"] not in processed_items]
             if unprocessed and current_page is None:
@@ -744,6 +774,15 @@ class AliexpressCategoryCrawler:
 
                 # 이미 수집 완료된 상품은 고속 스킵
                 if p_id in processed_items:
+                    continue
+
+                # 누적 실패 상한 도달 상품 — 재시도하지 않고 결과에서 제외
+                if p_id in give_up_ids:
+                    summary.given_up_items += 1
+                    self.on_log(
+                        f"  [{idx}/{total_items}] 누적 실패 {ITEM_GIVE_UP_RUNS}회 상품 — "
+                        "재시도를 포기합니다 (삭제·변경된 상품으로 보입니다)"
+                    )
                     continue
 
                 # rotation_batch_size 주기 회선 자동 순환 (프록시 사용 시에만)
@@ -941,40 +980,58 @@ class AliexpressCategoryCrawler:
                     processed_items.add(p_id)
                     store.record_item_result(p_id, record["vendor_id"], record)
 
-                    # 실시간 CSV 및 JSON 저장
+                    # 실시간 CSV append + 주기적 JSON 전체 재작성
                     with open(csv_file, "a", encoding="utf-8-sig", newline="") as f:
                         writer = csv.DictWriter(f, fieldnames=COUPANG_DATASET_FIELDS)
                         writer.writerow(record)
 
-                    with open(json_file, "w", encoding="utf-8") as f:
-                        json.dump(collected_records, f, ensure_ascii=False, indent=2)
+                    records_since_flush += 1
+                    if records_since_flush >= JSON_FLUSH_INTERVAL:
+                        flush_json()
+                        records_since_flush = 0
 
-                    # 콜백 및 통계
+                    # 콜백 및 통계 — 증분 집계(매건 전체 재순회 금지)
                     if p_url not in self._emitted_urls:
                         self._emitted_urls.add(p_url)
                     self.on_collected(record)
-
+                    if record.get("email"):
+                        summary.has_email += 1
+                    if record.get("business_number"):
+                        summary.has_business_number += 1
+                    if record.get("ceo_name"):
+                        summary.has_ceo_name += 1
                     summary.collected_items = len(collected_records)
                     summary.unique_vendors = len(vendor_cache)
-                    summary.has_email = sum(1 for r in collected_records if r.get("email"))
-                    summary.has_business_number = sum(1 for r in collected_records if r.get("business_number"))
-                    summary.has_ceo_name = sum(1 for r in collected_records if r.get("ceo_name"))
                     self.on_stats(summary)
 
                     biz_desc = f"[{record['company_name'] or record['store_name']}] 대표: {record['ceo_name'] or '-'} | 사업자: {record['business_number'] or '-'} | 이메일: {record['email'] or '-'}"
                     self.on_log(f"  [{idx}/{total_items}] 수집: {biz_desc} (누적 {len(collected_records)}건, 고유판매자 {len(vendor_cache)}개사)")
                 else:
                     consecutive_failures += 1
-                    dropped_count += 1
-                    self.on_log(
-                        f"  [{idx}/{total_items}] 수집 실패(차단 의심) — 건너뜁니다. "
-                        f"다음 시작 때 이 상품부터 다시 시도됩니다. "
-                        f"(연속 실패 {consecutive_failures}/{CONSECUTIVE_BLOCK_ABORT})"
-                    )
+                    total_failures = store.record_item_failure(p_id)
+                    if total_failures >= ITEM_GIVE_UP_RUNS:
+                        # 이 실행에서 포기 — dropped_count 에 넣지 않아 남은 수집이
+                        # 모이면 완료 봉인이 가능해진다(비수렴 방지).
+                        give_up_ids.add(p_id)
+                        summary.given_up_items += 1
+                        self.on_log(
+                            f"  [{idx}/{total_items}] 수집 실패 누적 {total_failures}회 — "
+                            "이 상품은 재시도를 포기합니다. "
+                            f"(연속 실패 {consecutive_failures}/{CONSECUTIVE_BLOCK_ABORT})"
+                        )
+                    else:
+                        dropped_count += 1
+                        self.on_log(
+                            f"  [{idx}/{total_items}] 수집 실패(차단 의심) — 건너뜁니다. "
+                            f"다음 시작 때 이 상품부터 다시 시도됩니다. "
+                            f"(연속 실패 {consecutive_failures}/{CONSECUTIVE_BLOCK_ABORT}, "
+                            f"누적 {total_failures}/{ITEM_GIVE_UP_RUNS})"
+                        )
                     if consecutive_failures >= CONSECUTIVE_BLOCK_ABORT:
                         summary.termination_reason = "blocked"
                         summary.error = BLOCKED_ABORT_GUIDE
                         self.on_log(f"[차단 중단] 연속 {consecutive_failures}건 실패 — 안전 중단. {BLOCKED_ABORT_GUIDE}")
+                        flush_json()
                         await close_session()
                         return summary
 
@@ -988,11 +1045,18 @@ class AliexpressCategoryCrawler:
                 self.on_log(
                     f"[차단 중단] 수집 못 건 상품 {dropped_count}건 — 완료 봉인하지 않고 종료. {BLOCKED_ABORT_GUIDE}"
                 )
+                flush_json()
                 await close_session()
                 return summary
 
+            if summary.given_up_items > 0:
+                self.on_log(
+                    f"[완료 제외] 누적 실패 {ITEM_GIVE_UP_RUNS}회로 재시도를 포기한 상품 "
+                    f"{summary.given_up_items}건은 결과에서 제외됐습니다."
+                )
             summary.termination_reason = "success"
             store.mark_finished()
+            flush_json()
             await close_session()
 
         return summary
