@@ -1,4 +1,5 @@
 name: CI
+# 이 컴퓨터가 켜져 있으면 자체 러너에서 돌고, 꺼져 있으면 원래 GitHub 호스트에서 돈다.
 
 # 빌드 PC(Windows)와 배포 기준이 같은 Python 3.12 에서 전체 회귀 테스트를 돌린다.
 # 테스트는 실제 브라우저·네트워크 없이 페이크/스텁으로 동작하므로 브라우저
@@ -16,7 +17,7 @@ on:
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: ${{ vars.CI_SELF_HOSTED == 'true' && fromJSON('["self-hosted","Linux","X64","noah-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     env:
       QT_QPA_PLATFORM: offscreen
