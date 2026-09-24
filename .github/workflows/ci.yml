@@ -2,8 +2,8 @@ name: CI
 # Linux 자체 러너(jena-dabi-linux)에서만 테스트한다.
 
 # 기준 Python 3.12 에서 전체 회귀 테스트를 돌린다.
-# 테스트는 실제 브라우저·네트워크 없이 페이크/스텁으로 동작하므로 브라우저
-# 설치 단계는 필요 없다 (conftest 가 프록시 조회를 스텁 처리).
+# 테스트는 실제 사이트에 접속하지 않지만, 런타임 사전 검사의 계약을 확인하기
+# 위해 Patchright Chromium 런타임을 러너 밖 캐시에 설치한다.
 #
 # 러너가 오프라인이면 CI는 queued 상태로 남는다. 러너 PC에서 관리한다.
 on:
@@ -16,6 +16,7 @@ jobs:
   test:
     runs-on: [self-hosted, Linux, X64, erp-dabi-linux]
     timeout-minutes: 20
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -48,7 +49,9 @@ jobs:
         run: |
           ./.venv/bin/python -m pip install --require-hashes -r requirements-ci.lock
 
-      # 테스트는 실제 브라우저·네트워크 없이 페이크/스텁으로 동작하므로 브라우저
-      # 설치 단계는 필요 없다 (conftest 가 프록시 조회를 스텁 처리).
+      - name: Install Patchright Chromium runtime
+        run: ./.venv/bin/patchright install chromium
+
+      # 테스트는 실제 사이트에 접속하지 않고 페이크/스텁으로 동작한다.
       - name: Run tests
         run: ./.venv/bin/python -m pytest tests/ -q

@@ -18,7 +18,9 @@ sha256sum requirements.txt requirements-ci.in > requirements-ci.inputs.sha256
 `requirements-ci.in`이나 실행 의존성을 바꾼 뒤에만 잠금 파일과 입력 해시를 함께 갱신한다.
 CI는 설치 전에 입력 해시를 검사한다. 패키지 저장소는 작업 폴더 밖의
 `runner.tool_cache/package-stores/.../pip`에 남기며, `node_modules`처럼 작업 결과를
-재사용하지 않는다.
+재사용하지 않는다. 런타임 사전 검사 계약을 위해 Patchright Chromium도 설치하며,
+브라우저 캐시는 작업 폴더 밖의 사용자 캐시에 남는다. 테스트는 실제 사이트에 접속하지
+않는다.
 
 이 잠금은 glibc 2.34 이상인 Linux x86_64 러너를 기준으로 한다. 더 오래된 Linux를
 사용하면 PyQt6 wheel 조건을 확인한 뒤 플랫폼 옵션과 잠금을 다시 맞춘다.
