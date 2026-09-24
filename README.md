@@ -44,6 +44,8 @@ patchright install chromium
 > 기동되며, Gmarket은 정확한 Patchright Chromium revision을, Coupang은
 > Camoufox/브라우저/GeoIP를 preflight로 확인해 setup 도구를 안내한다.
 
+CI의 자체 러너·캐시·해시 잠금 규칙은 [`docs/CI.md`](docs/CI.md)에 정리되어 있다.
+
 - Python 3.10+ (3.12 권장), Windows 10/11
 - 네트워크:
   - Gmarket: Bright Data Web Unlocker (설정 탭 토큰 등록).

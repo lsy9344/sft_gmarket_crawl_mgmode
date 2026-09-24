@@ -1,39 +1,54 @@
 name: CI
-# 외부 러너 PC가 온라인이면 거기서 돌고, 꺼져 있거나 없으면 원래 GitHub 호스트에서 돈다.
+# Linux 자체 러너(jena-dabi-linux)에서만 테스트한다.
 
-# 빌드 PC(Windows)와 배포 기준이 같은 Python 3.12 에서 전체 회귀 테스트를 돌린다.
+# 기준 Python 3.12 에서 전체 회귀 테스트를 돌린다.
 # 테스트는 실제 브라우저·네트워크 없이 페이크/스텁으로 동작하므로 브라우저
 # 설치 단계는 필요 없다 (conftest 가 프록시 조회를 스텁 처리).
 #
-# 실행 위치: 로컬 WSL 셀프호스티드 러너(사용자 systemd 서비스
-# github-actions-runner). GitHub 호스티드 러너는 이 저장소(비공개)의 Actions
-# 예산 소진으로 시작되지 않는다("Actions budget is preventing further use").
-# 러너가 꺼져 있으면 CI는 queued 에 머문다 — 재기동:
-#   systemctl --user start github-actions-runner
+# 러너가 오프라인이면 CI는 queued 상태로 남는다. 러너 PC에서 관리한다.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
-    runs-on: ${{ vars.CI_LINUX_RUNNER == 'self-hosted' && fromJSON('["self-hosted","Linux","X64","erp-dabi"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, Linux, X64, erp-dabi-linux]
     timeout-minutes: 20
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+
+      - name: Create clean virtual environment
+        run: python -m venv --clear .venv
+
+      - name: Configure persistent pip cache
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            scope=pr
+          else
+            scope=trusted
+          fi
+          pip_cache="${{ runner.tool_cache }}/package-stores/${{ github.repository }}/Linux-X64/${scope}/pip"
+          mkdir -p "$pip_cache"
+          printf 'PIP_CACHE_DIR=%s\n' "$pip_cache" >> "$GITHUB_ENV"
+
+      - name: Verify CI lock inputs
+        run: sha256sum --check requirements-ci.inputs.sha256
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
+          ./.venv/bin/python -m pip install --require-hashes -r requirements-ci.lock
 
+      # 테스트는 실제 브라우저·네트워크 없이 페이크/스텁으로 동작하므로 브라우저
+      # 설치 단계는 필요 없다 (conftest 가 프록시 조회를 스텁 처리).
       - name: Run tests
-        run: python -m pytest tests/ -q
+        run: ./.venv/bin/python -m pytest tests/ -q
