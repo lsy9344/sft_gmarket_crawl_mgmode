@@ -1,27 +1,24 @@
 """Bright Data 계정 설정 탭 패널 — API 토큰·존 입력, 검증, 저장.
 
 Gmarket 카테고리 탭의 Web Unlocker 사용량이 입력한 계정 키에서 차감된다.
-Coupang 카테고리 탭은 Decodo 계정을 쓰며 Bright Data ISP는 쓰지 않는다.
+Coupang 카테고리 탭은 Decodo 계정을 쓴다.
 자격 증명은 저장소 밖 output/brightdata_settings.json 에만 저장된다
 (.gitignore) — 절대 저장소에 커밋되지 않는다.
 
 검증 경로(2026-09-09 보강):
 - API 토큰 — "잔액 조회·토큰 검증" 버튼 + 저장 버튼이 새 토큰을 먼저 검증
   (401/403 거부 시 확인 대화상자, 네트워크 오류는 미검증 명시 후 저장).
-- ISP 프록시 3요소(계정 ID/존/비밀번호) — "프록시 테스트" 버튼이 실제 프록시
-  연결로 출발 IP 를 확인한다. 잔액 조회만으로는 이 자격을 검증할 수 없다.
-  쿠팡 수집 경로에는 적용되지 않는다.
 - API 호출은 QThread 워커로 실행한다 — UI 스레드가 타임아웃(최대 90초) 동안
   멈추지 않고, 조회 중에는 버튼이 잠긴다.
 
 참고 실측 문서:
 - docs/gmarket/ACCESS_ROUTES_RESEARCH_20260908.md §6 (Web Unlocker)
 - docs/coupang/DECODO_PROXY_METHODOLOGY_20260910.md (쿠팡 수집)
-- docs/coupang/BRIGHTDATA_AKAMAI_REVIEW_20260908.md §12 (쿠팡 도메인 게이트)
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 
 from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal
@@ -29,12 +26,14 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -54,6 +53,54 @@ _BANNER_STYLES = {
     "warn": ("background-color: #fff3cd; color: #7a5b00; border: 1px solid #e0c46c;"),
     "ok": ("background-color: #e2f3e7; color: #135a2e; border: 1px solid #9ed3ae;"),
 }
+
+
+@dataclass(frozen=True)
+class _DecodoReadiness:
+    connection_ok: bool
+    connection_message: str
+    runtime_errors: tuple[str, ...]
+
+
+def _check_decodo_readiness(settings: decodo.DecodoSettings) -> _DecodoReadiness:
+    """저장된 계정 회선과 수집 런타임을 별도로 확인한다(워커 스레드에서 실행)."""
+    from app.core.coupang.preflight import PreflightStatus, check_runtime
+    from app.core.gmarket_preflight import check_gmarket_runtime
+
+    proxy = decodo.sticky_proxy_dict(settings)
+    try:
+        if proxy is None:
+            raise decodo.DecodoError("저장된 Decodo 계정 정보를 읽을 수 없습니다.")
+        info = decodo.fetch_exit_ip(proxy)
+        connection_ok = bool(info.ip and info.is_korea)
+        if connection_ok:
+            connection_message = f"한국 회선 확인 ({info.ip})"
+        elif not info.ip:
+            connection_message = "회선 응답에 IP가 없어 한국 회선을 확인할 수 없습니다."
+        else:
+            country = info.country_code or info.country_name or "알 수 없음"
+            connection_message = f"한국 회선이 아닙니다 ({country})."
+    except decodo.DecodoError as e:
+        connection_ok = False
+        connection_message = str(e)
+
+    runtime_errors = []
+    try:
+        coupang = check_runtime()
+        if coupang.status != PreflightStatus.OK:
+            runtime_errors.append(f"Camoufox/GeoIP: {coupang.message.splitlines()[0]}")
+    except Exception:  # noqa: BLE001 - 설치 상태 확인 실패도 미준비로 표시
+        runtime_errors.append("Camoufox/GeoIP 설치 상태를 확인할 수 없습니다.")
+    try:
+        gmarket = check_gmarket_runtime()
+        if not gmarket.ok:
+            runtime_errors.append(f"Patchright: {gmarket.message.splitlines()[0]}")
+    except Exception:  # noqa: BLE001 - 설치 상태 확인 실패도 미준비로 표시
+        runtime_errors.append("Patchright 설치 상태를 확인할 수 없습니다.")
+
+    return _DecodoReadiness(
+        connection_ok, connection_message, tuple(runtime_errors)
+    )
 
 
 class _BrightDataCallWorker(QThread):
@@ -90,13 +137,25 @@ class BrightDataPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._worker: _BrightDataCallWorker | None = None
+        self._external_busy = False
         self._build_ui()
         self.load_from_settings()
         self.load_from_decodo()
 
     # ── UI 구성 ─────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        content = QWidget()
+        content.setMaximumWidth(800)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        scroll.setWidget(content)
+        root.addWidget(scroll)
 
         # ── 토큰 필수 배너 — 토큰 유무에 따라 눈에 띄게 상태를 바꾼다 ──
         self.banner = QLabel("")
@@ -165,50 +224,6 @@ class BrightDataPanel(QWidget):
 
         layout.addWidget(acct_box)
 
-        # ── ISP 프록시 — Bright Data (쿠팡에는 사용하지 않음) ──────────────
-        isp_box = QGroupBox("ISP 프록시 — Bright Data (쿠팡에는 사용하지 않음)")
-        isp_form = QFormLayout(isp_box)
-
-        self.chk_isp_enabled = QCheckBox(
-            "Bright Data ISP 프록시 사용 (Coupang 카테고리 탭에는 적용되지 않음)"
-        )
-        isp_form.addRow(self.chk_isp_enabled)
-
-        self.edit_customer_id = QLineEdit()
-        self.edit_customer_id.setPlaceholderText("예: hl_22fb0228 (/status 의 customer)")
-        isp_form.addRow("계정 ID", self.edit_customer_id)
-
-        self.edit_isp_zone = QLineEdit()
-        self.edit_isp_zone.setPlaceholderText("예: gm_isp_kr3")
-        isp_form.addRow("ISP 존", self.edit_isp_zone)
-
-        isp_pw_row = QHBoxLayout()
-        self.edit_isp_password = QLineEdit()
-        self.edit_isp_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.edit_isp_password.setPlaceholderText("존 비밀번호")
-        isp_pw_row.addWidget(self.edit_isp_password, 1)
-        self.btn_fetch_password = QPushButton("토큰으로 가져오기")
-        self.btn_fetch_password.clicked.connect(self.on_fetch_zone_password)
-        isp_pw_row.addWidget(self.btn_fetch_password)
-        isp_form.addRow("ISP 존 비밀번호", isp_pw_row)
-
-        self.btn_test_proxy = QPushButton("프록시 테스트 (출발 IP 확인)")
-        self.btn_test_proxy.setToolTip(
-            "입력한 계정 ID·존·비밀번호로 실제 프록시 연결을 시험합니다.\n"
-            "성공 시 출발 IP 가 표시되고, 인증 실패(407)·시간 초과 등은\n"
-            "원인과 함께 안내됩니다. 요청 1건 수 KB 의 대역폭이 소비됩니다.")
-        self.btn_test_proxy.clicked.connect(self.on_test_isp_proxy)
-        isp_form.addRow("자격 검증", self.btn_test_proxy)
-
-        isp_note = QLabel(
-            "Bright Data ISP 프록시는 쿠팡 도메인에서 막혀 카테고리 수집에 "
-            "쓰이지 않습니다. 쿠팡은 아래 Decodo 계정을 사용하세요."
-        )
-        isp_note.setWordWrap(True)
-        isp_form.addRow(isp_note)
-
-        layout.addWidget(isp_box)
-
         # ── Decodo (Coupang 카테고리 탭) ────────────────────────────────
         decodo_box = QGroupBox("Decodo — Coupang 카테고리 탭")
         decodo_form = QFormLayout(decodo_box)
@@ -232,6 +247,12 @@ class BrightDataPanel(QWidget):
         self.btn_save_decodo = QPushButton("Decodo 계정 저장")
         self.btn_save_decodo.clicked.connect(self.on_save_decodo)
         decodo_form.addRow(self.btn_save_decodo)
+        self.lbl_decodo_saved = QLabel("")
+        self.lbl_decodo_saved.setWordWrap(True)
+        decodo_form.addRow(self.lbl_decodo_saved)
+        self.lbl_decodo_ready = QLabel("")
+        self.lbl_decodo_ready.setWordWrap(True)
+        decodo_form.addRow(self.lbl_decodo_ready)
         layout.addWidget(decodo_box)
 
         # ── 저장 ─────────────────────────────────────────────────────────
@@ -309,63 +330,6 @@ class BrightDataPanel(QWidget):
             error=False,
         )
 
-    # ── 존 비밀번호 가져오기 ─────────────────────────────────────────────
-    def on_fetch_zone_password(self) -> None:
-        """입력된 토큰으로 ISP 존 비밀번호를 조회해 채워 넣는다."""
-        token = self.edit_token.text().strip()
-        zone = self.edit_isp_zone.text().strip()
-        if not token:
-            self._set_status("존 비밀번호를 가져오려면 먼저 API 토큰을 입력하세요.",
-                             error=True)
-            return
-        if not zone:
-            self._set_status("ISP 존 이름을 입력한 뒤 가져오세요.", error=True)
-            return
-        if not self._start_call(
-                lambda: brightdata.fetch_zone_password(token, zone),
-                on_ok=self._on_password_result,
-                on_error=self._set_api_error_status,
-                busy_text=f"존 '{zone}' 비밀번호 조회 중..."):
-            return
-
-    def _on_password_result(self, password: str) -> None:
-        zone = self.edit_isp_zone.text().strip()
-        self.edit_isp_password.setText(str(password))
-        self._set_status(f"존 '{zone}' 의 비밀번호를 가져와 채웠습니다. "
-                         "'프록시 테스트'로 자격을 확인한 뒤 저장하세요.", error=False)
-
-    # ── ISP 프록시 연결 테스트 ───────────────────────────────────────────
-    def on_test_isp_proxy(self) -> None:
-        """프록시 3요소를 실제 연결로 검증한다 — 출발 IP 를 표시한다."""
-        settings = self.collect_settings_preserving_stored()
-        if not settings.isp_enabled:
-            self._set_status("먼저 'ISP 프록시 경유'를 체크한 뒤 테스트하세요.",
-                             error=True)
-            return
-        if not (settings.isp_customer_id and settings.isp_zone
-                and settings.isp_password):
-            self._set_status("계정 ID·ISP 존·비밀번호를 모두 입력한 뒤 테스트하세요. "
-                             "(비밀번호는 '토큰으로 가져오기'로 채울 수 있습니다)",
-                             error=True)
-            return
-        if not self._start_call(
-                lambda: brightdata.test_isp_proxy(settings),
-                on_ok=self._on_proxy_test_result,
-                on_error=self._set_api_error_status,
-                busy_text=f"ISP 프록시 '{settings.isp_zone}' 연결 테스트 중... "
-                          "(최대 20초, 출발 IP 확인)"):
-            return
-
-    def _on_proxy_test_result(self, result: dict) -> None:
-        ip = str(result.get("ip", "?"))
-        country = str(result.get("country", "") or "").strip()
-        country_txt = f" ({country.upper()})" if country else ""
-        self._set_status(
-            f"ISP 프록시 통과 — 출발 IP {ip}{country_txt}. "
-            "쿠팡 카테고리 수집에는 쓰이지 않습니다(Decodo 사용).",
-            error=False,
-        )
-
     # ── 저장 ─────────────────────────────────────────────────────────────
     def on_save(self) -> None:
         """저장 — 새 토큰이 입력된 경우 저장 전에 잔액 조회로 검증한다.
@@ -429,33 +393,22 @@ class BrightDataPanel(QWidget):
         log_line(f"[설정] Bright Data 계정 토큰 저장: "
                  f"계정 {alias or '(이름 없음)'} — "
                  f"{brightdata.masked_token(stored.api_token)} ({path})")
-        isp_warn = ""
-        if stored.isp_enabled and not (stored.isp_customer_id and stored.isp_zone
-                                       and stored.isp_password):
-            isp_warn = (" ⚠ ISP 프록시 사용 설정이지만 계정 ID/존/비밀번호가 비어 "
-                        "있어 프록시 없이 진행됩니다 — "
-                        "'프록시 테스트'로 자격을 완성하세요.")
         self._set_status(
             f"저장됨: {alias_txt}"
             f"토큰 {brightdata.masked_token(stored.api_token)} — {token_note}, "
-            f"Unlocker 존 '{stored.unlocker_zone or '기본값'}'"
-            f"{', ISP 프록시 사용' if stored.isp_enabled else ''}{isp_warn}",
-            error=bool(isp_warn),
+            f"Unlocker 존 '{stored.unlocker_zone or '기본값'}'",
+            error=False,
         )
         self._update_banner()
 
     # ── 공개 API ─────────────────────────────────────────────────────────
     def collect_settings(self) -> brightdata.BrightDataSettings:
-        """입력값 → BrightDataSettings (저장·주입 경로 모두 사용)."""
+        """화면의 입력값 → BrightDataSettings."""
         return brightdata.BrightDataSettings(
             api_token=self.edit_token.text().strip(),
             account_name=self.edit_account_name.text().strip(),
             unlocker_zone=self.edit_unlocker_zone.text().strip(),
             country=self.edit_country.text().strip(),
-            isp_enabled=self.chk_isp_enabled.isChecked(),
-            isp_customer_id=self.edit_customer_id.text().strip(),
-            isp_zone=self.edit_isp_zone.text().strip(),
-            isp_password=self.edit_isp_password.text().strip(),
         )
 
     def load_from_settings(self) -> None:
@@ -472,14 +425,6 @@ class BrightDataPanel(QWidget):
         self.edit_account_name.setText(s.account_name)
         self.edit_unlocker_zone.setText(s.unlocker_zone)
         self.edit_country.setText(s.country)
-        self.chk_isp_enabled.setChecked(s.isp_enabled)
-        self.edit_customer_id.setText(s.isp_customer_id)
-        self.edit_isp_zone.setText(s.isp_zone)
-        # 비밀번호는 마스크 복원 — 실제 값은 설정 파일에 그대로 남아 있고,
-        # 위젯을 건드리지 않으면(빈 값) 저장 시 기존 값이 유지된다.
-        self.edit_isp_password.setPlaceholderText(
-            f"저장됨 ({brightdata.masked_token(s.isp_password)}) — 변경할 때만 입력"
-            if s.isp_password else "존 비밀번호")
         if s.saved_at:
             self._set_status(f"저장된 설정 불러옴 (마지막 저장: {s.saved_at})",
                              error=False)
@@ -492,8 +437,15 @@ class BrightDataPanel(QWidget):
             f"저장됨 ({decodo.masked_secret(s.password)}) — 변경할 때만 입력"
             if s.password else "비밀번호"
         )
+        self.lbl_decodo_saved.setText(
+            f"저장된 계정: {s.username}" if decodo.credentials_ready(s)
+            else "Decodo 계정이 저장되지 않았습니다."
+        )
+        self._set_decodo_ready("사용 준비는 계정 저장 버튼을 눌러 확인하세요.")
 
     def on_save_decodo(self) -> None:
+        if self._call_busy() or self._external_busy:
+            return
         stored = decodo.load_settings()
         password = self.edit_decodo_password.text().strip() or stored.password
         settings = decodo.DecodoSettings(
@@ -508,50 +460,82 @@ class BrightDataPanel(QWidget):
                 self, "Decodo 계정 필요",
                 "사용자명과 비밀번호를 모두 입력하세요.",
             )
-            self._set_status("Decodo 저장 취소 — 사용자명/비밀번호가 비어 있습니다.",
-                             error=True)
+            self.lbl_decodo_saved.setText("저장 실패: 사용자명과 비밀번호를 입력하세요.")
+            self._set_decodo_ready("수집 준비 안 됨 — 계정이 저장되지 않았습니다.",
+                                   error=True)
             return
         try:
             path = decodo.save_settings(settings)
         except OSError as e:
+            guide = "EXE를 쓰기 가능한 폴더로 옮기거나 해당 폴더의 쓰기 권한을 확인하세요."
             QMessageBox.critical(self, "저장 실패",
-                                 f"Decodo 설정을 쓸 수 없습니다:\n{e}")
-            self._set_status(f"Decodo 저장 실패: {e}", error=True)
+                                 f"Decodo 설정을 쓸 수 없습니다:\n{e}\n\n{guide}")
+            self.lbl_decodo_saved.setText(f"저장 실패: {e} — {guide}")
+            self._set_decodo_ready("수집 준비 안 됨 — 계정을 저장하지 못했습니다.",
+                                   error=True)
             return
         self.edit_decodo_password.clear()
         self.load_from_decodo()
         log_line(f"[설정] Decodo 계정 저장: {settings.username} ({path})")
-        self._set_status(
-            f"Decodo 저장됨: {settings.username} "
-            f"({decodo.masked_secret(settings.password)}) — "
-            "Coupang 카테고리 탭에서 이 계정 회선을 사용합니다.",
-            error=False,
+        self.lbl_decodo_saved.setText(f"계정 저장 완료: {settings.username}")
+        self._set_decodo_ready("Decodo 연결과 수집 환경 확인 중...")
+        saved = decodo.load_settings(path)
+        self._start_call(
+            lambda: _check_decodo_readiness(saved),
+            on_ok=self._on_decodo_readiness,
+            on_error=lambda _e: self._set_decodo_check_failed(),
+            busy_text="",
         )
 
-    def collect_settings_preserving_stored(self) -> brightdata.BrightDataSettings:
-        """저장 버튼 경로 — 빈 토큰/비밀번호는 기존 저장값을 유지한다.
+    def _on_decodo_readiness(self, result: _DecodoReadiness) -> None:
+        runtime_ok = not result.runtime_errors
+        runtime_message = (
+            "Camoufox·GeoIP·Patchright 확인됨" if runtime_ok else
+            "; ".join(result.runtime_errors) +
+            " SellerCollector.exe --setup-runtime 을 실행하세요."
+        )
+        if result.connection_ok and runtime_ok:
+            message = f"사용 준비 완료 — Decodo {result.connection_message}; {runtime_message}."
+            error = False
+        else:
+            message = (
+                f"수집 준비 안 됨 — 연결: {result.connection_message}; "
+                f"실행 환경: {runtime_message}"
+            )
+            error = True
+        self._set_decodo_ready(message, error=error)
 
-        토큰·비밀번호 위젯은 보안상 전체 값을 복원하지 않으므로(placeholder 마스크만
-        표시), 사용자가 새 값을 입력하지 않았으면 저장 파일의 기존 값을 그대로 둔다.
-        """
+    def _set_decodo_check_failed(self) -> None:
+        message = "수집 준비 안 됨 — 사용 준비 검사 중 오류가 발생했습니다. 다시 저장해 확인하세요."
+        self._set_decodo_ready(message, error=True)
+
+    def _set_decodo_ready(self, message: str, error: bool | None = None) -> None:
+        color = "#b3261e" if error else "#1b6e3c" if error is False else "#475569"
+        self.lbl_decodo_ready.setStyleSheet(f"color: {color};")
+        self.lbl_decodo_ready.setText(message)
+
+    def collect_settings_preserving_stored(self) -> brightdata.BrightDataSettings:
+        """빈 토큰과 화면에서 제거한 ISP 설정은 기존 저장값을 유지한다."""
         s = self.collect_settings()
         stored = brightdata.load_settings()
-        if not s.api_token and stored.api_token:
-            s = dataclasses_replace(s, api_token=stored.api_token)
-        if not s.isp_password and stored.isp_password:
-            s = dataclasses_replace(s, isp_password=stored.isp_password)
-        return s
+        return dataclasses_replace(
+            stored,
+            api_token=s.api_token or stored.api_token,
+            account_name=s.account_name,
+            unlocker_zone=s.unlocker_zone,
+            country=s.country,
+        )
 
     def set_external_busy(self, busy: bool) -> None:
         """수집 실행 중 자격 증명 변경 잠금 (다른 탭의 규율과 동일)."""
+        self._external_busy = busy
         for w in (self.edit_token, self.edit_account_name, self.edit_unlocker_zone,
-                  self.edit_country, self.chk_isp_enabled, self.edit_customer_id,
-                  self.edit_isp_zone, self.edit_isp_password, self.chk_show_token,
-                  self.edit_decodo_user, self.edit_decodo_password):
-            w.setEnabled(not busy)
-        for b in (self.btn_save, self.btn_balance, self.btn_fetch_password,
-                  self.btn_test_proxy, self.btn_open_token_page, self.btn_save_decodo):
-            b.setEnabled(not busy)
+                  self.edit_country, self.chk_show_token, self.edit_decodo_user,
+                  self.edit_decodo_password):
+            w.setEnabled(not busy and not self._call_busy())
+        for b in (self.btn_save, self.btn_balance, self.btn_open_token_page,
+                  self.btn_save_decodo):
+            b.setEnabled(not busy and not self._call_busy())
 
     # ── 비동기 호출 공통 ─────────────────────────────────────────────────
     def _start_call(self, fn, on_ok, on_error, busy_text: str) -> bool:
@@ -562,9 +546,12 @@ class BrightDataPanel(QWidget):
         """
         if self._worker is not None and self._worker.isRunning():
             return False
-        self._set_status(busy_text, error=False)
+        if busy_text:
+            self._set_status(busy_text, error=False)
         for b in self._action_buttons():
             b.setEnabled(False)
+        self.edit_decodo_user.setEnabled(False)
+        self.edit_decodo_password.setEnabled(False)
         worker = _BrightDataCallWorker(fn, self)
         worker.succeeded.connect(on_ok)
         worker.failed.connect(on_error)
@@ -580,14 +567,15 @@ class BrightDataPanel(QWidget):
     def _on_call_finished(self) -> None:
         self._worker = None
         for b in self._action_buttons():
-            b.setEnabled(True)
+            b.setEnabled(not self._external_busy)
+        self.edit_decodo_user.setEnabled(not self._external_busy)
+        self.edit_decodo_password.setEnabled(not self._external_busy)
 
     def _call_busy(self) -> bool:
         return self._worker is not None and self._worker.isRunning()
 
     def _action_buttons(self) -> tuple[QPushButton, ...]:
-        return (self.btn_save, self.btn_balance, self.btn_fetch_password,
-                self.btn_test_proxy)
+        return (self.btn_save, self.btn_balance, self.btn_save_decodo)
 
     # ── 내부 ─────────────────────────────────────────────────────────────
     def _set_api_error_status(self, err: Exception) -> None:

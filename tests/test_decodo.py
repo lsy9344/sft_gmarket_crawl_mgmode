@@ -176,8 +176,9 @@ class FetchExitIpTest(unittest.TestCase):
         self.assertIn(proxy["username"], proxy_url)
         self.assertIn("secret", proxy_url)
 
-    def test_407_is_auth_error(self):
-        sess = _FakeExitSession(_FakeExitResponse(status=407, text="denied"))
+    def test_407_invalid_credentials_is_auth_error(self):
+        sess = _FakeExitSession(_FakeExitResponse(
+            status=407, text="Invalid username or password"))
         with self.assertRaises(decodo.DecodoError) as ctx:
             decodo.fetch_exit_ip(
                 {"server": "http://gate.decodo.com:7000",
@@ -185,6 +186,61 @@ class FetchExitIpTest(unittest.TestCase):
                 session=sess,
             )
         self.assertIn("407", str(ctx.exception))
+        self.assertEqual(ctx.exception.kind, "auth")
+
+    def test_407_traffic_limit_is_quota_error(self):
+        sess = _FakeExitSession(_FakeExitResponse(
+            status=407, text="User traffic limit exceeded for secret-account"))
+        with self.assertRaises(decodo.DecodoError) as ctx:
+            decodo.fetch_exit_ip(
+                {"server": "http://gate.decodo.com:7000",
+                 "username": "u", "password": "secret-password"},
+                session=sess,
+            )
+        self.assertEqual(ctx.exception.kind, "quota")
+        self.assertIn("사용량", str(ctx.exception))
+        self.assertNotIn("secret", str(ctx.exception))
+
+    def test_407_without_reason_does_not_guess_auth_or_quota(self):
+        sess = _FakeExitSession(_FakeExitResponse(status=407, text="denied"))
+        with self.assertRaises(decodo.DecodoError) as ctx:
+            decodo.fetch_exit_ip(
+                {"server": "http://gate.decodo.com:7000",
+                 "username": "u", "password": "p"},
+                session=sess,
+            )
+        self.assertEqual(ctx.exception.kind, "unknown_407")
+        self.assertIn("인증 정보와 데이터 사용량", str(ctx.exception))
+
+    def test_407_proxy_exception_classifies_traffic_limit_without_raw_url(self):
+        error = decodo.requests.exceptions.ProxyError(
+            "407 traffic limit exceeded at http://u:secret-password@gate.decodo.com"
+        )
+        sess = _FakeExitSession(error)
+        with self.assertRaises(decodo.DecodoError) as ctx:
+            decodo.fetch_exit_ip(
+                {"server": "http://gate.decodo.com:7000",
+                 "username": "u", "password": "secret-password"},
+                session=sess,
+            )
+        self.assertEqual(ctx.exception.kind, "quota")
+        self.assertNotIn("secret-password", str(ctx.exception))
+        self.assertNotIn("http://u:", str(ctx.exception))
+
+    def test_timeout_and_connection_error_do_not_expose_proxy_password(self):
+        proxy = {"server": "http://gate.decodo.com:7000",
+                 "username": "u", "password": "secret-password"}
+        cases = (
+            (decodo.requests.Timeout("secret-password"), "timeout"),
+            (decodo.requests.exceptions.ProxyError("secret-password"), "connection"),
+        )
+        for error, kind in cases:
+            with self.subTest(kind=kind):
+                sess = _FakeExitSession(error)
+                with self.assertRaises(decodo.DecodoError) as ctx:
+                    decodo.fetch_exit_ip(proxy, session=sess)
+                self.assertEqual(ctx.exception.kind, kind)
+                self.assertNotIn("secret-password", str(ctx.exception))
 
     def test_missing_proxy_raises(self):
         with self.assertRaises(decodo.DecodoError):

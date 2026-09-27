@@ -74,6 +74,31 @@ class InitialStateTest(_MainWindowTestCase):
         self.assertTrue(event.isAccepted())
 
 
+class CollectionLayoutTest(_MainWindowTestCase):
+    def test_collection_tabs_show_half_width_log_and_full_width_results(self) -> None:
+        from PyQt6.QtWidgets import QSplitter
+
+        self.win.resize(1100, 900)
+        self.win.show()
+
+        for index in range(6):
+            with self.subTest(tab=self.win.tab_widget.tabText(index)):
+                panel = self.win.tab_widget.widget(index)
+                self.win.tab_widget.setCurrentIndex(index)
+                self.app.processEvents()
+
+                workspace = panel.findChild(QSplitter, "collectionWorkspace")
+                self.assertIsNotNone(workspace)
+                upper = workspace.widget(0)
+                self.assertIsInstance(upper, QSplitter)
+
+                left, log = upper.sizes()
+                self.assertGreaterEqual(log / (left + log), 0.45)
+                self.assertLessEqual(log / (left + log), 0.55)
+                self.assertGreaterEqual(upper.widget(1).height(), 250)
+                self.assertGreaterEqual(workspace.widget(1).height(), 200)
+
+
 class GmarketRuntimePreflightTest(_MainWindowTestCase):
     def test_missing_runtime_blocks_prescan_before_storage_or_worker(self) -> None:
         from app.core.gmarket_preflight import GmarketPreflightResult

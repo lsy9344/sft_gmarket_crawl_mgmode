@@ -6,7 +6,7 @@ import dataclasses
 import os
 
 from PyQt6.QtWidgets import (
-    QHBoxLayout,
+    QGridLayout,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -52,6 +52,7 @@ from app.ui.coupang_panel import CoupangPanel
 from app.ui.foodspring_panel import FoodSpringPanel
 from app.ui.gmarket_category_panel import GmarketCategoryPanel
 from app.ui.widgets.brightdata_panel import BrightDataPanel
+from app.ui.widgets.collection_workspace import collection_workspace
 from app.ui.widgets.log_panel import LogPanel
 from app.ui.widgets.prescan_table import PrescanTable
 from app.ui.widgets.progress_panel import ProgressPanel
@@ -131,27 +132,38 @@ class MainWindow(QMainWindow):
         # Gmarket 탭
         gmarket_tab = QWidget()
         gmarket_layout = QVBoxLayout(gmarket_tab)
+        gmarket_layout.setContentsMargins(12, 12, 12, 12)
+        gmarket_layout.setSpacing(8)
+
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(8)
 
         self.settings = SettingsPanel()
-        gmarket_layout.addWidget(self.settings)
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setWidget(self.settings)
 
-        btn_row = QHBoxLayout()
+        btn_row = QGridLayout()
+        btn_row.setSpacing(6)
         self.btn_prescan = QPushButton("사전 조사")
         self.btn_start = QPushButton("수집 시작")
         self.btn_pause = QPushButton("일시정지")
         self.btn_cancel = QPushButton("취소")
         self.btn_resume_run = QPushButton("이어서 수집")
         self.btn_reset = QPushButton("초기화")
-        for b in (
+        for index, b in enumerate((
             self.btn_prescan,
             self.btn_start,
+            self.btn_resume_run,
             self.btn_pause,
             self.btn_cancel,
-            self.btn_resume_run,
             self.btn_reset,
-        ):
-            btn_row.addWidget(b)
-        gmarket_layout.addLayout(btn_row)
+        )):
+            row, col = divmod(index, 3)
+            btn_row.addWidget(b, row, col)
+        controls_layout.addLayout(btn_row)
 
         self.btn_prescan.clicked.connect(self.on_prescan)
         self.btn_start.clicked.connect(self.on_start)
@@ -164,18 +176,15 @@ class MainWindow(QMainWindow):
         self.progress = ProgressPanel()
         self.log = LogPanel()
         self.result_table = ResultTable()
+        controls_layout.addWidget(settings_scroll, stretch=1)
+        controls_layout.addWidget(self.progress)
 
-        body = QWidget()
-        body_layout = QVBoxLayout(body)
-        body_layout.addWidget(self.prescan_table)
-        body_layout.addWidget(self.progress)
-        body_layout.addWidget(self.log)
-        body_layout.addWidget(self.result_table)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(body)
-        gmarket_layout.addWidget(scroll, stretch=1)
+        self.gmarket_data_tabs = QTabWidget()
+        self.gmarket_data_tabs.addTab(self.result_table, "수집 결과")
+        self.gmarket_data_tabs.addTab(self.prescan_table, "사전 조사")
+        gmarket_layout.addWidget(collection_workspace(
+            controls, self.log, self.gmarket_data_tabs
+        ))
 
         self.tab_widget.addTab(gmarket_tab, "Gmarket")
 
@@ -383,6 +392,7 @@ class MainWindow(QMainWindow):
         self.prescan_results = list(results)
         if results:
             self.prescan_table.set_results(results)
+            self.gmarket_data_tabs.setCurrentWidget(self.prescan_table)
             new_total = self.prescan_table.total_new()
             total_all = sum(r.total_codes for r in results)
             self.log.append_log(
@@ -509,6 +519,7 @@ class MainWindow(QMainWindow):
         self._success = 0
         self._processed = 0
         self.result_table.clear_records()
+        self.gmarket_data_tabs.setCurrentWidget(self.result_table)
         self.progress.reset()
         self.progress.start(plan.total_targets)
 
