@@ -50,6 +50,13 @@ from app.ui.widgets.result_table import ResultTable
 
 ROLE_CODE = 0x0100
 ROLE_NAME = 0x0101
+ROLE_GROUP = 0x0102
+
+# 화면에서 함께 선택할 대분류 묶음. 저장된 카테고리 트리는 그대로 유지한다.
+HOME_DECO_CODES = frozenset({
+    "100000031", "100000039", "100000093", "100000014",
+    "100000085", "100000041", "100000083", "100000112",
+})
 
 
 class GmarketCategoryPanel(QWidget):
@@ -113,6 +120,7 @@ class GmarketCategoryPanel(QWidget):
         self.category_tree = QTreeWidget()
         self.category_tree.setHeaderLabels(["카테고리", "코드"])
         self.category_tree.setColumnWidth(0, 240)
+        self.category_tree.setToolTip("홈데코 묶음을 선택하면 그 아래 모든 카테고리를 수집합니다.")
         self.category_tree.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -137,7 +145,8 @@ class GmarketCategoryPanel(QWidget):
         self.chk_include_subs = QCheckBox("하위 카테고리 포함 수집")
         self.chk_include_subs.setChecked(True)
         self.chk_include_subs.setToolTip(
-            "체크 시 선택한 카테고리 + 그 아래 모든 하위(중/소분류)를 각각 수집합니다."
+            "체크 시 선택한 카테고리 + 그 아래 모든 하위(중/소분류)를 각각 수집합니다.\n"
+            "묶음을 선택하면 체크 여부와 관계없이 하위 전체를 수집합니다."
         )
         form.addRow("하위 카테고리:", self.chk_include_subs)
 
@@ -253,13 +262,26 @@ class GmarketCategoryPanel(QWidget):
         """트리 루트(대분류 목록)를 표시한다."""
         self._roots = list(roots)
         self.category_tree.clear()
+        home_deco = None
         for node in roots:
-            self.category_tree.addTopLevelItem(self._make_item(node))
+            item = self._make_item(node)
+            if node.code in HOME_DECO_CODES:
+                if home_deco is None:
+                    home_deco = QTreeWidgetItem(["홈데코", "묶음"])
+                    home_deco.setData(0, ROLE_GROUP, True)
+                    home_deco.setData(0, ROLE_NAME, "홈데코")
+                    self.category_tree.addTopLevelItem(home_deco)
+                    home_deco.setExpanded(True)
+                home_deco.addChild(item)
+            else:
+                self.category_tree.addTopLevelItem(item)
         stamp = fetched_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         label_total = total or count_nodes(roots)
         self.cache_label.setText(
             f"대분류 {len(roots)} · 전체 {label_total:,}개 · 불러온 시각: {stamp}"
         )
+        self._filter_tree(self.tree_filter.text())
+        self._on_all_targets_toggled(self.chk_all_targets.isChecked())
 
     def _make_item(self, node: GmarketCategoryNode) -> QTreeWidgetItem:
         item = QTreeWidgetItem([node.name, node.code])
@@ -276,6 +298,11 @@ class GmarketCategoryPanel(QWidget):
             self.selected_label.setText("선택: 없음 (대분류/중분류/소분류를 선택하세요)")
             return
         path = self._item_path_names(current)
+        if current.data(0, ROLE_GROUP):
+            self.selected_label.setText(
+                f"선택: {current.text(0)} 묶음 — 하위 전체 {len(self.build_targets())}개 수집"
+            )
+            return
         extra = ""
         if self.chk_include_subs.isChecked():
             child_count = self._descendant_count(current)
@@ -305,6 +332,10 @@ class GmarketCategoryPanel(QWidget):
 
         def walk(item: QTreeWidgetItem) -> bool:
             matched = query in item.text(0).lower() or query in item.text(1).lower()
+            if matched and item.data(0, ROLE_GROUP):
+                self._set_all_visible(item)
+                item.setExpanded(True)
+                return True
             for i in range(item.childCount()):
                 if walk(item.child(i)):
                     matched = True
@@ -330,7 +361,7 @@ class GmarketCategoryPanel(QWidget):
         node: QTreeWidgetItem | None = item
         while node is not None:
             name = node.data(0, ROLE_NAME) or node.text(0)
-            if name:
+            if name and not node.data(0, ROLE_GROUP):
                 names.append(str(name))
             node = node.parent()
         return " > ".join(reversed(names))
@@ -343,12 +374,12 @@ class GmarketCategoryPanel(QWidget):
         return total
 
     def selected_item(self) -> QTreeWidgetItem | None:
-        """현재 선택된 트리 아이템 (그룹/헤더가 아니면)."""
+        """현재 선택된 카테고리 또는 수집 가능한 묶음."""
         item = self.category_tree.currentItem()
         if item is None:
             return None
         code = item.data(0, ROLE_CODE)
-        if not code:
+        if not code and not item.data(0, ROLE_GROUP):
             return None
         return item
 
@@ -374,17 +405,21 @@ class GmarketCategoryPanel(QWidget):
             )
 
         if self.chk_all_targets.isChecked():
-            for i in range(self.category_tree.topLevelItemCount()):
-                root = self.category_tree.topLevelItem(i)
-                for j in range(root.childCount()):
-                    add(root.child(j))
+            items = {
+                child.data(0, ROLE_CODE): child
+                for child in self._iter_children(self.category_tree.invisibleRootItem())
+                if child.data(0, ROLE_CODE)
+            }
+            for root in self._roots:
+                for child in root.children:
+                    add(items[child.code])
             return targets
 
         item = self.selected_item()
         if item is None:
             return targets
         add(item)
-        if self.chk_include_subs.isChecked():
+        if self.chk_include_subs.isChecked() or item.data(0, ROLE_GROUP):
             for child in self._iter_children(item):
                 add(child)
         return targets

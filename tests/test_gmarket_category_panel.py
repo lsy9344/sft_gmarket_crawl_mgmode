@@ -95,6 +95,68 @@ class GmarketCategoryPanelTest(unittest.TestCase):
         self.assertEqual(codes, ["200000498", "200000502"])
         self.assertTrue(all(" > " in t.label for t in targets))
 
+    def _set_home_deco(self):
+        roots = [
+            GmarketCategoryNode("100000031", "가구/DIY", "L", children=[
+                GmarketCategoryNode("200000001", "책상", "M", children=[
+                    GmarketCategoryNode("300000001", "컴퓨터책상", "S"),
+                ]),
+            ]),
+            GmarketCategoryNode("100000039", "침구/커튼", "L", children=[
+                GmarketCategoryNode("200000002", "커튼", "M"),
+            ]),
+            *_roots(),
+        ]
+        self.panel.set_category_roots(roots, "테스트")
+        group = self.panel.category_tree.topLevelItem(0)
+        self.assertEqual(group.text(0), "홈데코")
+        self.assertEqual(group.childCount(), 2)
+        self.panel.category_tree.setCurrentItem(group)
+        return group
+
+    def test_group_selects_all_descendants_without_subs_checked(self):
+        self._set_home_deco()
+        self.panel.chk_include_subs.setChecked(False)
+        targets = self.panel.build_targets()
+        self.assertEqual({t.code for t in targets}, {
+            "100000031", "100000039", "200000001", "200000002", "300000001",
+        })
+        self.assertEqual(len(targets), 5)
+        self.assertIn("하위 전체 5개", self.panel.selected_label.text())
+        self.assertIn("가구/DIY > 책상 > 컴퓨터책상", [t.label for t in targets])
+        with tempfile.TemporaryDirectory() as td:
+            self.panel.output_dir_edit.setText(td)
+            self.assertEqual(len(self.panel.build_config().targets), 5)
+
+    def test_group_keeps_individual_selection_and_all_mode(self):
+        self._set_home_deco()
+        self._select("200000001")
+        self.panel.chk_include_subs.setChecked(False)
+        self.assertEqual([t.code for t in self.panel.build_targets()], ["200000001"])
+        self.assertEqual(self.panel.build_targets()[0].label, "가구/DIY > 책상")
+        self.panel.chk_all_targets.setChecked(True)
+        self.assertEqual([t.code for t in self.panel.build_targets()], [
+            "200000001", "200000002", "200000498", "200000502",
+        ])
+
+    def test_group_search_and_filtered_selection_include_hidden_children(self):
+        group = self._set_home_deco()
+        self.panel.tree_filter.setText("책상")
+        self.assertTrue(group.child(1).isHidden())
+        self.assertEqual(len(self.panel.build_targets()), 5)
+        self.panel.tree_filter.setText("홈데코")
+        self.assertFalse(group.isHidden())
+        self.assertFalse(group.child(1).isHidden())
+        self.assertFalse(group.child(0).child(0).isHidden())
+
+    def test_refresh_preserves_group_and_all_targets_mode(self):
+        self._set_home_deco()
+        self.panel.chk_all_targets.setChecked(True)
+        self.panel.set_category_roots(self.panel._roots, "갱신")
+        self.assertEqual(self.panel.category_tree.topLevelItem(0).childCount(), 2)
+        self.assertEqual(len(self.panel.build_targets()), 4)
+        self.assertIn("중분류 4개", self.panel.selected_label.text())
+
     def test_filter_tree_hides_non_matching(self):
         self.panel.tree_filter.setText("자켓")
         tree = self.panel.category_tree
