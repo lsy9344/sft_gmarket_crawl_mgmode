@@ -10,12 +10,14 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -23,6 +25,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -35,6 +38,7 @@ from PyQt6.QtWidgets import (
 from app.core.applog import log_line
 from app.core.coupang.categories import CategoryNode
 from app.core.coupang.search_crawler import SearchRunConfig
+from app.ui.widgets.collection_workspace import collection_workspace
 
 DISPLAY_COLUMNS = (
     "vendor_id",
@@ -86,12 +90,21 @@ class CategoryPanel(QWidget):
         layout.addWidget(info)
 
         # ── 카테고리 트리 + 설정 ─────────────────────────────────────────
-        middle = QHBoxLayout()
+        left_column = QWidget()
+        left_layout = QVBoxLayout(left_column)
+        left_layout.setContentsMargins(0, 0, 0, 0)
 
-        tree_box = QVBoxLayout()
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+
+        tree_panel = QWidget()
+        tree_box = QVBoxLayout(tree_panel)
+        tree_box.setContentsMargins(0, 0, 0, 0)
         tree_head = QHBoxLayout()
         self.btn_refresh_categories = QPushButton("카테고리 목록 새로고침")
         self.cache_label = QLabel("카테고리 목록 없음 — 새로고침을 눌러 쿠팡에서 불러오세요")
+        self.cache_label.setWordWrap(True)
         tree_head.addWidget(self.btn_refresh_categories)
         tree_head.addWidget(self.cache_label, stretch=1)
         tree_box.addLayout(tree_head)
@@ -102,8 +115,9 @@ class CategoryPanel(QWidget):
         self.category_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         tree_box.addWidget(self.category_tree, stretch=1)
         self.selected_label = QLabel("선택: 없음")
+        self.selected_label.setWordWrap(True)
         tree_box.addWidget(self.selected_label)
-        middle.addLayout(tree_box, stretch=1)
+        controls_layout.addWidget(tree_panel, stretch=1)
 
         settings_group = QGroupBox("실행 설정")
         form = QFormLayout(settings_group)
@@ -143,38 +157,65 @@ class CategoryPanel(QWidget):
         delay_row.addWidget(QLabel("초 (페이지 간격)"))
         form.addRow("페이지 딜레이:", delay_row)
 
-        middle.addWidget(settings_group)
-        layout.addLayout(middle, stretch=1)
+        controls_layout.addWidget(settings_group)
 
         # ── 제어 버튼 ────────────────────────────────────────────────────
-        btn_row = QHBoxLayout()
+        btn_row = QGridLayout()
+        btn_row.setHorizontalSpacing(8)
+        btn_row.setVerticalSpacing(8)
         self.btn_start = QPushButton("수집 시작")
         self.btn_pause = QPushButton("일시정지")
         self.btn_resume = QPushButton("재개")
         self.btn_cancel = QPushButton("취소")
         self.btn_open_result = QPushButton("결과 열기")
-        for b in (self.btn_start, self.btn_pause, self.btn_resume,
-                  self.btn_cancel, self.btn_open_result):
-            btn_row.addWidget(b)
-        layout.addLayout(btn_row)
+        buttons = (self.btn_start, self.btn_pause, self.btn_resume,
+                   self.btn_cancel, self.btn_open_result)
+        for index, button in enumerate(buttons):
+            btn_row.addWidget(button, index // 3, index % 3)
+        for column in range(3):
+            btn_row.setColumnStretch(column, 1)
+        left_layout.addLayout(btn_row)
 
         self.phase_label = QLabel("대기 중")
         self.progress_label = QLabel("")
         self.stats_label = QLabel("")
-        layout.addWidget(self.phase_label)
-        layout.addWidget(self.progress_label)
-        layout.addWidget(self.stats_label)
+        self.phase_label.setWordWrap(True)
+        self.progress_label.setWordWrap(True)
+        self.stats_label.setWordWrap(True)
+        controls_layout.addWidget(self.phase_label)
+        controls_layout.addWidget(self.progress_label)
+        controls_layout.addWidget(self.stats_label)
 
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        controls_scroll.setWidget(controls)
+        left_layout.addWidget(controls_scroll, stretch=1)
+
+        log_panel = QGroupBox("실시간 로그")
+        log_layout = QVBoxLayout(log_panel)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumHeight(160)
-        layout.addWidget(self.log_view)
+        log_layout.addWidget(self.log_view)
 
+        results_panel = QGroupBox("수집 결과")
+        results_layout = QVBoxLayout(results_panel)
         self.result_table = QTableWidget(0, len(DISPLAY_COLUMNS))
         self.result_table.setHorizontalHeaderLabels([COLUMN_LABELS[c] for c in DISPLAY_COLUMNS])
-        self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        result_header = self.result_table.horizontalHeader()
+        result_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        result_header.setStretchLastSection(False)
+        result_header.setMinimumSectionSize(110)
+        for column, width in enumerate((130, 150, 170, 130, 150, 150, 220, 110)):
+            self.result_table.setColumnWidth(column, width)
         self.result_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        layout.addWidget(self.result_table, stretch=1)
+        results_layout.addWidget(self.result_table)
+
+        layout.addWidget(
+            collection_workspace(left_column, log_panel, results_panel), stretch=1
+        )
 
         self.category_tree.currentItemChanged.connect(self._on_tree_select)
 

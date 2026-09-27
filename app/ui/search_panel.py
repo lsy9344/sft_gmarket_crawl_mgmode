@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -17,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -26,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from app.core.applog import log_line
 from app.core.coupang.search_crawler import SearchRunConfig
+from app.ui.widgets.collection_workspace import collection_workspace
 
 DISPLAY_COLUMNS = (
     "vendor_id",
@@ -59,13 +63,20 @@ class SearchPanel(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(4, 4, 8, 4)
+        controls_layout.setSpacing(8)
 
         info = QLabel(
             "대상: 쿠팡 키워드 검색 결과 — 정렬 4종(판매량/낮은가격/높은가격/최신) 순회 수집. "
             "랭킹순 제외, 로켓배송 상품은 기본 제외."
         )
         info.setWordWrap(True)
-        layout.addWidget(info)
+        controls_layout.addWidget(info)
 
         settings_group = QGroupBox("실행 설정")
         form = QFormLayout(settings_group)
@@ -114,35 +125,62 @@ class SearchPanel(QWidget):
         delay_row.addWidget(QLabel("초 (정렬 전환 간격)"))
         form.addRow("페이지 딜레이:", delay_row)
 
-        layout.addWidget(settings_group)
+        controls_layout.addWidget(settings_group)
 
-        btn_row = QHBoxLayout()
         self.btn_start = QPushButton("수집 시작")
         self.btn_pause = QPushButton("일시정지")
         self.btn_resume = QPushButton("재개")
         self.btn_cancel = QPushButton("취소")
         self.btn_open_result = QPushButton("결과 열기")
-        for b in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_cancel, self.btn_open_result):
-            btn_row.addWidget(b)
-        layout.addLayout(btn_row)
+        btn_row_primary = QHBoxLayout()
+        for b in (self.btn_start, self.btn_pause, self.btn_resume):
+            btn_row_primary.addWidget(b, 1)
+        btn_row_secondary = QHBoxLayout()
+        for b in (self.btn_cancel, self.btn_open_result):
+            btn_row_secondary.addWidget(b, 1)
+        controls_layout.addLayout(btn_row_primary)
+        controls_layout.addLayout(btn_row_secondary)
 
+        progress_group = QGroupBox("진행 상태")
+        progress_layout = QVBoxLayout(progress_group)
         self.phase_label = QLabel("대기 중")
         self.progress_label = QLabel("")
         self.stats_label = QLabel("")
-        layout.addWidget(self.phase_label)
-        layout.addWidget(self.progress_label)
-        layout.addWidget(self.stats_label)
+        progress_layout.addWidget(self.phase_label)
+        progress_layout.addWidget(self.progress_label)
+        progress_layout.addWidget(self.stats_label)
+        controls_layout.addWidget(progress_group)
+        controls_layout.addStretch(1)
 
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        controls_scroll.setWidget(controls)
+
+        log_group = QGroupBox("실행 로그")
+        log_layout = QVBoxLayout(log_group)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumHeight(160)
-        layout.addWidget(self.log_view)
+        log_layout.addWidget(self.log_view)
 
+        results_group = QGroupBox("수집 결과")
+        results_layout = QVBoxLayout(results_group)
         self.result_table = QTableWidget(0, len(DISPLAY_COLUMNS))
         self.result_table.setHorizontalHeaderLabels([COLUMN_LABELS[c] for c in DISPLAY_COLUMNS])
-        self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header = self.result_table.horizontalHeader()
+        assert header is not None
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(False)
+        for column, width in enumerate((110, 170, 180, 110, 145, 125, 220, 95)):
+            self.result_table.setColumnWidth(column, width)
+        self.result_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.result_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.result_table.setAlternatingRowColors(True)
         self.result_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        layout.addWidget(self.result_table, stretch=1)
+        results_layout.addWidget(self.result_table)
+
+        layout.addWidget(collection_workspace(controls_scroll, log_group, results_group), stretch=1)
 
     def _browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "출력 폴더 선택")

@@ -25,8 +25,8 @@ from PyQt6.QtWidgets import (
 from app.core import config
 from app.models.records import SOURCE_BEST
 
-# 한 행에 배치할 카테고리 체크박스 최대 개수 (약 6개마다 줄바꿈)
-_COLUMNS_PER_ROW = 6
+# 좁은 설정 영역에서도 카테고리 이름이 잘리지 않도록 두 칸씩 배치한다.
+_COLUMNS_PER_ROW = 2
 
 
 class SettingsPanel(QWidget):
@@ -98,7 +98,7 @@ class SettingsPanel(QWidget):
 
     # ── 내부 UI 헬퍼 ─────────────────────────────────────────────────
     def _build_category_section(self, title: str, categories: list) -> QGroupBox:
-        """카테고리 체크박스들을 약 6개 단위로 감싸는 그리드 섹션 생성."""
+        """카테고리 체크박스를 두 칸씩 배치하는 그리드 섹션 생성."""
         box = QGroupBox(title)
         grid = QGridLayout(box)
         for index, category in enumerate(categories):

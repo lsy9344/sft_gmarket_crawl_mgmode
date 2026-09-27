@@ -27,6 +27,15 @@ QGroupBox::title {
     font-weight: 700;
 }
 
+/* ── 크기 조절 경계 ────────────────────────────────────────── */
+QSplitter::handle {
+    background-color: #d9dde2;
+}
+
+QSplitter::handle:hover {
+    background-color: #2f6fed;
+}
+
 /* ── 버튼 ──────────────────────────────────────────────────── */
 QPushButton {
     background-color: #2f6fed;

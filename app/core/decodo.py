@@ -158,6 +158,44 @@ def proxy_summary(proxy: dict | None) -> str:
 class DecodoError(RuntimeError):
     """Decodo 회선 확인·연결 실패."""
 
+    def __init__(self, message: str, *, kind: str = "other") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def _proxy_407_error(detail: str) -> DecodoError:
+    """407 본문을 분류하되 응답 원문과 인증 정보는 밖으로 내보내지 않는다."""
+    detail = re.sub(r"https?://[^\s]+@", "", detail.lower())
+    quota_words = ("traffic", "bandwidth", "quota", "balance", "data", "usage")
+    exhausted_words = (
+        "exhaust", "exceed", "reached", "deplet", "insufficient",
+        "used up", "out of", "no traffic", "no balance", "limit",
+    )
+    if any(word in detail for word in quota_words) and any(
+        word in detail for word in exhausted_words
+    ):
+        return DecodoError(
+            "Decodo 데이터 사용량이 소진됐거나 한도를 넘었습니다(HTTP 407). "
+            "Decodo 대시보드의 사용량과 요금제를 확인하세요.",
+            kind="quota",
+        )
+    if any(word in detail for word in (
+        "invalid credential", "wrong password", "incorrect password",
+        "invalid password", "incorrect credential",
+        "invalid username", "wrong username", "authentication failed",
+        "bad credentials", "invalid user",
+    )):
+        return DecodoError(
+            "Decodo 사용자명 또는 비밀번호가 맞지 않습니다(HTTP 407). "
+            "대시보드의 프록시 인증 정보를 다시 입력하세요.",
+            kind="auth",
+        )
+    return DecodoError(
+        "Decodo가 연결을 거부했습니다(HTTP 407). "
+        "인증 정보와 데이터 사용량을 확인하세요.",
+        kind="unknown_407",
+    )
+
 
 @dataclass(frozen=True)
 class ExitIpInfo:
@@ -246,19 +284,37 @@ def fetch_exit_ip(
             response = sess.get(
                 EXIT_IP_URL, proxies=proxies, timeout=timeout,
             )
+        except requests.Timeout:
+            raise DecodoError(
+                "Decodo 연결 시간이 초과됐습니다. 네트워크를 확인한 뒤 다시 저장하세요.",
+                kind="timeout",
+            ) from None
+        except requests.exceptions.ProxyError as e:
+            if "407" in str(e):
+                raise _proxy_407_error(str(e)) from None
+            raise DecodoError(
+                "Decodo 프록시에 연결할 수 없습니다. 네트워크와 프록시 주소를 확인하세요.",
+                kind="connection",
+            ) from None
         except requests.RequestException as e:
-            raise DecodoError(f"회선 확인 요청 실패: {e}") from e
+            if "407" in str(e):
+                raise _proxy_407_error(str(e)) from None
+            raise DecodoError(
+                "Decodo 회선 확인 서버에 연결할 수 없습니다. 네트워크를 확인하세요.",
+                kind="connection",
+            ) from None
         status = int(getattr(response, "status_code", 0) or 0)
         if status == 407:
-            raise DecodoError(
-                "프록시 인증 실패(HTTP 407) — Decodo 사용자명/비밀번호를 확인하세요"
-            )
+            raise _proxy_407_error(str(getattr(response, "text", "") or ""))
         raise_for_status = getattr(response, "raise_for_status", None)
         if raise_for_status is not None:
             try:
                 raise_for_status()
-            except requests.RequestException as e:
-                raise DecodoError(f"회선 확인 응답 오류: {e}") from e
+            except requests.RequestException:
+                raise DecodoError(
+                    f"Decodo 회선 확인 응답 오류(HTTP {status}).",
+                    kind="response",
+                ) from None
         text = getattr(response, "text", None)
         if text is None:
             raw = getattr(response, "content", b"")

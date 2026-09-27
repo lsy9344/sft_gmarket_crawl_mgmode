@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -30,8 +31,8 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
-    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -46,6 +47,7 @@ from app.core.aliexpress_category_crawler import (
     AliexpressCategoryRunConfig,
     AliexpressCrawlSummary,
 )
+from app.ui.widgets.collection_workspace import collection_workspace
 
 ROLE_ID = 0x0100
 ROLE_URL = 0x0101
@@ -137,9 +139,11 @@ class AliexpressCategoryPanel(QWidget):
 
         main_layout.addWidget(banner_frame)
 
-        # ── 2. 중앙 분할 영역 (좌: 카테고리 선택 / 우: 수집 옵션) ─────────
-        middle_splitter = QSplitter(Qt.Orientation.Horizontal)
-        middle_splitter.setChildrenCollapsible(False)
+        # ── 2. 작업 영역: 왼쪽 조작 패널 / 오른쪽 로그 / 아래 결과표 ────────
+        controls_container = QWidget()
+        controls_layout = QVBoxLayout(controls_container)
+        controls_layout.setContentsMargins(0, 0, 8, 0)
+        controls_layout.setSpacing(10)
 
         # ── [좌측] 카테고리 선택 컨테이너 ───────────────────────────────
         left_container = QGroupBox("카테고리 대상 선택")
@@ -219,12 +223,12 @@ class AliexpressCategoryPanel(QWidget):
         self.selected_target_label.setStyleSheet("font-weight: bold; color: #2563eb; padding: 2px 4px;")
         left_layout.addWidget(self.selected_target_label)
 
-        middle_splitter.addWidget(left_container)
+        controls_layout.addWidget(left_container)
 
-        # ── [우측] 수집 옵션 설정 컨테이너 ──────────────────────────────
-        right_container = QGroupBox("수집 옵션 및 파라미터")
-        right_layout = QVBoxLayout(right_container)
-        right_layout.setSpacing(8)
+        # ── 수집 옵션 설정 컨테이너 ─────────────────────────────────────
+        options_container = QGroupBox("수집 옵션 및 파라미터")
+        options_layout = QVBoxLayout(options_container)
+        options_layout.setSpacing(8)
 
         form_layout = QFormLayout()
         form_layout.setSpacing(10)
@@ -253,7 +257,7 @@ class AliexpressCategoryPanel(QWidget):
         out_layout.addWidget(btn_browse)
         form_layout.addRow("저장 폴더:", out_layout)
 
-        right_layout.addLayout(form_layout)
+        options_layout.addLayout(form_layout)
 
         # 수집 안전 규율 배너
         safety_box = QFrame()
@@ -275,19 +279,13 @@ class AliexpressCategoryPanel(QWidget):
         )
         s_text.setStyleSheet("color: #334155; font-size: 11px;")
         s_layout.addWidget(s_text)
-        right_layout.addWidget(safety_box)
-
-        right_layout.addStretch()
-
-        middle_splitter.addWidget(right_container)
-        middle_splitter.setStretchFactor(0, 3)
-        middle_splitter.setStretchFactor(1, 2)
-
-        main_layout.addWidget(middle_splitter, stretch=2)
+        options_layout.addWidget(safety_box)
+        controls_layout.addWidget(options_container)
 
         # ── 3. 액션 제어 버튼 바 ────────────────────────────────────────
-        action_bar = QHBoxLayout()
-        action_bar.setSpacing(8)
+        action_bar = QGridLayout()
+        action_bar.setHorizontalSpacing(8)
+        action_bar.setVerticalSpacing(6)
 
         self.btn_start = QPushButton("▶ 수집 시작")
         self.btn_start.setStyleSheet("""
@@ -303,27 +301,26 @@ class AliexpressCategoryPanel(QWidget):
             QPushButton:disabled { background-color: #94a3b8; }
         """)
         self.btn_start.clicked.connect(self._on_start_clicked)
-        action_bar.addWidget(self.btn_start)
+        action_bar.addWidget(self.btn_start, 0, 0, 1, 2)
 
         self.btn_pause = QPushButton("⏸ 일시정지")
         self.btn_pause.clicked.connect(self.pause_requested.emit)
-        action_bar.addWidget(self.btn_pause)
+        action_bar.addWidget(self.btn_pause, 1, 0)
 
         self.btn_resume = QPushButton("▶ 재개")
         self.btn_resume.clicked.connect(self.resume_requested.emit)
-        action_bar.addWidget(self.btn_resume)
+        action_bar.addWidget(self.btn_resume, 1, 1)
 
         self.btn_cancel = QPushButton("⏹ 취소")
         self.btn_cancel.clicked.connect(self.cancel_requested.emit)
-        action_bar.addWidget(self.btn_cancel)
-
-        action_bar.addStretch()
+        action_bar.addWidget(self.btn_cancel, 2, 0)
 
         self.btn_open_folder = QPushButton("📁 결과 폴더 열기")
         self.btn_open_folder.clicked.connect(self._open_output_folder)
-        action_bar.addWidget(self.btn_open_folder)
+        action_bar.addWidget(self.btn_open_folder, 2, 1)
 
-        main_layout.addLayout(action_bar)
+        action_box = QGroupBox("수집 제어")
+        action_box.setLayout(action_bar)
 
         # ── 4. 실시간 대시보드 메트릭 카드 ───────────────────────────────
         metrics_frame = QFrame()
@@ -367,25 +364,42 @@ class AliexpressCategoryPanel(QWidget):
         metrics_layout.addWidget(self.progress_bar)
 
         # 4개 지표 카드
-        cards_layout = QHBoxLayout()
-        cards_layout.setSpacing(10)
+        cards_layout = QGridLayout()
+        cards_layout.setHorizontalSpacing(8)
+        cards_layout.setVerticalSpacing(8)
 
         self.card_total = self._create_stat_card("수집된 상품", "0건")
         self.card_vendors = self._create_stat_card("고유 입점 판매자", "0개사")
         self.card_emails = self._create_stat_card("이메일 확보율", "0% (0건)")
         self.card_biznums = self._create_stat_card("사업자번호 확보율", "0% (0건)")
 
-        cards_layout.addWidget(self.card_total)
-        cards_layout.addWidget(self.card_vendors)
-        cards_layout.addWidget(self.card_emails)
-        cards_layout.addWidget(self.card_biznums)
+        cards_layout.addWidget(self.card_total, 0, 0)
+        cards_layout.addWidget(self.card_vendors, 0, 1)
+        cards_layout.addWidget(self.card_emails, 1, 0)
+        cards_layout.addWidget(self.card_biznums, 1, 1)
 
         metrics_layout.addLayout(cards_layout)
-        main_layout.addWidget(metrics_frame)
+        metrics_box = QGroupBox("실시간 수집 현황")
+        metrics_box_layout = QVBoxLayout(metrics_box)
+        metrics_box_layout.setContentsMargins(0, 0, 0, 0)
+        metrics_box_layout.addWidget(metrics_frame)
+        controls_layout.addWidget(metrics_box)
+        controls_layout.addStretch()
+
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        controls_scroll.setWidget(controls_container)
+
+        controls_panel = QWidget()
+        controls_panel_layout = QVBoxLayout(controls_panel)
+        controls_panel_layout.setContentsMargins(0, 0, 0, 0)
+        controls_panel_layout.setSpacing(8)
+        controls_panel_layout.addWidget(action_box)
+        controls_panel_layout.addWidget(controls_scroll, stretch=1)
 
         # ── 5. 하단 뷰 (실시간 결과 테이블 & 로그 분할) ───────────────────
-        bottom_splitter = QSplitter(Qt.Orientation.Vertical)
-
         # 결과 테이블
         table_container = QWidget()
         t_layout = QVBoxLayout(table_container)
@@ -407,9 +421,7 @@ class AliexpressCategoryPanel(QWidget):
         self.result_table.setColumnWidth(4, 130)  # 전화번호
         self.result_table.setColumnWidth(5, 140)  # 스토어명
         t_layout.addWidget(self.result_table)
-        bottom_splitter.addWidget(table_container)
-
-        # 로그 콘솔
+        # 오른쪽 로그 콘솔
         log_container = QWidget()
         l_layout = QVBoxLayout(log_container)
         l_layout.setContentsMargins(0, 0, 0, 0)
@@ -430,12 +442,8 @@ class AliexpressCategoryPanel(QWidget):
             }
         """)
         l_layout.addWidget(self.log_text)
-        bottom_splitter.addWidget(log_container)
-
-        bottom_splitter.setStretchFactor(0, 3)
-        bottom_splitter.setStretchFactor(1, 2)
-
-        main_layout.addWidget(bottom_splitter, stretch=3)
+        workspace = collection_workspace(controls_panel, log_container, table_container)
+        main_layout.addWidget(workspace, stretch=1)
 
     def _create_stat_card(self, title: str, initial_value: str) -> QFrame:
         card = QFrame()
