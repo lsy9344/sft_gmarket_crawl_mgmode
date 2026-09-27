@@ -1,4 +1,4 @@
-"""카테고리 탭 패널 UI 테스트 — 트리 렌더·단일 카테고리 선택 (offscreen)."""
+"""카테고리 탭 패널 UI 테스트 — 트리 렌더·하위 카테고리 선택 (offscreen)."""
 
 import os
 import sys
@@ -7,7 +7,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QTreeWidgetItem
 
 from app.core.coupang.categories import parse_category_groups
 from app.ui.category_panel import CategoryPanel
@@ -60,10 +60,19 @@ class CategoryPanelTest(unittest.TestCase):
         self.assertEqual(tree.topLevelItem(0).childCount(), 1)  # 헬스/건강식품
         self.assertEqual(tree.topLevelItem(0).child(0).childCount(), 2)
 
-    def test_select_is_single_category_only(self):
+    def test_select_includes_descendants_in_parent_first_order(self):
         self._select("305798")
         self.assertEqual(self.panel.selected_category(), ("305798", "헬스/건강식품"))
-        self.assertIn("이 카테고리만", self.panel.selected_label.text())
+        self.assertEqual(
+            self.panel.selected_targets(),
+            (
+                ("305798", "헬스/건강식품"),
+                ("310632", "비타민/미네랄"),
+                ("310637", "비타민C"),
+                ("310655", "건강식품"),
+            ),
+        )
+        self.assertIn("하위 포함 4개", self.panel.selected_label.text())
 
     def test_build_config_one_category_no_subs_or_login(self):
         self._select("305798")
@@ -92,6 +101,19 @@ class CategoryPanelTest(unittest.TestCase):
     def test_leaf_selection(self):
         self._select("310655")
         self.assertEqual(self.panel.selected_category(), ("310655", "건강식품"))
+        self.assertEqual(self.panel.selected_targets(), (("310655", "건강식품"),))
+
+    def test_selected_targets_deduplicates_ids(self):
+        self._select("305798")
+        root = self.panel.category_tree.currentItem()
+        duplicate = QTreeWidgetItem(["다른 이름", "310632"])
+        duplicate.setData(0, 0x0100, "310632")
+        duplicate.setData(0, 0x0101, "다른 이름")
+        root.addChild(duplicate)
+        self.assertEqual(
+            [target[0] for target in self.panel.selected_targets()],
+            ["305798", "310632", "310637", "310655"],
+        )
 
 
 if __name__ == "__main__":

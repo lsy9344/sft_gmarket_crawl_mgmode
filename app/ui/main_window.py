@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 
 from PyQt6.QtWidgets import (
@@ -16,6 +17,13 @@ from PyQt6.QtWidgets import (
 )
 
 from app.core import brightdata, decodo
+from app.core.aliexpress_category_crawler import AliexpressCategoryRunConfig
+from app.core.aliexpress_resume_store import (
+    ali_category_run_dir,
+)
+from app.core.aliexpress_resume_store import (
+    peek_resume as ali_peek_resume,
+)
 from app.core.base import Control
 from app.core.config import DEFAULT_OUTPUT_DIR
 from app.core.coupang.categories import (
@@ -23,7 +31,7 @@ from app.core.coupang.categories import (
     CategoryTreeCache,
     count_nodes,
 )
-from app.core.coupang.decodo_run import category_run_dir
+from app.core.coupang.decodo_run import category_run_dir, completed_category_result
 from app.core.coupang.resume_store import peek_resume
 from app.core.crawler import reconcile_leftover_checkpoints
 from app.core.gmarket_categories import (
@@ -37,12 +45,6 @@ from app.core.gmarket_categories import (
 )
 from app.core.plan import build_crawl_plan
 from app.core.storage import LoadStatus, Storage
-import dataclasses
-from app.core.aliexpress_category_crawler import AliexpressCategoryRunConfig
-from app.core.aliexpress_resume_store import (
-    ali_category_run_dir,
-    peek_resume as ali_peek_resume,
-)
 from app.models.records import PrescanResult
 from app.ui.aliexpress_category_panel import AliexpressCategoryPanel
 from app.ui.category_panel import CategoryPanel
@@ -95,6 +97,7 @@ class MainWindow(QMainWindow):
         # Coupang 카테고리 상태
         self.category_control: Control | None = None
         self.category_worker: SearchWorker | None = None
+        self._category_table_start = 0
         self.categories_control: Control | None = None
         self.categories_worker: CategoryWorker | None = None
         self.category_cache = CategoryTreeCache(
@@ -1598,6 +1601,16 @@ class MainWindow(QMainWindow):
                 "카테고리 하나를 선택하고 출력 폴더를 지정하세요.",
             )
             return
+        targets = self.category_panel.selected_targets()
+        configs = tuple(
+            dataclasses.replace(
+                config,
+                category_id=cid,
+                category_name=name,
+                output_prefix=(config.output_prefix if index == 0 else f"{config.output_prefix}_{cid}"),
+            )
+            for index, (cid, name) in enumerate(targets)
+        )
 
         decodo_settings = decodo.load_settings()
         if not decodo.credentials_ready(decodo_settings):
@@ -1627,24 +1640,41 @@ class MainWindow(QMainWindow):
         if not self._coupang_runtime_ready():
             return
 
-        # 진행 기록 재개 확인 — 같은 카테고리 폴더에 미완료 작업이 있으면
-        # 이어서 수집할지 처음부터 다시 할지 사용자에게 묻는다(작업지시서 §3.4).
-        run_dir = category_run_dir(
-            config.output_dir, config.category_id, config.category_name,
-        )
+        # 각 카테고리는 자체 진행 폴더를 쓴다. 앞 카테고리가 끝난 뒤
+        # 중단됐다면 완료 결과를 보존하고 나머지부터 이어서 수집한다.
+        run_dir = category_run_dir(config.output_dir, config.category_id, config.category_name)
         start_fresh = False
-        resume_note = peek_resume(run_dir)
+        skip_finished = False
+        incomplete = [
+            (cfg, note)
+            for cfg in configs
+            if (note := peek_resume(category_run_dir(cfg.output_dir, cfg.category_id, cfg.category_name)))
+        ]
+        finished_count = sum(completed_category_result(cfg) is not None for cfg in configs)
+        if len(configs) > 1 and (incomplete or 0 < finished_count < len(configs)):
+            resume_note = (
+                f"완료 {finished_count}/{len(configs)}개, "
+                f"진행 중 {len(incomplete)}개\n"
+                "이어서 수집하면 완료된 카테고리는 건너뜁니다."
+            )
+        else:
+            resume_note = incomplete[0][1] if incomplete else None
+            if len(configs) > 1 and finished_count == len(configs):
+                start_fresh = True
         if resume_note:
             choice = self._ask_resume_mode(run_dir, resume_note)
             if choice == "cancel":
                 return
             start_fresh = choice == "fresh"
+            skip_finished = choice == "resume" and len(configs) > 1
 
         self.category_control = Control()
         self.category_panel.clear_results()
+        self._category_table_start = 0
         self.category_panel.append_log(
             f"[Decodo] 계정 {decodo_settings.username} — "
-            f"{config.category_name} ({config.category_id}) 만 수집합니다. "
+            f"{config.category_name} ({config.category_id}) 하위 포함 "
+            f"{len(configs)}개 카테고리를 차례로 수집합니다. "
             "목록은 한국 회선 확인 후 진행하고, 판매자 정보는 이 PC 회선입니다. "
             "결과는 카테고리별 하위 폴더에 저장됩니다. "
             "실패하면 회선을 바꿔 최대 3번, 저장된 지점부터 이어서 시도합니다."
@@ -1654,7 +1684,8 @@ class MainWindow(QMainWindow):
 
         worker = SearchWorker(
             config, self.category_control, decodo_settings=decodo_settings,
-            start_fresh=start_fresh,
+            start_fresh=start_fresh, target_configs=configs,
+            skip_finished=skip_finished,
         )
         worker.phase_changed.connect(self.category_panel.set_phase)
         worker.progress_changed.connect(self._on_category_progress)
@@ -1663,6 +1694,7 @@ class MainWindow(QMainWindow):
         worker.stats_changed.connect(self._on_category_stats)
         worker.error_occurred.connect(self._on_category_error)
         worker.attempt_started.connect(self._on_category_attempt_started)
+        worker.target_started.connect(self._on_category_target_started)
         worker.finished_crawl.connect(self._on_category_finished)
         worker.finished.connect(self._on_category_thread_done)
         worker.finished.connect(self._maybe_close_after_worker)
@@ -1686,7 +1718,7 @@ class MainWindow(QMainWindow):
         box.setWindowTitle("이어서 수집")
         box.setIcon(QMessageBox.Icon.Question)
         box.setText(
-            "이 카테고리 폴더에 미완료 진행 기록이 있습니다.\n\n"
+            "선택한 수집 대상에 진행 기록이 있습니다.\n\n"
             f"{resume_note}\n\n"
             "어디부터 수집할까요?"
         )
@@ -1724,8 +1756,12 @@ class MainWindow(QMainWindow):
 
     def _on_category_attempt_started(self, attempt: int, total: int) -> None:
         if attempt > 1:
-            self.category_panel.clear_result_table()
+            self.category_panel.result_table.setRowCount(self._category_table_start)
         self.category_panel.set_progress_text(f"시도 {attempt}/{total}")
+
+    def _on_category_target_started(self, index: int, total: int, label: str) -> None:
+        self._category_table_start = self.category_panel.result_table.rowCount()
+        self.category_panel.set_progress_text(f"카테고리 {index}/{total}: {label}")
 
     def _on_category_progress(self, kind: str, current: int, total: int) -> None:
         self.category_panel.set_progress_text(f"{kind}: {current}/{total}")
@@ -1744,10 +1780,13 @@ class MainWindow(QMainWindow):
             import subprocess
             import sys
 
+            folder = os.path.dirname(path)
+            if self.category_worker and len(self.category_worker.target_configs) > 1:
+                folder = str(self.category_worker.result_dir)
             if sys.platform == "win32":
-                os.startfile(os.path.dirname(path))
+                os.startfile(folder)
             else:
-                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+                subprocess.Popen(["xdg-open", folder])
         else:
             self.category_panel.append_log("[결과 열기] 저장된 결과가 없습니다.")
 
@@ -1762,6 +1801,11 @@ class MainWindow(QMainWindow):
             f"상품 {summary.products_seen} | 판매자 {summary.unique_vendors} | "
             f"사업자정보 {summary.business_info_success} | 오류 {summary.request_errors}"
         )
+        if self.category_worker and len(self.category_worker.target_configs) > 1:
+            stats = (
+                f"카테고리 {self.category_worker.target_completed}/"
+                f"{len(self.category_worker.target_configs)}개 | {stats} (카테고리별 합계)"
+            )
         self.category_panel.set_stats_text(stats)
         outcome = determine_outcome(summary)
 
@@ -1802,7 +1846,7 @@ class MainWindow(QMainWindow):
                         "저장된 지점부터 이어서 시도합니다.",
                     )
         elif outcome == RunOutcome.NO_RECORDS:
-            reason_msg = {
+            reason_msg = summary.error or {
                 "no_items": "수집된 상품 없음",
             }.get(summary.termination_reason, summary.termination_reason)
             self.category_panel.append_log(f"[실패] {reason_msg}")

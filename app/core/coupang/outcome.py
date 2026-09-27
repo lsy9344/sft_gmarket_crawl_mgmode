@@ -31,6 +31,8 @@ def determine_outcome(summary: CoupangRunSummary) -> RunOutcome:
         return RunOutcome.NO_RECORDS
     if summary.error:
         return RunOutcome.ERROR
+    if summary.termination_reason == "empty_category" and summary.json_path:
+        return RunOutcome.SUCCESS
     if not summary.records:
         return RunOutcome.NO_RECORDS
     # resume_shifted: 재개 뒤 목록 변동 미확인 / resume_pending: 미확인 판매자

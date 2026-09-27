@@ -80,6 +80,21 @@ def _is_target_closed_error(error: Exception) -> bool:
     return type(error).__name__ == "TargetClosedError"
 
 
+def _unreadable_nonrocket_count(rows: list[dict]) -> int:
+    """상품 카드가 왔지만 판매자 매핑에 필요한 ID를 못 읽은 건수."""
+    unreadable = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            unreadable += 1
+            continue
+        if row.get("rocket"):
+            continue
+        item = parse_extracted([row])
+        if not item or not item[0].vendor_item_id:
+            unreadable += 1
+    return unreadable
+
+
 # 부트스트랩 셸 — Camoufox+프록시 내비게이션의 ~1/3 빈도로 오는 JS 부트 페이지.
 # 실측(2026-09-09, BRIGHTDATA_AKAMAI_REVIEW §3·§8): 셸 본문 471B~3.4KB,
 # 정상 목록 ~600KB+ — 차단이 아니므로 대기 후 같은 URL 재내비게이션으로
@@ -343,6 +358,10 @@ class SearchCrawler(CoupangCrawler):
                         f"[재개] 목록 단계는 이미 완료 — 저장된 상품 {len(products):,}개를 "
                         "사용합니다 (목록 재요청 없음)"
                     )
+                else:
+                    resuming_listing = True
+                    store.reset_empty_streak()
+                    self._log("[재개] 저장된 상품이 0개라 목록을 처음부터 다시 확인합니다")
             elif store.has_state():
                 resuming_listing = True
                 self._log(
@@ -412,7 +431,7 @@ class SearchCrawler(CoupangCrawler):
         queue.extend((str(cid).strip(), str(name)) for cid, name in config.subcategories)
         hit_page_cap = False
         # 재개: 목록 단계가 이미 완료된 실행이면 목록을 다시 읽지 않는다.
-        skip_listing = store_active and store.status == STATUS_LISTING_DONE
+        skip_listing = store_active and store.status == STATUS_LISTING_DONE and bool(products)
         if skip_listing:
             hit_page_cap = store.listing_end_reason == "page_cap"
             if not products:
@@ -517,6 +536,14 @@ class SearchCrawler(CoupangCrawler):
         self._emit_stats(summary)
         self._log(f"수집 완료: 고유 상품 {len(products)}개 (로켓 제외 {rocket_removed}개)")
         if not products:
+            if config.category_only and not hit_page_cap and rocket_removed > 0:
+                summary.termination_reason = "empty_category"
+                self._phase("save")
+                self._save_results(summary, partial=False)
+                if store_active and summary.json_path and not summary.save_error:
+                    store.mark_finished()
+                self._log("  읽은 상품이 모두 로켓배송 — 빈 결과로 완료")
+                return
             raise _RunError("수집된 상품이 없습니다.", reason="no_items")
 
         viids = [p.vendor_item_id for p in products.values() if p.vendor_item_id]
@@ -837,16 +864,22 @@ class SearchCrawler(CoupangCrawler):
                     reason="blocked",
                 )
 
+            extraction_error = ""
+            extraction_exception: Exception | None = None
             try:
                 rows = page.evaluate(DOM_EXTRACTION_JS)
-            except Exception as e:  # noqa: BLE001 - evaluate 경계
+                items = parse_extracted(rows)
+                unreadable = _unreadable_nonrocket_count(rows) if self.config.category_only else 0
+                if unreadable:
+                    raise ValueError(f"로켓 외 상품 카드 {unreadable}개의 판매자 ID를 읽지 못했습니다")
+            except Exception as e:  # 추출 경계
                 if _is_target_closed_error(e):
                     raise
-                rows = []
-                last_error = f"DOM 추출 실패: {type(e).__name__}: {e}"
+                extraction_exception = e
+                extraction_error = f"DOM 추출 실패: {type(e).__name__}: {e}"
+                last_error = extraction_error
                 self._log(f"    {last_error}")
-
-            items = parse_extracted(rows)
+                items = []
             if items:
                 return items, html
 
@@ -857,28 +890,57 @@ class SearchCrawler(CoupangCrawler):
             # 판정해 빈 페이지로 반환한다(빈 페이지 연속 종료 판정과 연동).
             if len(html.encode("utf-8")) < PLP_SHELL_HTML_BYTES:
                 html = self._renavigate_shell(page, url, name, html)
-                if len(html.encode("utf-8")) < PLP_SHELL_HTML_BYTES:
+                if len(html.encode("utf-8")) < PLP_SHELL_HTML_BYTES and not extraction_error:
                     # 셸 지속 = 목록 끝 판정 — 백오프로 시간을 낭비하지 않는다
                     return [], html
                 try:
                     rows = page.evaluate(DOM_EXTRACTION_JS)
-                except Exception as e:  # noqa: BLE001 - evaluate 경계
-                    rows = []
-                    last_error = f"DOM 추출 실패: {type(e).__name__}: {e}"
+                    items = parse_extracted(rows)
+                    unreadable = _unreadable_nonrocket_count(rows) if self.config.category_only else 0
+                    if unreadable:
+                        raise ValueError(f"로켓 외 상품 카드 {unreadable}개의 판매자 ID를 읽지 못했습니다")
+                except Exception as e:  # 추출 경계
+                    if _is_target_closed_error(e):
+                        raise
+                    extraction_exception = e
+                    extraction_error = f"DOM 추출 실패: {type(e).__name__}: {e}"
+                    last_error = extraction_error
                     self._log(f"    {last_error}")
-                items = parse_extracted(rows)
+                    items = []
                 if items:
                     return items, html
                 # 회복했지만 상품 0 — 빈 페이지로 기존 로직 진행
 
-            if not retry_empty:
+            # 정상 크기의 HTML 안에 상품 링크가 있는데 파싱 결과가 0건이면
+            # 쿠팡 응답을 받았지만 DOM 추출이 실패한 것으로 본다. 카테고리
+            # 모드(retry_empty=False)에서도 이 경우만 기존 백오프로 재확인해
+            # 일시적인 렌더/추출 실패가 목록 끝으로 기록되지 않게 한다.
+            suspicious_empty = bool(
+                extraction_error
+                or (
+                    len((html or "").encode("utf-8")) >= PLP_SHELL_HTML_BYTES
+                    and "/vp/products/" in (html or "")
+                )
+            )
+            if not retry_empty and not suspicious_empty:
                 return [], html
 
             if attempt < len(self._backoff_seconds):
                 wait = self._backoff_seconds[attempt]
-                self._log(f"    상품 0건 — 백오프 {wait}초 후 재시도 ({attempt + 1}/3)...")
+                retry_reason = "상품 추출 결과 의심" if suspicious_empty else "상품 0건"
+                self._log(
+                    f"    {retry_reason} — 백오프 {wait}초 후 재시도 ({attempt + 1}/3)..."
+                )
                 self.control.sleep(wait)
                 continue
+            if suspicious_empty:
+                detail = extraction_error or (
+                    "상품 링크가 포함된 목록 HTML에서 상품을 추출하지 못했습니다"
+                )
+                raise _RunError(
+                    f"목록 페이지 상품 추출 실패 ({name}): {detail}",
+                    reason="error",
+                ) from extraction_exception
             # 재시도 소진: 빈 페이지 자체는 차단이 아님 (PLP 상한 도달의 정상 신호)
             return [], html
 

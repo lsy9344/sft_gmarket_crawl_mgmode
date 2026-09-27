@@ -7,7 +7,7 @@ import traceback
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.core.base import Control
-from app.core.coupang.decodo_run import run_category_attempts
+from app.core.coupang.decodo_run import run_category_attempts, run_category_batch
 from app.core.coupang.search_crawler import SearchCrawler, SearchRunConfig
 from app.core.decodo import DecodoSettings
 
@@ -21,6 +21,7 @@ class SearchWorker(QThread):
     error_occurred = pyqtSignal(str)
     finished_crawl = pyqtSignal(object)
     attempt_started = pyqtSignal(int, int)
+    target_started = pyqtSignal(int, int, str)
 
     def __init__(
         self,
@@ -30,6 +31,8 @@ class SearchWorker(QThread):
         browser_factory=None,
         parent=None,
         start_fresh: bool = False,
+        target_configs: tuple[SearchRunConfig, ...] | None = None,
+        skip_finished: bool = False,
     ) -> None:
         super().__init__(parent)
         self.config = config
@@ -37,6 +40,10 @@ class SearchWorker(QThread):
         self._browser_factory = browser_factory
         self.decodo_settings = decodo_settings
         self.start_fresh = start_fresh
+        self.target_configs = target_configs or (config,)
+        self.skip_finished = skip_finished
+        self.target_completed = 0
+        self.result_dir = config.output_dir
         self.summary = None
 
     def run(self) -> None:
@@ -53,15 +60,32 @@ class SearchWorker(QThread):
                     on_stats=self.stats_changed.emit,
                 )
 
-            summary = run_category_attempts(
-                self.config,
-                self.decodo_settings,
-                self.control,
-                crawler_factory=factory,
-                on_log=self.log_message.emit,
-                on_attempt_start=self.attempt_started.emit,
-                start_fresh=self.start_fresh,
-            )
+            if len(self.target_configs) == 1:
+                summary = run_category_attempts(
+                    self.config,
+                    self.decodo_settings,
+                    self.control,
+                    crawler_factory=factory,
+                    on_log=self.log_message.emit,
+                    on_attempt_start=self.attempt_started.emit,
+                    start_fresh=self.start_fresh,
+                )
+                self.target_completed = int(
+                    summary.termination_reason == "success" and not summary.error
+                )
+            else:
+                summary, self.target_completed = run_category_batch(
+                    self.target_configs,
+                    self.decodo_settings,
+                    self.control,
+                    crawler_factory=factory,
+                    on_log=self.log_message.emit,
+                    on_attempt_start=self.attempt_started.emit,
+                    on_target_start=self.target_started.emit,
+                    on_saved_record=self.item_collected.emit,
+                    start_fresh=self.start_fresh,
+                    skip_finished=self.skip_finished,
+                )
             self.summary = summary
             from app.core.coupang.outcome import RunOutcome, determine_outcome
             outcome = determine_outcome(summary)

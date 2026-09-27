@@ -75,12 +75,12 @@ class CategoryPanel(QWidget):
 
         info = QLabel(
             "카테고리 하나를 선택한 뒤 수집 시작을 누르세요. "
+            "선택한 카테고리와 모든 하위 카테고리를 함께 수집합니다. "
             "상품 목록은 설정 탭의 Decodo 계정으로 열고, "
             "한국 회선이 아니면 다른 회선으로 바꿉니다. "
             "판매자 정보는 이 PC 회선으로 수집합니다. "
             "결과는 출력 폴더 아래 카테고리별 하위 폴더에 저장됩니다. "
-            "회선이 맞지 않으면 최대 3번 다시 시도합니다. "
-            "하위 카테고리가 필요하면 그 항목을 따로 선택해 실행하세요."
+            "회선이 맞지 않으면 최대 3번 다시 시도합니다."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -211,7 +211,10 @@ class CategoryPanel(QWidget):
         cid = current.data(0, ROLE_ID) if current else ""
         name = current.data(0, ROLE_NAME) if current else ""
         if cid:
-            self.selected_label.setText(f"선택: {name} ({cid}) — 이 카테고리만 수집")
+            count = len(self.selected_targets())
+            self.selected_label.setText(
+                f"선택: {name} ({cid}) — 하위 포함 {count}개 카테고리 수집"
+            )
         else:
             self.selected_label.setText("선택: 없음 (카테고리 하나를 선택하세요)")
 
@@ -224,6 +227,33 @@ class CategoryPanel(QWidget):
         if not cid:
             return None
         return str(cid), str(item.data(0, ROLE_NAME) or cid)
+
+    def selected_targets(self) -> tuple[tuple[str, str], ...]:
+        """현재 선택 카테고리와 후손을 트리 순서대로 반환한다.
+
+        같은 ID가 트리에 여러 번 나타나도 첫 번째 항목만 수집 대상으로 넣는다.
+        """
+        item = self.category_tree.currentItem()
+        if item is None or not item.data(0, ROLE_ID):
+            return ()
+
+        targets: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def walk(node: QTreeWidgetItem) -> None:
+            cid = node.data(0, ROLE_ID)
+            if cid:
+                category_id = str(cid)
+                if category_id not in seen:
+                    seen.add(category_id)
+                    targets.append(
+                        (category_id, str(node.data(0, ROLE_NAME) or category_id))
+                    )
+            for index in range(node.childCount()):
+                walk(node.child(index))
+
+        walk(item)
+        return tuple(targets)
 
     def set_cache_label(self, text: str) -> None:
         self.cache_label.setText(text)

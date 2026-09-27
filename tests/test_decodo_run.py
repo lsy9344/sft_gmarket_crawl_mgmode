@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.base import CancelledError, Control
 from app.core.coupang.decodo_run import (
     category_run_dir,
+    completed_category_result,
     run_category_attempts,
+    run_category_batch,
     should_keep_attempt,
     should_retry,
 )
+from app.core.coupang.resume_store import ResumeStore
 from app.core.coupang.search_crawler import SearchRunConfig
 from app.core.decodo import DecodoError, DecodoSettings, ExitIpInfo
 from app.models.coupang_records import CoupangRunSummary
@@ -34,6 +39,8 @@ def _config(tmp: str) -> SearchRunConfig:
         delay_min=0,
         delay_max=0,
         max_pages=2,
+        category_cooldown_min=0,
+        category_cooldown_max=0,
     )
 
 
@@ -55,6 +62,184 @@ class _FakeCrawler:
 
     def run(self):
         return self._summary
+
+
+class CategoryBatchTest(unittest.TestCase):
+    def test_empty_parent_does_not_skip_descendant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _config(tmp)
+            child = replace(parent, category_id="2", category_name="하위")
+            seen = []
+            empty = _summary(termination_reason="empty_category", json_path="empty.json")
+            found = _summary(termination_reason="success", products_seen=1,
+                             records=[{"vendor_id": "A"}])
+
+            def fake_attempt(config, *_args, **_kwargs):
+                seen.append(config.category_id)
+                return empty if config.category_id == parent.category_id else found
+
+            with patch("app.core.coupang.decodo_run.run_category_attempts", side_effect=fake_attempt):
+                summary, completed = run_category_batch(
+                    (parent, child), _settings(), Control(), crawler_factory=lambda _: None,
+                )
+            self.assertEqual(seen, ["194829", "2"])
+            self.assertEqual(completed, 2)
+            self.assertEqual(summary.records, found.records)
+
+    def test_all_filtered_empty_categories_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _config(tmp)
+            child = replace(parent, category_id="2", category_name="하위")
+            empty = _summary(termination_reason="empty_category", json_path="empty.json")
+            with patch("app.core.coupang.decodo_run.run_category_attempts", return_value=empty):
+                summary, completed = run_category_batch(
+                    (parent, child), _settings(), Control(), crawler_factory=lambda _: None,
+                )
+            self.assertEqual(completed, 2)
+            self.assertEqual(summary.termination_reason, "empty_category")
+
+    def test_unverified_empty_parent_continues_but_reports_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _config(tmp)
+            child = replace(parent, category_id="2", category_name="하위")
+            seen = []
+            empty = _summary(termination_reason="no_items", error="수집된 상품이 없습니다")
+            found = _summary(termination_reason="success", products_seen=1,
+                             records=[{"vendor_id": "A"}])
+
+            def fake_attempt(config, *_args, **_kwargs):
+                seen.append(config.category_id)
+                return empty if config.category_id == parent.category_id else found
+
+            with patch("app.core.coupang.decodo_run.run_category_attempts", side_effect=fake_attempt):
+                summary, completed = run_category_batch(
+                    (parent, child), _settings(), Control(), crawler_factory=lambda _: None,
+                )
+            self.assertEqual(seen, ["194829", "2"])
+            self.assertEqual(completed, 1)
+            self.assertIn("수산물 (194829)", summary.error)
+            self.assertEqual(summary.records, found.records)
+
+    def test_parent_and_descendants_run_in_order_and_stop_at_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _config(tmp)
+            child = replace(parent, category_id="2", category_name="하위")
+            grandchild = replace(parent, category_id="3", category_name="손자")
+            after = replace(parent, category_id="4", category_name="다음")
+            seen = []
+            results = [
+                _summary(termination_reason="success", products_seen=2,
+                         records=[{"vendor_id": "A"}]),
+                _summary(termination_reason="success", products_seen=3,
+                         records=[{"vendor_id": "B"}]),
+                _summary(termination_reason="error", error="목록 추출 실패"),
+            ]
+
+            def fake_attempt(config, *_args, **_kwargs):
+                seen.append(config.category_id)
+                return results.pop(0)
+
+            with patch("app.core.coupang.decodo_run.run_category_attempts", side_effect=fake_attempt):
+                summary, completed = run_category_batch(
+                    (parent, child, grandchild, after), _settings(), Control(),
+                    crawler_factory=lambda _: None,
+                )
+
+            self.assertEqual(seen, ["194829", "2", "3"])
+            self.assertEqual(completed, 2)
+            self.assertEqual(summary.products_seen, 5)
+            self.assertEqual(len(summary.records), 2)
+            self.assertIn("손자 (3)", summary.error)
+
+    def test_resume_reuses_finished_category(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _config(tmp)
+            child = replace(parent, category_id="2", category_name="하위")
+            saved = _summary(termination_reason="success", products_seen=1,
+                             records=[{"vendor_id": "A"}])
+            fresh = _summary(termination_reason="success", products_seen=1,
+                             records=[{"vendor_id": "B"}])
+            emitted = []
+            with (
+                patch("app.core.coupang.decodo_run.completed_category_result",
+                      side_effect=lambda cfg: saved if cfg.category_id == parent.category_id else None),
+                patch("app.core.coupang.decodo_run.run_category_attempts", return_value=fresh) as attempt,
+            ):
+                summary, completed = run_category_batch(
+                    (parent, child), _settings(), Control(),
+                    crawler_factory=lambda _: None, skip_finished=True,
+                    on_saved_record=emitted.append,
+                )
+            attempt.assert_called_once()
+            self.assertEqual(attempt.call_args.args[0].category_id, "2")
+            self.assertEqual(emitted, saved.records)
+            self.assertEqual(completed, 2)
+            self.assertEqual(len(summary.records), 2)
+
+    def test_finished_result_requires_matching_page_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _config(tmp)
+            run_dir = category_run_dir(config.output_dir, config.category_id, config.category_name)
+            with ResumeStore(run_dir / "resume.sqlite3") as store:
+                store.check_config(config.category_id, config.exclude_rocket, config.max_pages)
+                store.record_page(1, [{"dedup_key": "item-1"}])
+                store.mark_finished()
+            output = run_dir / "coupang_category_test_try1.json"
+            output.write_text('[{"vendor_id": "A"}]', encoding="utf-8")
+
+            saved = completed_category_result(config)
+            self.assertIsNotNone(saved)
+            self.assertEqual(saved.products_seen, 1)
+            self.assertEqual(saved.records, [{"vendor_id": "A"}])
+            self.assertIsNone(completed_category_result(replace(config, max_pages=3)))
+
+    def test_fresh_batch_archives_unvisited_completed_categories_before_crawl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _config(tmp)
+            children = tuple(
+                replace(parent, category_id=str(i), category_name=f"하위{i}")
+                for i in (2, 3)
+            )
+            for config in (parent, *children):
+                run_dir = category_run_dir(config.output_dir, config.category_id, config.category_name)
+                with ResumeStore(run_dir / "resume.sqlite3") as store:
+                    store.check_config(config.category_id, config.exclude_rocket, config.max_pages)
+                    store.record_page(1, [{"dedup_key": "item-1"}])
+                    store.mark_finished()
+                (run_dir / "coupang_category_old_try1.json").write_text(
+                    '[{"vendor_id": "old"}]', encoding="utf-8",
+                )
+
+            success = _summary(termination_reason="success", products_seen=1,
+                               records=[{"vendor_id": "new"}])
+            failed = _summary(termination_reason="error", error="중단")
+            with patch("app.core.coupang.decodo_run.run_category_attempts",
+                       side_effect=[success, failed, failed]):
+                _, completed = run_category_batch(
+                    (parent, *children), _settings(), Control(),
+                    crawler_factory=lambda _: None, start_fresh=True,
+                )
+            self.assertEqual(completed, 1)
+            self.assertIsNone(completed_category_result(children[1]))
+            self.assertTrue(list(category_run_dir(
+                children[1].output_dir, children[1].category_id, children[1].category_name,
+            ).glob("resume_archive_*.sqlite3")))
+
+    def test_category_transition_waits_using_configured_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = replace(_config(tmp), category_cooldown_min=7,
+                             category_cooldown_max=7)
+            child = replace(parent, category_id="2", category_name="하위")
+            control = Control()
+            ok = _summary(termination_reason="success", products_seen=1,
+                          records=[{"vendor_id": "A"}])
+            with (
+                patch.object(control, "sleep") as sleep,
+                patch("app.core.coupang.decodo_run.run_category_attempts", return_value=ok),
+            ):
+                run_category_batch((parent, child), _settings(), control,
+                                   crawler_factory=lambda _: None)
+            sleep.assert_called_once_with(7)
 
 
 class AttemptRuleTest(unittest.TestCase):

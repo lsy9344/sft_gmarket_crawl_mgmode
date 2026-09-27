@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 try:
     from PyQt6.QtGui import QCloseEvent
-    from PyQt6.QtWidgets import QApplication, QMessageBox
+    from PyQt6.QtWidgets import QApplication, QMessageBox, QTreeWidgetItem
 
     _PYQT6_AVAILABLE = True
 except ImportError:  # pragma: no cover - PyQt6 미설치 환경
@@ -480,6 +480,44 @@ class CoupangCategoryFinishTest(_MainWindowTestCase):
         shown = " ".join(str(a) for a in info_mock.call_args.args)
         self.assertIn("200까지 늘린 뒤", shown)
         self.assertNotIn("더 늘릴 수 없습니다", shown)
+
+
+class CoupangCategoryStartTest(_MainWindowTestCase):
+    def test_selected_parent_starts_with_all_descendants(self) -> None:
+        from app.core.decodo import DecodoSettings
+        from app.ui.category_panel import ROLE_ID, ROLE_NAME
+
+        tree = self.win.category_panel.category_tree
+        tree.clear()
+        parent = QTreeWidgetItem(["상위"])
+        parent.setData(0, ROLE_ID, "100")
+        parent.setData(0, ROLE_NAME, "상위")
+        child = QTreeWidgetItem(["하위"])
+        child.setData(0, ROLE_ID, "101")
+        child.setData(0, ROLE_NAME, "하위")
+        grandchild = QTreeWidgetItem(["손자"])
+        grandchild.setData(0, ROLE_ID, "102")
+        grandchild.setData(0, ROLE_NAME, "손자")
+        child.addChild(grandchild)
+        parent.addChild(child)
+        tree.addTopLevelItem(parent)
+        tree.setCurrentItem(parent)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.win.category_panel.output_dir_edit.setText(tmp)
+            with (
+                patch("app.ui.main_window.decodo.load_settings",
+                      return_value=DecodoSettings(username="test", password="pw")),
+                patch.object(self.win, "_coupang_runtime_ready", return_value=True),
+                patch("app.ui.main_window.SearchWorker") as worker_type,
+            ):
+                self.win.on_category_start()
+                configs = worker_type.call_args.kwargs["target_configs"]
+
+        self.assertEqual([cfg.category_id for cfg in configs], ["100", "101", "102"])
+        self.assertTrue(all(cfg.subcategories == () for cfg in configs))
+        self.assertEqual(len({cfg.output_prefix for cfg in configs}), 3)
+        worker_type.return_value.start.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

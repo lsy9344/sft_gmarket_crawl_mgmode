@@ -175,6 +175,10 @@ class ResumeStore:
         return self._get_meta("category_id")
 
     @property
+    def max_pages(self) -> int:
+        return int(self._get_meta("max_pages", "0") or 0)
+
+    @property
     def last_completed_page(self) -> int:
         try:
             row = self.conn.execute("SELECT MAX(page_no) FROM pages").fetchone()

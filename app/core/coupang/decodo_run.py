@@ -6,6 +6,8 @@ Qt 비의존. 채택 조건: 상품 > 0 이고 종료가 완료 또는 일부 �
 
 from __future__ import annotations
 
+import json
+import random
 import re
 from collections.abc import Callable
 from dataclasses import replace
@@ -14,6 +16,7 @@ from typing import Any
 
 from app.core import config as app_config
 from app.core.base import CancelledError, Control
+from app.core.coupang.outcome import RunOutcome, determine_outcome
 from app.core.coupang.resume_store import (
     STATUS_FINISHED,
     ResumeStore,
@@ -68,6 +71,8 @@ def should_keep_attempt(summary: CoupangRunSummary) -> bool:
     """
     if summary.cancelled:
         return False
+    if summary.termination_reason == "empty_category":
+        return bool(summary.json_path) and not summary.save_error and not summary.error
     if int(summary.products_seen or 0) <= 0:
         return False
     return summary.termination_reason in (
@@ -132,6 +137,61 @@ def category_run_dir(
     raw = str(category_name or "").strip() or "category"
     name = _FOLDER_UNSAFE.sub("_", raw).strip("._")[:40] or "category"
     return Path(output_dir) / f"{name}_{cid}"
+
+
+def completed_category_result(config: Any) -> CoupangRunSummary | None:
+    """Return a saved result only when this category finished with matching settings."""
+    run_dir = category_run_dir(
+        Path(config.output_dir), config.category_id, config.category_name,
+    )
+    db = run_dir / "resume.sqlite3"
+    if not db.is_file():
+        return None
+    store = ResumeStore(db)
+    try:
+        store.open()
+        if store.status != STATUS_FINISHED or not store.has_state():
+            return None
+        if store.check_config(
+            category_id=config.category_id,
+            exclude_rocket=config.exclude_rocket,
+            max_pages=config.max_pages,
+        ):
+            return None
+        if store.max_pages != config.max_pages:
+            return None
+        files = sorted(
+            run_dir.glob("coupang_category_*_try*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not files:
+            return None
+        try:
+            records = json.loads(files[0].read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(records, list):
+            return None
+        result = CoupangRunSummary(
+            products_seen=store.product_count,
+            unique_vendors=len({
+                str(record.get("vendor_id")) for record in records
+                if isinstance(record, dict) and record.get("vendor_id")
+            }),
+            business_info_success=len(records),
+            records=records,
+            json_path=str(files[0]),
+            termination_reason="empty_category" if not records else "success",
+        )
+        csv_path = files[0].with_suffix(".csv")
+        if csv_path.is_file():
+            result.csv_path = str(csv_path)
+        return result
+    except ResumeStoreError:
+        return None
+    finally:
+        store.close()
 
 
 def _korea_proxy(
@@ -367,3 +427,118 @@ def run_category_attempts(
     finally:
         if store is not None:
             store.close()
+
+
+def run_category_batch(
+    configs: tuple[Any, ...],
+    settings: DecodoSettings,
+    control: Control,
+    *,
+    crawler_factory: CrawlerFactory,
+    on_log: LogFn | None = None,
+    on_attempt_start: AttemptFn | None = None,
+    on_target_start: Callable[[int, int, str], None] | None = None,
+    on_saved_record: Callable[[dict], None] | None = None,
+    start_fresh: bool = False,
+    skip_finished: bool = False,
+    exit_ip_fn: ExitIpFn | None = None,
+) -> tuple[CoupangRunSummary, int]:
+    """Run each category in its own resume folder, stopping at the first gap."""
+    if not configs:
+        raise ValueError("수집 대상 카테고리가 없습니다")
+    log = on_log or (lambda _message: None)
+    total = len(configs)
+    combined = CoupangRunSummary(termination_reason="success")
+    completed = 0
+    unverified_empty: list[str] = []
+    numeric_fields = (
+        "products_seen", "unique_vendors", "business_info_success",
+        "brand_seller_skipped", "request_errors", "power_sellers",
+        "store_name_present", "store_name_missing",
+        "duplicate_business_numbers_observed",
+    )
+    if start_fresh:
+        for config in configs:
+            db = category_run_dir(
+                Path(config.output_dir), config.category_id, config.category_name,
+            ) / "resume.sqlite3"
+            if db.is_file():
+                store = ResumeStore(db)
+                archived = store.archive()
+                if archived is not None:
+                    log(f"[재개] 이전 진행 기록 보관: {archived}")
+    previous_crawled_config = None
+    for index, config in enumerate(configs, 1):
+        try:
+            control.checkpoint()
+        except CancelledError:
+            combined.cancelled = True
+            combined.termination_reason = "cancelled"
+            return combined, completed
+        label = f"{config.category_name} ({config.category_id})"
+        if on_target_start is not None:
+            on_target_start(index, total, label)
+        log(f"[카테고리 {index}/{total}] {label} 시작")
+        part = completed_category_result(config) if skip_finished else None
+        if part is not None:
+            log(f"[카테고리 {index}/{total}] 이전 완료 결과 사용 — {label}")
+            if on_saved_record is not None:
+                for record in part.records:
+                    on_saved_record(record)
+        else:
+            if previous_crawled_config is not None:
+                cooldown = random.uniform(
+                    previous_crawled_config.category_cooldown_min,
+                    previous_crawled_config.category_cooldown_max,
+                )
+                if cooldown > 0:
+                    log(f"  카테고리 전환 쿨다운 {cooldown:.0f}초...")
+                    try:
+                        control.sleep(cooldown)
+                    except CancelledError:
+                        combined.cancelled = True
+                        combined.termination_reason = "cancelled"
+                        return combined, completed
+            part = run_category_attempts(
+                config, settings, control,
+                crawler_factory=crawler_factory,
+                on_log=log,
+                on_attempt_start=on_attempt_start,
+                start_fresh=False,
+                exit_ip_fn=exit_ip_fn,
+            )
+            previous_crawled_config = config
+        for field in numeric_fields:
+            setattr(combined, field, getattr(combined, field) + getattr(part, field))
+        combined.records.extend(part.records)
+        if part.json_path:
+            combined.json_path = part.json_path
+        if part.csv_path:
+            combined.csv_path = part.csv_path
+        outcome = determine_outcome(part)
+        if outcome == RunOutcome.SUCCESS:
+            completed += 1
+            log(f"[카테고리 {index}/{total}] 완료 — {label}")
+            continue
+        if outcome == RunOutcome.NO_RECORDS and part.termination_reason == "no_items" and not part.products_seen:
+            unverified_empty.append(label)
+            log(f"[카테고리 {index}/{total}] 상품 0건 — 다른 카테고리도 계속 확인합니다: {label}")
+            continue
+        combined.cancelled = part.cancelled
+        combined.blocked_direct = part.blocked_direct
+        combined.save_error = part.save_error
+        combined.cleanup_error = part.cleanup_error
+        combined.termination_reason = part.termination_reason
+        combined.error = part.error
+        if outcome == RunOutcome.NO_RECORDS:
+            combined.error = f"{label}: 상품을 읽지 못했습니다"
+        elif outcome == RunOutcome.ERROR:
+            combined.error = f"{label}: {part.error or '수집 오류'}"
+        log(f"[카테고리 {index}/{total}] 중단 — {label} ({outcome.value})")
+        return combined, completed
+    if unverified_empty:
+        combined.termination_reason = "no_items"
+        combined.error = "상품 0건으로 확인이 필요한 카테고리: " + ", ".join(unverified_empty)
+    elif not combined.records and combined.json_path:
+        combined.termination_reason = "empty_category"
+    return combined, completed

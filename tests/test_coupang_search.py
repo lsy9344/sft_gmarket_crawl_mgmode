@@ -202,6 +202,15 @@ class ClickJsErrorPage(FakeSearchPage):
         return super().evaluate(script, *args)
 
 
+class ListingExtractionErrorPage(FakeSearchPage):
+    """상품 카드 DOM 추출이 매번 실패하는 페이지."""
+
+    def evaluate(self, script, *args):
+        if "ProductUnit_productUnit" in script:
+            raise RuntimeError("listing DOM unavailable")
+        return super().evaluate(script, *args)
+
+
 class SellerErrorPage(FakeSearchPage):
     """getStoreReview 만 전부 실패(403)하는 페이지 — 2차 단계 차단 시뮬레이션."""
 
@@ -372,6 +381,25 @@ class SearchPipelineTest(unittest.TestCase):
             self.assertEqual(summary.products_seen, 2)
             self.assertEqual(summary.business_info_success, 2)
             self.assertEqual(summary.termination_reason, "success")
+
+    def test_all_rocket_category_finishes_with_empty_saved_result(self):
+        from app.core.coupang.outcome import RunOutcome, determine_outcome
+
+        page = FakeSearchPage(sorter_rows=[[_row("11", rocket=True)], [], []])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, keyword="", category_id="221934", max_pages=5)
+            self.assertEqual(summary.termination_reason, "empty_category")
+            self.assertEqual(determine_outcome(summary), RunOutcome.SUCCESS)
+            self.assertEqual(json.loads(Path(summary.json_path).read_text(encoding="utf-8")), [])
+
+    def test_partial_card_parse_failure_does_not_complete_page(self):
+        rows = [_row("11"), {"href": "/vp/products/999", "rocket": False}]
+        page = FakeSearchPage(sorter_rows=[rows, rows, rows, rows])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _run(tmp, page, keyword="", category_id="221934", max_pages=5)
+        self.assertEqual(summary.termination_reason, "error")
+        self.assertIn("판매자 ID를 읽지 못했습니다", summary.error)
+        self.assertEqual(summary.products_seen, 0)
 
     def test_first_category_page_enters_via_menu_click(self):
         """첫 카테고리 page 1 은 홈 메뉴 클릭으로 진입 (딥링크 goto 회피)."""
@@ -810,6 +838,27 @@ class ShellRuleTest(unittest.TestCase):
         self.assertEqual(summary.termination_reason, "no_items")
         # 재내비게이션 없음 — p1·p2 각 1회 로드
         self.assertEqual(self._listing_gotos(page), 2)
+
+    def test_product_html_without_rows_is_extraction_error(self):
+        """상품 링크가 있는 응답의 0건 파싱을 목록 끝으로 처리하지 않는다."""
+        html = _OK_HTML + '<a href="/vp/products/123?itemId=456">상품</a>'
+        page = FakeSearchPage(sorter_rows=[[], [], [], []], content_html=html)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, logs = self._run_category(tmp, page, max_pages=3)
+        self.assertEqual(summary.termination_reason, "error")
+        self.assertIn("상품 추출 실패", summary.error)
+        self.assertEqual(self._listing_gotos(page), 4)  # 초기 + 백오프 3회
+        self.assertTrue(any("상품 추출 결과 의심" in m for m in logs))
+
+    def test_listing_extraction_exception_is_not_empty_page(self):
+        """DOM 추출 예외도 재시도 후 구조화된 오류로 남긴다."""
+        page = ListingExtractionErrorPage(sorter_rows=[[], [], [], []])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, logs = self._run_category(tmp, page, max_pages=3)
+        self.assertEqual(summary.termination_reason, "error")
+        self.assertIn("상품 추출 실패", summary.error)
+        self.assertEqual(self._listing_gotos(page), 4)
+        self.assertTrue(any("DOM 추출 실패" in m for m in logs))
 
 
 class ProxyPhaseSplitTest(unittest.TestCase):
