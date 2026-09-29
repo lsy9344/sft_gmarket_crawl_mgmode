@@ -749,6 +749,32 @@ class TestCrossFeatureCombinations(unittest.TestCase):
 class TestRealWorldApplicationScenarios(unittest.TestCase):
     """Tier 4: E2E 시뮬레이션 및 순단 복원력 실측 검증."""
 
+    def setUp(self):
+        # 환경에 decodo_settings.json 이 없어도 동일하게 돌도록 자격증명을
+        # 주입한다(2026-09-29 Windows 빌드 워크스페이스 실측 — 설정 파일
+        # 부재 시 'Decodo 계정 없음'으로 조기 거부되어 collected_items=0 실패).
+        # 회선 확인(exit IP)도 실제 네트워크를 touch하지 않게 한국 응답으로
+        # 못박는다 — 자격증명만 주입하면 더미 프록시로 실제 연결을 시도해
+        # 타임아웃까지 대기한다.
+        patchers = [
+            patch.object(
+                decodo, "load_settings",
+                return_value=decodo.DecodoSettings(
+                    username="test-user", password="test-pass",
+                ),
+            ),
+            patch.object(
+                decodo, "fetch_exit_ip",
+                side_effect=lambda _proxy: decodo.ExitIpInfo(
+                    ip="203.0.113.10", country_code="KR",
+                    country_name="South Korea",
+                ),
+            ),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_e2e_simulated_crawl_flow_and_17_column_output_verification(self):
         """전체 수집 흐름(목록 탐색 -> 판매자 상세 -> CSV/JSON 17개 표준 컬럼 저장) 완주 검증."""
         with tempfile.TemporaryDirectory() as tmp:

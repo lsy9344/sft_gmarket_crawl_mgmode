@@ -189,3 +189,12 @@
 ### 13.5 추가 (9/29 11:5x): 재개 문의 → 사전점검 결과 **NO-GO**
 
 사용자가 "이어서 수집 시작 눌러도 되는지" 문의 → §9.5 사전점검 실행(`env_probe.py` 첫 실사): 집 직접 403 + 새 Decodo(14.43.3.157) 403 **둘 다 차단**. 08:25~08:27 통과했던 집 회선도 그 뒤 차단됨(원인 후보: 판매자 버스트 지연 효과 또는 가열 확대 — 규율상 당일 추가 테스트 금지로 구분 불가). **9/29 잔여 시간 수집 금지. 다음 날 아침 사전점검(집 직접 1회+새 Decodo 1회) 통과 시 GO.** 참고: 현행 EXE(9/27 빌드)는 사전점검·브레이커가 없고 김치 432595에 게이트 파일도 없어, 차단 상태에서 시작하면 브라우저 3회 실패를 그대로 반복한다.
+
+### 13.6 (9/29 13:2x) 커밋·푸시·재배포 완료
+
+- **커밋·푸시**: `55a741c`(쿠팡 워크스테이먼트 — 사전점검·브레이커·문서/증거) + `0b8a457`(9/28 타 에이전트 통합 — ali·런타임 자동설치·가이드) → origin main.
+- **Windows 빌드 게이트 실패 → 원인 규명·수정 후 통과**: 첫 빌드 시 Windows 전체 테스트 11건 실패(WSL은 전부 통과). 원인 2가지 — ① `ResumeStore.open()` 이 손상 파일에서 예외 시 sqlite 연결을 닫지 않아 Windows 파일 잠금 잔존(프로덕션 수정 — `app/core/coupang/resume_store.py` close-on-error + `test_coupang_resume.py` 미종결 store2 2건 보완). ② ali 테스트 8건이 환경 `output/decodo_settings.json` 존재에 의존(빌드 워크스페이스엔 없음 → 'Decodo 계정 없음' 조기 거부). 3개 테스트 클래스 setUp에 `load_settings` 더미 자격증명 + `fetch_exit_ip` 한국 응답 패치로 격리(네트워크 무결화). 수정 후 **Windows 759 tests OK(skipped=3)**, WSL 104건 재검 통과.
+- **빌드**: `SellerCollectorBuild-decodo-gsvZUw`(rsync 동기화 → .venv-win 재사용) — `SellerCollector.exe` SHA-256 `cecbfc248a05c6a29547dc93172798f174e6701812491c918db85741e6188852`.
+- **배포**: 호스트 `ShipTest\SellerCollector.exe` 교체(이전 ali 빌드 `523dba10…` → `SellerCollector_before_preflight_20260929.exe` 보존, SHA256SUMS 갱신). 샌드박스 앱 종료(2 PID) → `Desktop\ShipTestRun\SellerCollector.exe` 교체(기존 `451fe5dc…` 보존) → 해시 일치 `match:true` 확인.
+- **기동 스모크**: 13:25:09 앱 시작 로그 확인, 7개 탭 정상 표시(Gmarket·Coupang·Foodspring·쿠팡카테고리·Gmarket카테고리·Ali카테고리·설정), 오류·런타임 설치 화면 없음.
+- **미완료·유의**: ① 1카테고리 실시험(§6.3 절차)은 차단 상태(§13.5 NO-GO)로 보류 — **다음 날 사전점검 통과 후 첫 수집이 곧 실시험을 겸함**(새 EXE는 시작 전 [사전점검] 로그가 먼저 찍혀야 정상). ② `vendor_phase_line="proxy"` 전환은 실증 A 통과 전까지 유보(§13.4). ③ 수정분 커밋은 본 갱신과 함께 진행 예정.

@@ -258,6 +258,8 @@ class ListingResumeTest(unittest.TestCase):
             self.assertEqual(summary2.products_seen, 6)  # A~F 중복 없이 합쳐짐
             self.assertEqual(len(summary2.records), 6)
             self.assertEqual(store2.status, "finished")
+            # Windows: 열린 sqlite 연결이 임시 폴더 삭제를 막는다 — 반드시 닫는다.
+            store2.close()
 
     def test_empty_end_reconfirmed_in_new_session(self):
         """§5.3 — 첫 빈 페이지 저장 뒤 세션이 바뀌면 빈 페이지를 다시 확인한다."""
@@ -286,6 +288,8 @@ class ListingResumeTest(unittest.TestCase):
             plp2 = [u.split("page=")[-1]
                     for u in page2.goto_urls if "/np/categories/" in u]
             self.assertEqual(plp2, ["2", "3", "4"])
+            # Windows: 열린 sqlite 연결이 임시 폴더 삭제를 막는다 — 반드시 닫는다.
+            store2.close()
 
     def test_listing_shift_on_boundary_marks_partial(self):
         """§5.6 — 경계 페이지에서 목록 변동이 관측되면 '완료'가 아니다."""

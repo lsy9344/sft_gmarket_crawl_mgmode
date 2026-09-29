@@ -52,11 +52,19 @@ class ResumeStore:
     def open(self) -> None:
         if self._conn is not None:
             return
+        conn: sqlite3.Connection | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(str(self.path))
             conn.execute("PRAGMA journal_mode=DELETE")
         except sqlite3.Error as e:
+            # 연결을 닫지 않으면 Windows 에서 파일이 잠긴 채 남는다
+            # (2026-09-29 빌드 워크스페이스 실측 — 손상 파일 감지 후에도 삭제 불가).
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
             raise ResumeStoreError(f"진행 파일을 열 수 없습니다 ({self.path}): {e}") from e
         conn.executescript(
             """

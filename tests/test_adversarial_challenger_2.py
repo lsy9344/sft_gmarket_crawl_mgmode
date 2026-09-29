@@ -352,6 +352,32 @@ class TestAdversarialProxyCredentialsFlow(unittest.TestCase):
 class TestAdversarialZeroItemListings(unittest.TestCase):
     """Stress-test 0-item listings, early termination, and verify NO empty CSV/JSON files."""
 
+    def setUp(self):
+        # 환경에 decodo_settings.json 이 없어도 동일하게 돌도록 자격증명을
+        # 주입한다(2026-09-29 Windows 빌드 워크스페이스 실측 — 설정 파일
+        # 부재 시 'Decodo 계정 없음'으로 조기 거부되어 수집 시나리오가 실패).
+        # 회선 확인(exit IP)도 실제 네트워크를 touch하지 않게 한국 응답으로
+        # 못박는다 — 자격증명만 주입하면 더미 프록시로 실제 연결을 시도해
+        # 타임아웃까지 대기한다.
+        patchers = [
+            patch.object(
+                decodo, "load_settings",
+                return_value=decodo.DecodoSettings(
+                    username="test-user", password="test-pass",
+                ),
+            ),
+            patch.object(
+                decodo, "fetch_exit_ip",
+                side_effect=lambda _proxy: decodo.ExitIpInfo(
+                    ip="203.0.113.10", country_code="KR",
+                    country_name="South Korea",
+                ),
+            ),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_zero_item_listing_never_creates_csv_or_json_files(self):
         """0 items returned in Phase 1 MUST NOT create empty CSV or JSON files on disk."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -437,6 +463,29 @@ class TestAdversarialZeroItemListings(unittest.TestCase):
 # =====================================================================
 class TestAdversarialDatasetSchemaAndBusinessFields(unittest.TestCase):
     """Stress-test 17-column CSV/JSON schema and 7 mandatory business fields extraction."""
+
+    def setUp(self):
+        # 환경에 decodo_settings.json 이 없어도 동일하게 돌도록 자격증명을
+        # 주입한다(2026-09-29 Windows 빌드 워크스페이스 실측). 회선 확인도
+        # 실제 네트워크를 touch하지 않게 한국 응답으로 못박는다.
+        patchers = [
+            patch.object(
+                decodo, "load_settings",
+                return_value=decodo.DecodoSettings(
+                    username="test-user", password="test-pass",
+                ),
+            ),
+            patch.object(
+                decodo, "fetch_exit_ip",
+                side_effect=lambda _proxy: decodo.ExitIpInfo(
+                    ip="203.0.113.10", country_code="KR",
+                    country_name="South Korea",
+                ),
+            ),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     EXPECTED_17_COLUMNS = [
         "vendor_id",
