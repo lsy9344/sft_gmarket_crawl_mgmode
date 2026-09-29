@@ -1,5 +1,20 @@
 # Coupang OMP Crawler - 문서 인덱스
 
+## 2026-09-28 직접 접속 중단 조사
+
+- [12:58~13:01 Sandbox 재개 실패: Decodo 초기 홈 403](research/SANDBOX_PROXY_HOME_BLOCK_20260928.md): 완료 6개·목록 39개 정상 인식. 한국 프록시 IP 3개 모두 초기 Chromium 홈에서 차단됐으며, 집 회선 전환·판매자 조회 전 실패.
+- [판매자 조회를 Decodo로 옮기는 제안 검토](research/PROXY_SELLER_PROPOSAL_REVIEW_20260928.md): 한 판매자 API의 프록시 200 원본 확인. 집 IP 점수 원인 단정·과거 Camoufox 전면 차단 주장 검토, 실제 앱 적용 전 확인 범위.
+- [Sandbox 수집 수량과 Decodo 사용량](research/SANDBOX_COLLECTION_USAGE_20260928.md): 선택 대상 13개 중 6개 완료·1개 중단·6개 미시작. 판매자 중복 제거 319명. Decodo 최근 24시간 약 0.29GB, $4/GB 환산 약 $1.16(동일 계정 테스트 포함).
+- [Sandbox Chromium 직접 접속 차단·재개와 바깥 테스트의 관련성](research/SANDBOX_DIRECT_BLOCK_20260928.md): 약 39분 뒤 재개해 6번째 카테고리 상품 73개·판매자 36명 완료. 이후 00:50에 7번째 목록 39개 수집 후 직접 홈 접속에서 재차 차단. 12시간 대기·동시 시험 원인 주장 검토 및 카테고리마다 새 직접 세션을 만드는 구조 확인.
+
+## 2026-09-27 브라우저 변경 및 운영 판단
+
+- [현재 운영 판단과 Patchright 워크트리 비교](research/BROWSER_ENGINE_DECISION_20260927.md): 현재 엔진 배치, 자동 전환 판단, 과거 실험과의 차이, 새 PC 사용 순서.
+- [Windows Sandbox 수정·검증 보고서](CHROMIUM_CATEGORY_FIX_20260927.md): 브라우저 변경과 거짓 매핑 누락 오류 수정. 실제 Sandbox에서 누락 연결 28건 복구, 상품 97개·판매자 69명 정상 완료 후 세 번째 카테고리 진행 확인.
+- [브라우저 공식 출처 조사](research/BROWSER_ENGINE_PRIMARY_SOURCES_20260927.md): Patchright·Chromium·Chrome·Camoufox의 관계와 출처.
+
+위 문서는 9월 27일 현재 카테고리 수집에 관한 기록이다. 아래 rev.6 및 구현 전 연구의 설명은 당시 범위에 대한 역사적 기록으로 읽는다. 아래의 “research/ 폐기” 안내는 그 표에 열거한 구현 전 문서에만 적용한다.
+
 ## Project Context
 
 현 프로젝트(`sft_gmarket_crawl_mgmode`)는 Gmarket 판매자 사업자정보 수집 도구

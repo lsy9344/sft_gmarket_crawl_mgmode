@@ -1,0 +1,20 @@
+{
+  "observed_date_kst": "2026-09-28",
+  "source": "Host %LOCALAPPDATA%\\Temp\\codex-coupang-debug\\sandbox-resume-after-marker-20260928.log",
+  "capture_method": "Read running Windows Sandbox app GUI log through shared clipboard; no collection controls changed.",
+  "source_sha256": "bf868f006999c265d7f499d5b144f76e15e2dee3d7628f1f3775f0a4594310d8",
+  "source_lines": 137,
+  "retained_lines": 101,
+  "omitted": "36 per-seller progress lines containing seller IDs and business names; all other GUI log lines retained.",
+  "first_log_time_kst": "00:37:05",
+  "last_log_line": "[00:45:58]     딜레이 16초...",
+  "previous_block_kst": "2026-09-27 23:58:34",
+  "direct_warmup_start_kst": "2026-09-28 00:37:34",
+  "direct_warmup_ready_kst": "2026-09-28 00:37:57",
+  "category_6_complete_kst": "2026-09-28 00:40:14",
+  "reused_listing_products": 73,
+  "mapped_products": 73,
+  "collected_sellers": 36,
+  "marker_move": "User reported moving coupang_block_state.json to desktop before resuming; this observation did not remove it or change app code.",
+  "limits": "No direct public-IP measurement was made during this resumed request. Direct mode is explicit in the app log. Prior shared public-IP observation was at 00:08."
+}

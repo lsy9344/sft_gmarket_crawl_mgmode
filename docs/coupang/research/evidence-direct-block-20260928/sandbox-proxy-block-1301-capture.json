@@ -1,0 +1,29 @@
+{
+  "captured_date_kst": "2026-09-28",
+  "source": "Host %LOCALAPPDATA%\\Temp\\codex-coupang-debug\\sandbox-proxy-home-block-20260928-1301.log",
+  "source_sha256": "2bea3f7356776f7a8ce87ed65dab39421af6ff46ec830aa34d8f07a9fe281f63",
+  "capture_method": "Read-only GUI log copy from Windows Sandbox; no new collection/proxy/Coupang requests.",
+  "run_start_kst": "2026-09-28 12:58:38",
+  "run_stop_kst": "2026-09-28 13:01:57",
+  "recognized_completed_categories": 6,
+  "recognized_listing_products": 39,
+  "attempts": [
+    {
+      "number": 1,
+      "verified_proxy_exit_ip": "61.74.244.21",
+      "home_403_time_kst": "12:58:42"
+    },
+    {
+      "number": 2,
+      "verified_proxy_exit_ip": "119.202.230.74",
+      "home_403_time_kst": "13:00:18"
+    },
+    {
+      "number": 3,
+      "verified_proxy_exit_ip": "182.230.127.154",
+      "home_403_time_kst": "13:01:54"
+    }
+  ],
+  "failure_phase": "Phase1 proxy Chromium home warmup; direct-switch and seller API phases were not reached",
+  "internal_cause": "Akamai access denied observed; matching rule, score, IP/browser weights are not observable from this log."
+}

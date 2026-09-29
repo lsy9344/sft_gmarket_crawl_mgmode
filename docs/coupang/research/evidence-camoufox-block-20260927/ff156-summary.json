@@ -1,0 +1,10 @@
+{
+  "note": "공식 Firefox 156.0.1(linux64, mozilla.org 최신) 측정 요약. Playwright가 순정 빌드를 구동하지 못해 --headless --screenshot(fp156.png, coupang156.png)로 측정. 지문 수치는 화면 판독 기반이므로 글자 오독 가능; H2 문자열·통과 여부는 화면으로 직접 확인.",
+  "source": "Mozilla 최신 다운로드 firefox-156.0.1, 2026-09-27 23:52~53 KST, 가정 회선 직접",
+  "ua_claimed": "Firefox 156.0.1",
+  "wire": {
+    "ja4": "t13d1517h2_8daaf6152771_3cbfd90576bd(판독; 152계열 t13d1617h2_86a278354501_... 와 cipher 세그먼트 상이 — 156이 구 cipher 정리)",
+    "akamai_h2": "1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s (Camoufox 152와 동일 문자열)"
+  },
+  "coupang_www": {"result": 200, "evidence": "coupang156.png — 홈 정상 렌더, Access Denied 아님", "same_minutes": "23:53~55 Camoufox 직접/Decodo 403과 대조"}
+}

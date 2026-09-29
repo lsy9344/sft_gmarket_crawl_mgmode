@@ -1,0 +1,23 @@
+﻿CODEX_COUPANG_DIAGNOSTIC_V1
+{
+  "time": "2026-09-27T21:57:23.439722",
+  "session_id": "paired1790513205",
+  "profile_source": null,
+  "collect": false,
+  "camoufox_package": "0.5.4",
+  "playwright_package": "1.60.0",
+  "cache": "C:\\Users\\WDAGUtilityAccount\\AppData\\Local\\camoufox\\camoufox\\Cache",
+  "ip_before": "121.131.93.162",
+  "browser": {
+    "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "platform": "Linux x86_64",
+    "language": "ko-KR",
+    "timeZone": "Asia/Seoul"
+  },
+  "warmup": "failed",
+  "error": "홈 웜업 단계에서 차단 감지: 소프트 블록 (447자) — Akamai 접근 거부 — IP 평판 차단으로 추정. IP 평판 차단 가능성 — 쿨다운 후 재시도하세요.",
+  "url": "https://www.coupang.com/",
+  "title": "Access Denied",
+  "product_links": 0,
+  "ip_after": "121.131.93.162"
+}

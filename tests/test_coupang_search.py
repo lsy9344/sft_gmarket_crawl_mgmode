@@ -869,7 +869,8 @@ class ProxyPhaseSplitTest(unittest.TestCase):
         return {"server": "http://brd.superproxy.io:22225",
                 "username": "brd-customer-hl_x-zone-gm_isp", "password": "pw"}
 
-    def _run_split(self, tmp_dir, pages, proxy=None, require_login=False):
+    def _run_split(self, tmp_dir, pages, proxy=None, require_login=False,
+                   vendor_phase_line="direct"):
         config = SearchRunConfig(
             output_dir=Path(tmp_dir),
             output_prefix="split_test",
@@ -883,6 +884,7 @@ class ProxyPhaseSplitTest(unittest.TestCase):
             warmup_time=0,
             page_delay_min=0,
             page_delay_max=0,
+            vendor_phase_line=vendor_phase_line,
             delay_min=0,
             delay_max=0,
             require_login=require_login,
@@ -923,6 +925,29 @@ class ProxyPhaseSplitTest(unittest.TestCase):
             self.assertIn(COUPANG_HOME, seller_page.goto_urls)
             self.assertTrue(any("2차 전환" in m for m in logs))
             self.assertTrue(any("회선 IP" in m for m in logs))
+
+    def test_vendor_phase_proxy_keeps_single_session(self):
+        """vendor_phase_line="proxy" — 목록 세션 하나로 판매자 단계까지 진행."""
+        page = FakeSearchPage(sorter_rows=[[_row("11")]], viids=["11"])
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, browsers, logs, calls = self._run_split(
+                tmp, [page], proxy=self._proxy(), vendor_phase_line="proxy")
+            self.assertIsNone(summary.error)
+            self.assertEqual(summary.business_info_success, 1)
+            # 세션은 1차(프록시) 하나뿐 — 2차 전환·직접 회선 세션 없음
+            self.assertEqual(calls["browser_factory"], 1)
+            self.assertFalse(any("2차 전환" in m for m in logs))
+            self.assertTrue(any("같은 프록시 세션" in m for m in logs))
+            # 브라우저는 finally 가 한 번 닫는다
+            self.assertTrue(browsers[0].closed)
+
+    def test_vendor_phase_line_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                SearchRunConfig(
+                    output_dir=Path(tmp), keyword="뷰티",
+                    vendor_phase_line="wifi",
+                )
 
     def test_closed_direct_session_is_reopened_once(self):
         collection_page = FakeSearchPage(sorter_rows=[[_row("11")]])

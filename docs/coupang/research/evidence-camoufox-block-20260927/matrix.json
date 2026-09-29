@@ -1,0 +1,34 @@
+[
+  {
+    "tag": "chrome150-default",
+    "impersonate": "chrome150",
+    "status": 200,
+    "server": "envoy",
+    "body_len": 223621,
+    "body_head": "<!DOCTYPE html><html lang=\"ko-KR\"><head><meta charSet=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0,"
+  },
+  {
+    "tag": "firefox147-default",
+    "impersonate": "firefox147",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "body_len": 521,
+    "body_head": "<HTML><HEAD> <TITLE>Access Denied</TITLE> </HEAD><BODY> <H1>Access Denied</H1>   You don't have permission to access \"http&#58;&#47;&#47;www&#46;coupang&#46;com&#47;\" on this server.<P> Reference&#32;&#35;18&#46;16a3c117"
+  },
+  {
+    "tag": "ff147-tls-chrome-ua",
+    "impersonate": "firefox147",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "body_len": 521,
+    "body_head": "<HTML><HEAD> <TITLE>Access Denied</TITLE> </HEAD><BODY> <H1>Access Denied</H1>   You don't have permission to access \"http&#58;&#47;&#47;www&#46;coupang&#46;com&#47;\" on this server.<P> Reference&#32;&#35;18&#46;55da2317"
+  },
+  {
+    "tag": "chrome150-tls-ff-ua",
+    "impersonate": "chrome150",
+    "status": 200,
+    "server": "envoy",
+    "body_len": 223597,
+    "body_head": "<!DOCTYPE html><html lang=\"ko-KR\"><head><meta charSet=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0,"
+  }
+]

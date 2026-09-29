@@ -1,0 +1,31 @@
+{
+  "source": "/tmp/coupang-blockhunt/matrix.json",
+  "file_modified_at": "2026-09-28T00:07:45.503207+09:00",
+  "timestamp_kind": "file mtime; no per-request timestamps",
+  "results": [
+    {
+      "tag": "chrome150-default",
+      "status": 200,
+      "server": "envoy",
+      "body_len": 223605
+    },
+    {
+      "tag": "firefox147-default",
+      "status": 403,
+      "server": "AkamaiGHost",
+      "body_len": 519
+    },
+    {
+      "tag": "ff147-tls-chrome-ua",
+      "status": 403,
+      "server": "AkamaiGHost",
+      "body_len": 519
+    },
+    {
+      "tag": "chrome150-tls-ff-ua",
+      "status": 200,
+      "server": "envoy",
+      "body_len": 223599
+    }
+  ]
+}

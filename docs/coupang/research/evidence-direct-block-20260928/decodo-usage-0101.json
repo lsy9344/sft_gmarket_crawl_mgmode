@@ -1,0 +1,79 @@
+{
+  "note": "Read-only Decodo account usage lookups. Credentials and request authorization headers are omitted. Displayed usage is account-wide, including test traffic; not attributable to the Sandbox alone. USD values are consumption equivalents at the user-stated $4 per GB, excluding tax, not wallet transactions.",
+  "subscriptions": {
+    "response_saved_at_kst": "2026-09-28T01:01:24+09:00",
+    "status": 200,
+    "data": [
+      {
+        "traffic_limit": "4",
+        "traffic": "3.3",
+        "proxy_users_limit": 1,
+        "ip_address_limit": 10,
+        "valid_from": "2026-09-10",
+        "valid_until": "2027-09-27",
+        "service_type": "residential_proxies"
+      }
+    ]
+  },
+  "subusers": {
+    "response_saved_at_kst": "2026-09-28T01:01:24+09:00",
+    "status": 200,
+    "data": [
+      {
+        "id": 12044489,
+        "username": "sp3lqmo64w",
+        "status": "active",
+        "created_at": "2026-09-10 01:49:48",
+        "traffic_limit": null,
+        "service_type": "residential_proxies",
+        "traffic": 3.3,
+        "traffic_count_from": "2026-09-10 01:49:41",
+        "auto_disable": false
+      }
+    ]
+  },
+  "subuser_24h": {
+    "response_saved_at_kst": "2026-09-28T01:02:14+09:00",
+    "request_parameters": {
+      "type": "24h"
+    },
+    "status": 200,
+    "data": {
+      "traffic": 0.29,
+      "traffic_rx": 0.24,
+      "traffic_tx": 0.05
+    }
+  },
+  "subuser_custom": {
+    "response_saved_at_kst": "2026-09-28T01:02:13+09:00",
+    "request_parameters": {
+      "type": "custom",
+      "from": "2026-09-27",
+      "to": "2026-09-28"
+    },
+    "status": 200,
+    "data": {
+      "traffic": 0.29,
+      "traffic_rx": 0.24,
+      "traffic_tx": 0.05
+    }
+  },
+  "statistics_hours": {
+    "response_saved_at_kst": "2026-09-28T01:02:14+09:00",
+    "request_parameters": {
+      "proxyType": "residential_proxies",
+      "startDate": "2026-09-26 15:00:00",
+      "endDate": "2026-09-27 16:05:00",
+      "proxyUsers": [
+        "12044489"
+      ],
+      "groupBy": "hour",
+      "limit": 500,
+      "page": 1
+    },
+    "status": 409,
+    "data": {
+      "error": "Subscription resources not available yet"
+    }
+  }
+}

@@ -793,6 +793,12 @@ class ConfigValidationTest(unittest.TestCase):
         c = CoupangRunConfig(output_dir=Path("/tmp"))
         self.assertIsNone(c.proxy)
 
+    def test_browser_engine_defaults_to_camoufox_and_rejects_unknown(self):
+        c = CoupangRunConfig(output_dir=Path("/tmp"))
+        self.assertEqual(c.browser_engine, "camoufox")
+        with self.assertRaises(ValueError):
+            CoupangRunConfig(output_dir=Path("/tmp"), browser_engine="unknown")
+
     def test_proxy_must_be_dict_or_none(self):
         with self.assertRaises(ValueError):
             CoupangRunConfig(output_dir=Path("/tmp"), proxy="http://proxy:8080")
@@ -863,6 +869,70 @@ class ConfigValidationTest(unittest.TestCase):
         kwargs = fake_camoufox.call_args.kwargs
         self.assertIsNone(kwargs["proxy"])
         self.assertTrue(any("회선 IP 직접 접속" in m for m in logs))
+
+    def test_create_chromium_browser_uses_persistent_context_and_cleans_up(self):
+        import tempfile
+        from unittest.mock import MagicMock, patch
+
+        context = MagicMock()
+        chromium = MagicMock()
+        chromium.launch_persistent_context.return_value = context
+        playwright = MagicMock()
+        playwright.chromium = chromium
+        manager = MagicMock()
+        manager.start.return_value = playwright
+        proxy = {"server": "http://proxy:22225", "username": "user", "password": "pw"}
+        profile = Path(tempfile.mkdtemp()) / ".chromium_profile"
+        config = _make_config(
+            tempfile.mkdtemp(), browser_engine="chromium", proxy=proxy,
+            profile_dir=profile,
+        )
+        crawler = CoupangCrawler(config, Control())
+        with patch("patchright.sync_api.sync_playwright", return_value=manager):
+            browser, cm = crawler._create_browser()
+
+        self.assertIs(browser, context)
+        chromium.launch_persistent_context.assert_called_once_with(
+            str(profile / "proxy"), headless=False, locale="ko-KR",
+            viewport={"width": 1280, "height": 800}, proxy=proxy,
+        )
+        cm.__exit__(None, None, None)
+        context.close.assert_called_once_with()
+        playwright.stop.assert_called_once_with()
+
+        direct_manager = MagicMock()
+        direct_playwright = MagicMock()
+        direct_playwright.chromium.launch_persistent_context.return_value = context
+        direct_manager.start.return_value = direct_playwright
+        with patch("patchright.sync_api.sync_playwright", return_value=direct_manager):
+            crawler._create_browser(with_proxy=False)
+            crawler._create_browser(with_proxy=False)
+        direct_calls = direct_playwright.chromium.launch_persistent_context.call_args_list
+        self.assertEqual(len(direct_calls), 2)
+        self.assertEqual(direct_calls[0].args[0], str(profile / "direct"))
+        self.assertEqual(direct_calls[0].args[0], direct_calls[1].args[0])
+        self.assertIsNone(direct_calls[0].kwargs["proxy"])
+
+    def test_chromium_temporary_profile_is_removed_when_driver_start_fails(self):
+        import tempfile
+        from unittest.mock import MagicMock, patch
+
+        config = _make_config(
+            tempfile.mkdtemp(), browser_engine="chromium",
+            use_persistent_profile=False,
+        )
+        manager = MagicMock()
+        manager.start.side_effect = RuntimeError("driver failed")
+        with tempfile.TemporaryDirectory() as tmp:
+            temporary_profile = Path(tmp) / "temporary-profile"
+            crawler = CoupangCrawler(config, Control())
+            with (
+                patch("app.core.coupang.crawler.tempfile.mkdtemp", return_value=str(temporary_profile)),
+                patch("patchright.sync_api.sync_playwright", return_value=manager),
+                self.assertRaises(RuntimeError),
+            ):
+                crawler._create_browser()
+            self.assertFalse(temporary_profile.exists())
 
 
 class NaturalInteractionCancelTest(unittest.TestCase):

@@ -1,0 +1,44 @@
+{
+  "pwff+ua152": {
+    "header_ua_sent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "coupang": {
+      "status": 403,
+      "server": "AkamaiGHost",
+      "title": "Access Denied",
+      "denied": true
+    },
+    "nav_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
+  },
+  "pwff+ua156": {
+    "header_ua_sent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
+    "coupang": {
+      "status": 403,
+      "server": "AkamaiGHost",
+      "title": "Access Denied",
+      "denied": true
+    },
+    "nav_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
+  },
+  "camoufox+ua156win": {
+    "header_ua_sent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "h2_hash": "6ea73faa8fc5aac76bded7bd238f6433",
+    "coupang": {
+      "status": 200,
+      "server": "envoy",
+      "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡",
+      "denied": false
+    },
+    "nav_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
+  },
+  "camoufox+ua156linux": {
+    "header_ua_sent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "h2_hash": "6ea73faa8fc5aac76bded7bd238f6433",
+    "coupang": {
+      "status": 200,
+      "server": "envoy",
+      "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡",
+      "denied": false
+    },
+    "nav_ua": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0"
+  }
+}

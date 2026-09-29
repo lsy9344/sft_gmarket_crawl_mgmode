@@ -1,0 +1,26 @@
+[
+  {
+    "imp": "safari260",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "len": 519
+  },
+  {
+    "imp": "safari184",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "len": 521
+  },
+  {
+    "imp": "tor145",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "len": 515
+  },
+  {
+    "imp": "edge101",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "len": 521
+  }
+]

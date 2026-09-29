@@ -122,8 +122,8 @@ CATEGORY_LINK_CLICK_JS = """
 # 실측(2026-08-28 타 PC 차단 사례): 465자 짜리 짧은 응답이 소프트 블록으로
 # 감지됐고, 원인 분류가 로그에 없어 IP 차단 여부 판단이 어려웠다.
 BLOCKED_DIAGNOSES = (
-    ("access denied", "Akamai 접근 거부 — IP 평판 차단으로 추정"),
-    ("reference #", "Akamai 접근 거부 — IP 평판 차단으로 추정"),
+    ("reference #", "Akamai 접근 거부 — 회선 또는 브라우저 상태 확인 필요"),
+    ("access denied", "접근 거부 — 회선 또는 브라우저 상태 확인 필요"),
     ("자동화된 테스트", "자동화 감지 챌린지 페이지"),
     ("보안 절차", "자동화 감지 챌린지 페이지"),
     ("captcha", "캡차 챌린지 페이지"),
@@ -556,8 +556,16 @@ class SearchCrawler(CoupangCrawler):
         # IP 로 200 이지만 판매자정보(getStoreReview)는 프록시 IP 에서 403 —
         # Akamai 가 엔드포인트별로 다른 규칙을 둔다. scratchpad 2-pass 방식의
         # 앱 반영: 프록시 세션을 닫고 비프록시(회선 IP) 세션을 새로 연다.
+        # vendor_phase_line="proxy" 면 전환 없이 목록 세션을 그대로 쓴다
+        # (Decodo+Chromium 재검증 — 403 실측은 Bright Data ISP 기준).
         if getattr(config, "proxy", None):
-            page = self._switch_to_direct_session(page)
+            if str(getattr(config, "vendor_phase_line", "direct")) == "proxy":
+                self._log(
+                    "  [프록시] 판매자 API 단계 — 목록과 같은 프록시 세션으로 "
+                    "진행합니다 (vendor_phase_line=proxy)"
+                )
+            else:
+                page = self._switch_to_direct_session(page)
 
         # Phase 5~7: 기존 스토어 API 파이프라인 재사용
         self._phase("vendor_mapping")
@@ -745,7 +753,7 @@ class SearchCrawler(CoupangCrawler):
         hint = f" — {diagnosis}" if diagnosis else ""
         raise _RunError(
             f"홈 웜업 단계에서 차단 감지: {reason}{hint}. "
-            "IP 평판 차단 가능성 — 쿨다운 후 재시도하세요.",
+            "사이트가 현재 접속을 거부했습니다.",
             reason="blocked",
         )
 

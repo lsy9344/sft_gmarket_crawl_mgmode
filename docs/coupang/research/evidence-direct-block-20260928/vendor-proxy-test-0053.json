@@ -1,0 +1,21 @@
+{
+  "exit_ip": "121.151.227.230",
+  "www-home": {
+    "status": 200,
+    "server": "envoy",
+    "len": 223893,
+    "head": "<!DOCTYPE html><html lang=\"ko-KR\"><head><meta charSet=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initia"
+  },
+  "store-review": {
+    "status": 200,
+    "server": "envoy",
+    "len": 1010,
+    "head": "{\"vendorId\":\"A00017880\",\"ratingCount\":4105,\"thumbUpCount\":3916,\"thumbDownCount\":189,\"thumbUpRatio\":95,\"name\":\"(주)햇살푸드시스템"
+  },
+  "shop-home": {
+    "status": 404,
+    "server": "envoy",
+    "len": 160,
+    "head": "{\"timestamp\":1790524391880,\"path\":\"/\",\"status\":\"NOT_FOUND\",\"error\":\"Not Found\",\"requestId\":null,\"exception\":\"ResponseSta"
+  }
+}

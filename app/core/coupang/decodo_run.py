@@ -9,13 +9,16 @@ from __future__ import annotations
 import json
 import random
 import re
+import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.core import config as app_config
 from app.core.base import CancelledError, Control
+from app.core.coupang.env_probe import EnvProbeResult, ProbeFn
 from app.core.coupang.outcome import RunOutcome, determine_outcome
 from app.core.coupang.resume_store import (
     STATUS_FINISHED,
@@ -37,6 +40,12 @@ from app.models.coupang_records import CoupangRunSummary
 MAX_ATTEMPTS = 3
 RETRY_WAIT_SECONDS = 90.0
 MAX_GEO_ROTATIONS = 3
+# 새 Decodo 회선(프록시) 차단이 이 횟수만큼 연달아 나오면 환경 자체가
+# 차단 상태로 본다. 2026-09-28 12:58·2026-09-29 08:28 실측 — 이 상태의
+# 재시도는 전부 실패(재시도 위치 성공 0/8)하고 회선 평판만 악화한다.
+# 그다음 시도를 건너뛰고 '다음 날 재개'를 안내한다. 브라우저를 띄우지
+# 않는 실패(사전점검 403)도 같이 센다.
+CONSECUTIVE_PROXY_BLOCK_ABORT = 2
 # 아직 어떤 시도도 결과를 내지 않았을 때의 자리표시자 문구 — 취소 시 이 값이
 # 남아 있으면 실제 결과가 없다는 뜻이므로 요약을 새로 만든다.
 _NOT_RUN_ERROR = "실행되지 않았습니다"
@@ -122,6 +131,15 @@ def should_retry(summary: CoupangRunSummary) -> bool:
         # 목록 단계부터 다시 돌리는 것은 무의미하다(작업지시서 §3.3).
         return False
     return not should_keep_attempt(summary)
+
+
+def _is_proxy_line_block(summary: CoupangRunSummary) -> bool:
+    """프록시 회선(목록 세션)에서 막힌 차단 — 새 회선 재시도 대상."""
+    return (
+        not summary.cancelled
+        and summary.termination_reason == "blocked"
+        and not getattr(summary, "blocked_direct", False)
+    )
 
 
 def category_run_dir(
@@ -245,13 +263,15 @@ def run_category_attempts(
     retry_wait: float = RETRY_WAIT_SECONDS,
     exit_ip_fn: ExitIpFn | None = None,
     start_fresh: bool = False,
+    probe_fn: ProbeFn | None = None,
 ) -> CoupangRunSummary:
     """카테고리 1개를 최대 max_attempts 회, 시도마다 새 스티키 세션으로 실행.
 
     시도(회선) 간에 카테고리 폴더의 진행 기록(ResumeStore)을 공유해, 차단·
     종료 직전까지 저장된 페이지·판매자부터 이어서 수집한다(재개). 기존 기록과
     설정이 불일치하면 재개하지 않고 이유를 알린다. start_fresh=True 면 기존
-    기록을 아카이브로 보존한 뒤 처음부터 시작한다.
+    기록을 아카이브로 보존한 뒤 처음부터 시작한다. probe_fn 을 주면 각 시도
+    전에 홈 사전 점검(직접+프록시)을 돌리고 막힌 회선은 브라우저 없이 넘긴다.
     """
     log = on_log or (lambda _m: None)
     check_exit = exit_ip_fn or fetch_exit_ip
@@ -318,6 +338,7 @@ def run_category_attempts(
             log(f"[재개] 이어서 수집 — {store.preview_text()}")
 
         best_saved: CoupangRunSummary | None = None
+        consecutive_proxy_blocks = 0
 
         for attempt in range(1, attempts + 1):
             try:
@@ -344,49 +365,109 @@ def run_category_attempts(
                     return _with_saved(last, best_saved)
                 continue
 
-            prefix = str(config.output_prefix or "coupang_category")
-            profile_dir = run_dir / f".profile_try{attempt}"
-            attempt_config = replace(
-                config,
-                output_dir=run_dir,
-                proxy=proxy,
-                require_login=False,
-                subcategories=(),
-                output_prefix=f"{prefix}_try{attempt}",
-                profile_dir=profile_dir,
-                use_persistent_profile=True,
-                resume_store=store,
-                # 이 PC 회선 차단의 전역 기록 — 출력 루트(트리 로드가 기록하는
-                # 위치와 같음). 다른 카테고리 시작 시 같은 쿨다운 게이트를 적용.
-                global_block_state_dir=_global_block_state_dir(config),
-            )
-            log(
-                f"[Decodo] 시도 {attempt}/{attempts} — 한국 고정 회선 "
-                f"({proxy_summary(proxy)})"
-            )
-            if on_attempt_start is not None:
-                on_attempt_start(attempt, attempts)
-
-            try:
-                crawler = crawler_factory(attempt_config)
-                last = crawler.run()
-            except CancelledError:
-                if last.error == _NOT_RUN_ERROR:
+            # 사전 점검(선택) — 브라우저·프로필을 만들기 전에 curl_cffi 홈
+            # GET(직접 1회 + 이 프록시 회선 1회)으로 막힌 회선을 걸러낸다.
+            # 통과한 회선을 그대로 이 시도의 회선으로 쓴다(추가 회선 소모 없음).
+            probe_blocked = False
+            if probe_fn is not None:
+                try:
+                    control.checkpoint()
+                except CancelledError:
+                    if last.error == _NOT_RUN_ERROR:
+                        last = CoupangRunSummary()
+                    last.cancelled = True
+                    last.termination_reason = "cancelled"
+                    log("[Decodo] 취소됨")
+                    return _with_saved(last, best_saved)
+                probe: EnvProbeResult = probe_fn(proxy)
+                vendor_direct = (
+                    str(getattr(config, "vendor_phase_line", "direct")) == "direct"
+                )
+                if probe.direct_blocked and vendor_direct:
                     last = CoupangRunSummary()
-                last.cancelled = True
-                last.termination_reason = "cancelled"
-                log("[Decodo] 취소됨")
-                return _with_saved(last, best_saved)
-            except ResumeStoreError as e:
-                # 크롤러 밖(팩토리 단계 등)에서 진행 기록 오류가 난 경우의
-                # 안전망이다. 파이프라인 안의 오류는 crawler.run() 이
-                # termination_reason="resume_store_error" 로 구조화해 전달하며
-                # 아래 루프에서 재시도 없이 중단된다(작업지시서 §3.1).
-                last = CoupangRunSummary()
-                last.termination_reason = "resume_store_error"
-                last.error = f"진행 기록 저장 실패로 중단했습니다: {e}"
-                log(f"[재개] {last.error}")
-                return _with_saved(last, best_saved)
+                    last.termination_reason = "blocked"
+                    last.blocked_direct = True
+                    last.error = (
+                        "사전 점검에서 이 PC 회선(직접 접속)이 차단(403) 상태입니다 — "
+                        "판매자 단계를 진행할 수 없습니다. 오늘은 중단하고 다음 날 재개하세요."
+                    )
+                    log(f"[사전점검] {last.error}")
+                    return _with_saved(last, best_saved)
+                if probe.proxy_blocked:
+                    probe_blocked = True
+                    last = CoupangRunSummary()
+                    last.termination_reason = "blocked"
+                    last.error = (
+                        "사전 점검 — 새 Decodo 회선이 홈에서 차단(403)되었습니다."
+                    )
+                    log("[사전점검] 새 Decodo 회선 홈 403 — 브라우저를 띄우지 않습니다.")
+                else:
+                    log(
+                        "[사전점검] 결과 — "
+                        f"직접 {probe.direct_status if probe.direct_status is not None else '불명'}, "
+                        f"프록시 {probe.proxy_status if probe.proxy_status is not None else '불명'} "
+                        "— 진행합니다."
+                    )
+
+            if not probe_blocked:
+                prefix = str(config.output_prefix or "coupang_category")
+                # Camoufox 프로필을 Chromium에 넘기지 않고, 회선마다 새 쿠키 저장소를
+                # 만든다. 같은 카테고리를 다시 실행해도 이전 회선의 쿠키를 재사용하지
+                # 않도록 난수 접미사를 붙인다.
+                profile_dir = run_dir / f".chromium_profile_try{attempt}_{uuid4().hex[:10]}"
+                profile_created = not profile_dir.exists()
+                attempt_config = replace(
+                    config,
+                    output_dir=run_dir,
+                    browser_engine="chromium",
+                    proxy=proxy,
+                    require_login=False,
+                    subcategories=(),
+                    output_prefix=f"{prefix}_try{attempt}",
+                    profile_dir=profile_dir,
+                    use_persistent_profile=True,
+                    resume_store=store,
+                    # 이 PC 회선 차단의 전역 기록 — 출력 루트(트리 로드가 기록하는
+                    # 위치와 같음). 다른 카테고리 시작 시 같은 쿨다운 게이트를 적용.
+                    global_block_state_dir=_global_block_state_dir(config),
+                )
+                log(
+                    f"[Decodo] 시도 {attempt}/{attempts} — 한국 고정 회선 "
+                    f"({proxy_summary(proxy)})"
+                )
+                if on_attempt_start is not None:
+                    on_attempt_start(attempt, attempts)
+
+                try:
+                    try:
+                        crawler = crawler_factory(attempt_config)
+                        last = crawler.run()
+                    except CancelledError:
+                        if last.error == _NOT_RUN_ERROR:
+                            last = CoupangRunSummary()
+                        last.cancelled = True
+                        last.termination_reason = "cancelled"
+                        log("[Decodo] 취소됨")
+                        return _with_saved(last, best_saved)
+                    except ResumeStoreError as e:
+                        # 크롤러 밖(팩토리 단계 등)에서 진행 기록 오류가 난 경우의
+                        # 안전망이다. 파이프라인 안의 오류는 crawler.run() 이
+                        # termination_reason="resume_store_error" 로 구조화해 전달하며
+                        # 아래 루프에서 재시도 없이 중단된다(작업지시서 §3.1).
+                        last = CoupangRunSummary()
+                        last.termination_reason = "resume_store_error"
+                        last.error = f"진행 기록 저장 실패로 중단했습니다: {e}"
+                        log(f"[재개] {last.error}")
+                        return _with_saved(last, best_saved)
+                finally:
+                    if profile_created:
+                        try:
+                            if profile_dir.is_symlink() or profile_dir.is_file():
+                                profile_dir.unlink()
+                            elif profile_dir.is_dir():
+                                shutil.rmtree(profile_dir)
+                        except OSError as e:
+                            log(f"[정리] Chromium 프로필 삭제 실패: {e}")
 
             best_saved = _remember_saved(best_saved, last)
             if should_keep_attempt(last):
@@ -404,6 +485,19 @@ def run_category_attempts(
 
             reason = last.termination_reason or "error"
             log(f"[Decodo] 시도 {attempt} 실패 ({reason})")
+            if _is_proxy_line_block(last):
+                consecutive_proxy_blocks += 1
+                if consecutive_proxy_blocks >= CONSECUTIVE_PROXY_BLOCK_ABORT:
+                    last.error = (
+                        f"새 Decodo 회선 연속 {consecutive_proxy_blocks}회 차단 — "
+                        "환경(프록시 풀) 차단 상태로 보입니다. 오늘은 중단하고 "
+                        "다음 날 재개하세요. 반복 재시도는 회선 평판을 악화합니다"
+                        "(2026-09-28 12:58·2026-09-29 08:28 실측)."
+                    )
+                    log(f"[Decodo] {last.error}")
+                    return _with_saved(last, best_saved)
+            else:
+                consecutive_proxy_blocks = 0
             if reason == "resume_store_error":
                 # 진행 기록 쓰기 실패 — 회선을 바꿔도 같은 지점에서 다시
                 # 실패하므로 재시도하지 않는다(작업지시서 §3.1).
@@ -442,6 +536,7 @@ def run_category_batch(
     start_fresh: bool = False,
     skip_finished: bool = False,
     exit_ip_fn: ExitIpFn | None = None,
+    probe_fn: ProbeFn | None = None,
 ) -> tuple[CoupangRunSummary, int]:
     """Run each category in its own resume folder, stopping at the first gap."""
     if not configs:
@@ -506,6 +601,7 @@ def run_category_batch(
                 on_attempt_start=on_attempt_start,
                 start_fresh=False,
                 exit_ip_fn=exit_ip_fn,
+                probe_fn=probe_fn,
             )
             previous_crawled_config = config
         for field in numeric_fields:

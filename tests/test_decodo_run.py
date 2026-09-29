@@ -260,6 +260,54 @@ class AttemptRuleTest(unittest.TestCase):
 
 
 class RunAttemptsTest(unittest.TestCase):
+    def test_owned_chromium_profile_is_removed_after_crawler_finishes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def factory(cfg):
+                cfg.profile_dir.mkdir(parents=True)
+                (cfg.profile_dir / "Cookies").write_text("test", encoding="utf-8")
+                return _FakeCrawler(_summary(termination_reason="success", products_seen=1), cfg)
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(), crawler_factory=factory,
+                retry_wait=0, exit_ip_fn=lambda _p: _KOREA,
+            )
+            self.assertEqual(result.termination_reason, "success")
+            profiles = list(category_run_dir(Path(tmp), "194829", "수산물").glob(".chromium_profile_try*"))
+            self.assertEqual(profiles, [])
+
+    def test_owned_chromium_profile_is_removed_after_factory_exception(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def factory(cfg):
+                cfg.profile_dir.mkdir(parents=True)
+                raise RuntimeError("browser failed")
+
+            with self.assertRaises(RuntimeError):
+                run_category_attempts(
+                    _config(tmp), _settings(), Control(), crawler_factory=factory,
+                    max_attempts=1, retry_wait=0, exit_ip_fn=lambda _p: _KOREA,
+                )
+            profiles = list(category_run_dir(Path(tmp), "194829", "수산물").glob(".chromium_profile_try*"))
+            self.assertEqual(profiles, [])
+
+    def test_owned_chromium_profile_is_removed_after_cancel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class _CancelCrawler:
+                def __init__(self, cfg):
+                    self.cfg = cfg
+
+                def run(self):
+                    self.cfg.profile_dir.mkdir(parents=True)
+                    raise CancelledError()
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=lambda cfg: _CancelCrawler(cfg),
+                retry_wait=0, exit_ip_fn=lambda _p: _KOREA,
+            )
+            self.assertTrue(result.cancelled)
+            profiles = list(category_run_dir(Path(tmp), "194829", "수산물").glob(".chromium_profile_try*"))
+            self.assertEqual(profiles, [])
+
     def test_succeeds_on_first_try(self):
         with tempfile.TemporaryDirectory() as tmp:
             ok = _summary(termination_reason="success", products_seen=5, unique_vendors=2)
@@ -303,6 +351,10 @@ class RunAttemptsTest(unittest.TestCase):
             self.assertEqual(result.products_seen, 3)
             self.assertNotEqual(configs[0].proxy["username"], configs[1].proxy["username"])
             self.assertNotEqual(configs[0].profile_dir, configs[1].profile_dir)
+            self.assertEqual(configs[0].browser_engine, "chromium")
+            self.assertEqual(configs[1].browser_engine, "chromium")
+            self.assertTrue(configs[0].profile_dir.name.startswith(".chromium_profile_try1_"))
+            self.assertTrue(configs[1].profile_dir.name.startswith(".chromium_profile_try2_"))
 
     def test_stops_after_max_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -510,6 +562,246 @@ class RunAttemptsTest(unittest.TestCase):
             joined = "\n".join(logs)
             self.assertIn("일부 수집", joined)
             self.assertNotIn("시도 1 성공", joined)
+
+
+def _probe_result(direct=200, proxy=200):
+    from app.core.coupang.env_probe import EnvProbeResult
+
+    return EnvProbeResult(direct_status=direct, proxy_status=proxy)
+
+
+class ProbeGateTest(unittest.TestCase):
+    """브라우저를 띄우기 전 사전점검(env_probe) 동작."""
+
+    def test_pass_runs_crawler_on_probed_session_without_extra_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = _summary(termination_reason="success", products_seen=2)
+            seen = []
+            probed = []
+
+            def factory(cfg):
+                seen.append(cfg)
+                return _FakeCrawler(ok, cfg)
+
+            def probe(proxy):
+                probed.append(proxy)
+                return _probe_result()
+
+            exit_calls = {"n": 0}
+
+            def exit_fn(_proxy):
+                exit_calls["n"] += 1
+                return _KOREA
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                exit_ip_fn=exit_fn, probe_fn=probe,
+            )
+            self.assertEqual(result.termination_reason, "success")
+            self.assertEqual(exit_calls["n"], 1)
+            self.assertEqual(len(seen), 1)
+            # 점검을 통과한 회선을 그대로 이 시도의 회선으로 쓴다.
+            self.assertEqual(probed[0]["username"], seen[0].proxy["username"])
+
+    def test_proxy_blocked_twice_aborts_before_browser_starts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            called = []
+            exit_calls = {"n": 0}
+            logs = []
+
+            def factory(cfg):
+                called.append(cfg)
+                return _FakeCrawler(_summary(termination_reason="success", products_seen=1))
+
+            def exit_fn(_proxy):
+                exit_calls["n"] += 1
+                return _KOREA
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                on_log=logs.append,
+                exit_ip_fn=exit_fn,
+                probe_fn=lambda _proxy: _probe_result(proxy=403),
+            )
+            self.assertEqual(result.termination_reason, "blocked")
+            self.assertEqual(called, [])
+            self.assertEqual(exit_calls["n"], 2)
+            joined = "\n".join(logs)
+            self.assertIn("브라우저를 띄우지 않습니다", joined)
+            self.assertIn("다음 날 재개", result.error or "")
+            profiles = list(
+                category_run_dir(Path(tmp), "194829", "수산물").glob(".chromium_profile_try*")
+            )
+            self.assertEqual(profiles, [])
+
+    def test_proxy_blocked_once_then_pass_succeeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = _summary(termination_reason="success", products_seen=3)
+            seen = []
+            results = [_probe_result(proxy=403), _probe_result()]
+
+            def factory(cfg):
+                seen.append(cfg)
+                return _FakeCrawler(ok, cfg)
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                exit_ip_fn=lambda _p: _KOREA,
+                probe_fn=lambda _proxy: results.pop(0),
+            )
+            self.assertEqual(result.termination_reason, "success")
+            self.assertEqual(len(seen), 1)
+
+    def test_direct_blocked_aborts_when_vendor_phase_is_direct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            called = []
+
+            def factory(cfg):
+                called.append(cfg)
+                return _FakeCrawler(_summary(termination_reason="success", products_seen=1))
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                exit_ip_fn=lambda _p: _KOREA,
+                probe_fn=lambda _proxy: _probe_result(direct=403),
+            )
+            self.assertEqual(result.termination_reason, "blocked")
+            self.assertTrue(result.blocked_direct)
+            self.assertEqual(called, [])
+            self.assertIn("이 PC 회선", result.error or "")
+
+    def test_direct_blocked_proceeds_when_vendor_phase_is_proxy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = _summary(termination_reason="success", products_seen=1)
+            called = []
+
+            def factory(cfg):
+                called.append(cfg)
+                return _FakeCrawler(ok, cfg)
+
+            config = replace(_config(tmp), vendor_phase_line="proxy")
+            result = run_category_attempts(
+                config, _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                exit_ip_fn=lambda _p: _KOREA,
+                probe_fn=lambda _proxy: _probe_result(direct=403),
+            )
+            self.assertEqual(result.termination_reason, "success")
+            self.assertEqual(len(called), 1)
+
+    def test_unknown_probe_result_proceeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = _summary(termination_reason="success", products_seen=1)
+            called = []
+
+            def factory(cfg):
+                called.append(cfg)
+                return _FakeCrawler(ok, cfg)
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                exit_ip_fn=lambda _p: _KOREA,
+                probe_fn=lambda _proxy: _probe_result(direct=None, proxy=None),
+            )
+            self.assertEqual(result.termination_reason, "success")
+            self.assertEqual(len(called), 1)
+
+
+class ConsecutiveProxyBlockTest(unittest.TestCase):
+    """새 회선 연속 차단 서킷브레이커 — 재시도 위치 성공 0/8 실측(2026-09-29)."""
+
+    def test_two_crawler_blocks_stop_before_third_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fail = _summary(termination_reason="blocked", products_seen=0)
+            exit_calls = {"n": 0}
+
+            def factory(_cfg):
+                return _FakeCrawler(fail, _cfg)
+
+            def exit_fn(_proxy):
+                exit_calls["n"] += 1
+                return _KOREA
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                exit_ip_fn=exit_fn,
+            )
+            self.assertEqual(result.termination_reason, "blocked")
+            self.assertEqual(exit_calls["n"], 2)
+            self.assertIn("연속 2회 차단", result.error or "")
+            self.assertIn("다음 날 재개", result.error or "")
+
+    def test_counter_resets_on_non_block_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            blocked = _summary(termination_reason="blocked", products_seen=0)
+            error = _summary(termination_reason="error", error="x", products_seen=0)
+            queue = [blocked, error, blocked]
+            n = {"c": 0}
+
+            def factory(_cfg):
+                n["c"] += 1
+                return _FakeCrawler(queue.pop(0), _cfg)
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, max_attempts=3, retry_wait=0,
+                exit_ip_fn=lambda _p: _KOREA,
+            )
+            self.assertEqual(n["c"], 3)
+            self.assertEqual(result.termination_reason, "blocked")
+            self.assertNotIn("연속 2회 차단", result.error or "")
+
+    def test_direct_block_is_not_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            direct = _summary(
+                termination_reason="blocked", blocked_direct=True, products_seen=0,
+            )
+            n = {"c": 0}
+
+            def factory(_cfg):
+                n["c"] += 1
+                return _FakeCrawler(direct, _cfg)
+
+            result = run_category_attempts(
+                _config(tmp), _settings(), Control(),
+                crawler_factory=factory, retry_wait=0,
+                exit_ip_fn=lambda _p: _KOREA,
+            )
+            # 직접 회선 차단은 should_retry 에서 이미 재시도 금지 — 1회로 중단.
+            self.assertEqual(n["c"], 1)
+            self.assertNotIn("연속 2회 차단", result.error or "")
+
+    def test_batch_forwards_probe_fn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def probe(_proxy):
+                return _probe_result()
+
+            with patch(
+                "app.core.coupang.decodo_run.run_category_attempts",
+                return_value=_summary(termination_reason="success", products_seen=1),
+            ) as attempt:
+                run_category_batch(
+                    (_config(tmp),), _settings(), Control(),
+                    crawler_factory=lambda _: None,
+                    probe_fn=probe,
+                )
+            self.assertIs(attempt.call_args.kwargs.get("probe_fn"), probe)
+
+            with patch(
+                "app.core.coupang.decodo_run.run_category_attempts",
+                return_value=_summary(termination_reason="success", products_seen=1),
+            ) as attempt:
+                run_category_batch(
+                    (_config(tmp),), _settings(), Control(),
+                    crawler_factory=lambda _: None,
+                )
+            self.assertIsNone(attempt.call_args.kwargs.get("probe_fn"))
 
 
 class CategoryRunDirTest(unittest.TestCase):

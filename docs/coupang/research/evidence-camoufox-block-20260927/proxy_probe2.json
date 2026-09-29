@@ -1,0 +1,34 @@
+[
+  {
+    "tag": "1-chromium-decodo",
+    "ts_edge": "23.193.163.17",
+    "status": 200,
+    "server": "envoy",
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)",
+    "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡"
+  },
+  {
+    "tag": "2-camou-decodo",
+    "ts_edge": "23.193.163.9",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101",
+    "title": "Access Denied"
+  },
+  {
+    "tag": "3-camou-direct",
+    "ts_edge": "23.193.163.26",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101",
+    "title": "Access Denied"
+  },
+  {
+    "tag": "4-chromium-decodo-2",
+    "ts_edge": "23.193.163.16",
+    "status": 200,
+    "server": "envoy",
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)",
+    "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡"
+  }
+]

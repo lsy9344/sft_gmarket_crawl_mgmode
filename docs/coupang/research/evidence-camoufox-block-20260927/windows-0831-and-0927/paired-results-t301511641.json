@@ -1,0 +1,60 @@
+[
+  {
+    "arm": "camoufox",
+    "session_id": "t301511641",
+    "camoufox_package": "0.5.4",
+    "playwright": "1.60.0",
+    "browser_path": "C:\\Users\\dltnd\\AppData\\Local\\camoufox\\camoufox\\Cache\\browsers\\official\\152.0.4-beta.28-386fc2f4\\camoufox.exe",
+    "documents": [
+      {
+        "url": "https://www.coupang.com/",
+        "status": 407,
+        "server": null
+      },
+      {
+        "url": "https://www.coupang.com/",
+        "status": 403,
+        "server": "AkamaiGHost"
+      }
+    ],
+    "ip_before": "211.107.215.244",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "http_status": 403,
+    "title": "Access Denied",
+    "body_length": 195,
+    "url": "https://www.coupang.com/",
+    "denied": true,
+    "product_links": 0,
+    "ip_after": "211.107.215.244",
+    "outcome": "access_denied"
+  },
+  {
+    "arm": "edge",
+    "session_id": "t301511641",
+    "camoufox_package": "0.5.4",
+    "playwright": "1.60.0",
+    "browser_path": "msedge",
+    "documents": [
+      {
+        "url": "https://www.coupang.com/",
+        "status": 200,
+        "server": "envoy"
+      },
+      {
+        "url": "https://www.coupang.com/n-api/web-adapter/proxy",
+        "status": 403,
+        "server": "AkamaiGHost"
+      }
+    ],
+    "ip_before": "211.107.215.244",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+    "http_status": 200,
+    "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡",
+    "body_length": 1011,
+    "url": "https://www.coupang.com/",
+    "denied": false,
+    "product_links": 1,
+    "ip_after": "211.107.215.244",
+    "outcome": "homepage_visible"
+  }
+]

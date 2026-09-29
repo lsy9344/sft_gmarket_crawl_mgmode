@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import random
+import shutil
+import tempfile
 import time
 import traceback
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from app.core.base import CancelledError, Control
@@ -44,6 +47,25 @@ SELLER_API_CONSECUTIVE_ERROR_LIMIT = 5
 # individualInfo 배치(= vendorItemId 10건) 연속 실패 한도. 매핑이 전부 실패한
 # 상태에서는 2차 판매자정보 단계도 성공하지 않으므로 조기에 끊는다.
 VENDOR_BATCH_CONSECUTIVE_ERROR_LIMIT = 3
+
+
+class _ChromiumContextManager:
+    """Own a Patchright persistent context and its Playwright driver."""
+
+    def __init__(self, playwright, context, temporary_profile: str | None = None) -> None:
+        self._playwright = playwright
+        self._context = context
+        self._temporary_profile = temporary_profile
+
+    def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
+        try:
+            self._context.close()
+        finally:
+            try:
+                self._playwright.stop()
+            finally:
+                if self._temporary_profile:
+                    shutil.rmtree(self._temporary_profile, ignore_errors=True)
 
 
 def _safe_callback(cb: Callable | None, name: str, on_log: Callable | None, *args: Any) -> None:
@@ -191,6 +213,9 @@ class CoupangCrawler:
         """
         if self._browser_factory is not None:
             return self._browser_factory(), None
+        proxy = None if with_proxy is False else getattr(self.config, "proxy", None)
+        if getattr(self.config, "browser_engine", "camoufox") == "chromium":
+            return self._create_chromium_browser(proxy, with_proxy)
         try:
             from camoufox.sync_api import Camoufox
         except ImportError as e:
@@ -202,7 +227,6 @@ class CoupangCrawler:
         # 프록시 (Coupang 카테고리: Decodo 스티키 세션). with_proxy=False 면
         # 회선 IP 세션(2차 판매자 API)이므로 프록시를 뺀다.
         # geoip=True 가 프록시 IP 기준 locale/타임존/지리를 자동 동기화한다.
-        proxy = None if with_proxy is False else getattr(self.config, "proxy", None)
         if proxy:
             from app.core.decodo import proxy_summary
             self._log(
@@ -230,6 +254,61 @@ class CoupangCrawler:
         )
         browser = cm.__enter__()
         return browser, cm
+
+    def _create_chromium_browser(
+        self, proxy: dict | None, with_proxy: bool | None = None,
+    ):
+        """Open Patchright Chromium with a profile isolated from Camoufox."""
+        try:
+            from patchright.sync_api import sync_playwright
+        except ImportError as e:
+            raise _RunError(
+                "Patchright 패키지가 설치되지 않았습니다. "
+                "명령 프롬프트에서 SellerCollector.exe --setup-runtime 을 먼저 실행하세요.",
+                reason="error",
+            ) from e
+
+        if proxy:
+            from app.core.decodo import proxy_summary
+            self._log(f"  [프록시] 경유: {proxy_summary(proxy)}")
+        elif getattr(self.config, "proxy", None):
+            self._log("  [프록시] 2차 세션 — 회선 IP 직접 접속 (프록시 미사용)")
+
+        temporary_profile: str | None = None
+        profile_dir = self.config.profile_dir
+        if profile_dir is None:
+            if self.config.use_persistent_profile:
+                profile_dir = DEFAULT_COUPANG_PROFILE_DIR / "chromium"
+            else:
+                temporary_profile = tempfile.mkdtemp(prefix="coupang-chromium-")
+                profile_dir = temporary_profile
+        profile_root = Path(profile_dir)
+        profile_scope = "direct" if with_proxy is False or proxy is None else "proxy"
+        profile_dir = str(profile_root / profile_scope)
+
+        try:
+            playwright = sync_playwright().start()
+        except Exception:
+            if temporary_profile:
+                shutil.rmtree(temporary_profile, ignore_errors=True)
+            raise
+        try:
+            context = playwright.chromium.launch_persistent_context(
+                profile_dir,
+                headless=False,
+                locale="ko-KR",
+                viewport={"width": 1280, "height": 800},
+                proxy=proxy,
+            )
+        except Exception:
+            try:
+                playwright.stop()
+            finally:
+                if temporary_profile:
+                    shutil.rmtree(temporary_profile, ignore_errors=True)
+            raise
+        self._log(f"  Chromium 영속 프로필 사용: {profile_dir}")
+        return context, _ChromiumContextManager(playwright, context, temporary_profile)
 
     def _attach_http_status_logger(self, page) -> None:
         """문서(document) 탐색의 4xx/5xx 응답 상태를 로그에 남긴다 (차단 진단용).
@@ -493,7 +572,7 @@ class CoupangCrawler:
         self._natural_interaction(page, 5 * self._wait_scale)
         self.control.checkpoint()
 
-        all_vendors: dict[str, dict] = {}
+        all_mappings: dict[str, dict] = {}
         batch_size = self.config.batch_size
         total_batches = (len(missing) + batch_size - 1) // batch_size
         batch_errors = 0
@@ -503,7 +582,7 @@ class CoupangCrawler:
             self.control.checkpoint()
             start = batch_idx * batch_size
             batch = missing[start:start + batch_size]
-            vendors, had_error = self._get_vendors_for_items(page, batch)
+            mappings, had_error = self._get_vendors_for_items(page, batch)
             if had_error:
                 batch_errors += 1
                 summary.request_errors += 1
@@ -517,32 +596,27 @@ class CoupangCrawler:
                     )
             else:
                 consecutive_batch_errors = 0
-            all_vendors.update(vendors)
+            all_mappings.update(mappings)
             self._progress("vendor_mapping", batch_idx + 1, total_batches)
-            self._log(f"  Batch {batch_idx + 1}/{total_batches}: {len(batch)}건 → {len(vendors)}명")
+            self._log(f"  Batch {batch_idx + 1}/{total_batches}: {len(batch)}건 → "
+                      f"{len(mappings)}건")
             self.control.sleep(random.uniform(1.0, 2.0) * self._wait_scale)
 
-        if not all_vendors and batch_errors > 0:
+        if not all_mappings and batch_errors > 0:
             raise _RunError(
                 f"individualInfo API 전량 실패 ({batch_errors}/{total_batches} 배치 오류). "
                 "세션/네트워크 상태를 확인하세요.",
                 reason="error",
             )
 
-        if store is not None and (all_vendors or saved):
-            restored = _by_vendor_id(saved.values())
-            restored.update(all_vendors)
-            by_viid = {
-                payload.get("vendorItemId"): payload
-                for payload in restored.values()
-                if isinstance(payload, dict) and payload.get("vendorItemId")
-            }
-            store.save_mapping(by_viid)
-            return restored
-        return all_vendors
+        mappings = dict(saved)
+        mappings.update(all_mappings)
+        if store is not None and mappings:
+            store.save_mapping(mappings)
+        return _by_vendor_id(mappings.values())
 
     def _get_vendors_for_items(self, page, vendor_item_ids: list[str]) -> tuple[dict, bool]:
-        """Returns (vendors_dict, had_error)."""
+        """Returns (vendor_item_id_to_vendor, had_error)."""
         result = page.evaluate("""async (args) => {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 30000);
@@ -588,20 +662,22 @@ class CoupangCrawler:
             self._log(f"  individualInfo 실패: 응답 code={data.get('code')}, products 없음")
             return {}, True
 
-        vendors = {}
+        mappings = {}
         for product in data["data"]["products"]:
             store_info = product.get("storeInfoArea", {})
             vid = store_info.get("vendorId")
-            if vid:
-                vendors[vid] = {
+            viid = product.get("vendorItemId")
+            if vid and viid:
+                viid = str(viid)
+                mappings[viid] = {
                     "vendorId": vid,
                     "storeId": store_info.get("storeId"),
                     "displayName": store_info.get("displayName"),
                     "productId": product.get("productId"),
                     "itemId": product.get("itemId"),
-                    "vendorItemId": product.get("vendorItemId"),
+                    "vendorItemId": viid,
                 }
-        return vendors, False
+        return mappings, False
 
     def _fetch_business_info(
         self, page, vendor_ids: list[str], all_vendors: dict, summary: CoupangRunSummary

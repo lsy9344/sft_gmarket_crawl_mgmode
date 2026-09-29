@@ -1,0 +1,174 @@
+[
+  {
+    "tag": "ctrl-chromium",
+    "docs": [
+      {
+        "url": "https://www.coupang.com/",
+        "status": 200,
+        "server": "envoy"
+      },
+      {
+        "url": "https://www.coupang.com/n-api/web-adapter/proxy",
+        "status": 200,
+        "server": "envoy"
+      }
+    ],
+    "status": 200,
+    "nav_error": null,
+    "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡",
+    "body_len": 2320,
+    "body_head": "판매자 가입 고객센터 회원가입 로그인 즐겨찾기 입점신청 카테고리 전체 마이쿠팡 0 장바구니 쿠팡플레이 로켓배송 로켓프레시 2026 추석 다시 구매 쿠팡비즈 로켓직구 골드박스 이달의신상 입점신청 판매자특가 와우회원할인 반품마켓 착한상점 기획전 쿠팡트래블 장바구니 0 최근본상품 0  / prev next              오늘의 발견 오늘 쿠팡이 엄선한 ",
+    "denied": false,
+    "fp": {
+      "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+      "platform": "Linux x86_64",
+      "oscpu": null,
+      "lang": "ko-KR",
+      "tz": "Asia/Seoul",
+      "screen": [
+        1280,
+        800
+      ],
+      "dpr": 1,
+      "hw": 16,
+      "webdriver": false,
+      "webgl": null
+    }
+  },
+  {
+    "tag": "cf-app-replica",
+    "docs": [
+      {
+        "url": "https://www.coupang.com/",
+        "status": 403,
+        "server": "AkamaiGHost"
+      }
+    ],
+    "status": 403,
+    "nav_error": null,
+    "title": "Access Denied",
+    "body_len": 195,
+    "body_head": "Access Denied You don't have permission to access \"http://www.coupang.com/\" on this server.  Reference #18.5a3c117.1790519535.9464ed95  https://errors.edgesuite.net/18.5a3c117.1790519535.9464ed95",
+    "denied": true,
+    "fp": {
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+      "platform": "Win32",
+      "oscpu": "Windows NT 10.0; Win64; x64",
+      "lang": "ko-KR",
+      "tz": "Asia/Seoul",
+      "screen": [
+        1680,
+        1050
+      ],
+      "dpr": 1,
+      "hw": 8,
+      "webdriver": false,
+      "webgl": [
+        "Google Inc. (NVIDIA)",
+        "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"
+      ]
+    }
+  },
+  {
+    "tag": "cf-os-windows",
+    "docs": [
+      {
+        "url": "https://www.coupang.com/",
+        "status": 403,
+        "server": "AkamaiGHost"
+      }
+    ],
+    "status": 403,
+    "nav_error": null,
+    "title": "Access Denied",
+    "body_len": 191,
+    "body_head": "Access Denied You don't have permission to access \"http://www.coupang.com/\" on this server.  Reference #18.4a3c117.1790519542.521195  https://errors.edgesuite.net/18.4a3c117.1790519542.521195",
+    "denied": true,
+    "fp": {
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+      "platform": "Win32",
+      "oscpu": "Windows NT 10.0; Win64; x64",
+      "lang": "ko-KR",
+      "tz": "Asia/Seoul",
+      "screen": [
+        1680,
+        1050
+      ],
+      "dpr": 1,
+      "hw": 2,
+      "webdriver": false,
+      "webgl": [
+        "Google Inc. (Intel)",
+        "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar"
+      ]
+    }
+  },
+  {
+    "tag": "cf-os-linux",
+    "docs": [
+      {
+        "url": "https://www.coupang.com/",
+        "status": 403,
+        "server": "AkamaiGHost"
+      }
+    ],
+    "status": 403,
+    "nav_error": null,
+    "title": "Access Denied",
+    "body_len": 195,
+    "body_head": "Access Denied You don't have permission to access \"http://www.coupang.com/\" on this server.  Reference #18.5a3c117.1790519549.946571a6  https://errors.edgesuite.net/18.5a3c117.1790519549.946571a6",
+    "denied": true,
+    "fp": {
+      "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
+      "platform": "Linux x86_64",
+      "oscpu": "Linux x86_64",
+      "lang": "ko-KR",
+      "tz": "Asia/Seoul",
+      "screen": [
+        1707,
+        960
+      ],
+      "dpr": 1,
+      "hw": 8,
+      "webdriver": false,
+      "webgl": [
+        "Intel",
+        "Intel(R) HD Graphics 400, or similar"
+      ]
+    }
+  },
+  {
+    "tag": "cf-bare",
+    "docs": [
+      {
+        "url": "https://www.coupang.com/",
+        "status": 403,
+        "server": "AkamaiGHost"
+      }
+    ],
+    "status": 403,
+    "nav_error": null,
+    "title": "Access Denied",
+    "body_len": 195,
+    "body_head": "Access Denied You don't have permission to access \"http://www.coupang.com/\" on this server.  Reference #18.fa3c117.1790519556.886587f9  https://errors.edgesuite.net/18.fa3c117.1790519556.886587f9",
+    "denied": true,
+    "fp": {
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+      "platform": "Win32",
+      "oscpu": "Windows NT 10.0; Win64; x64",
+      "lang": "en-US",
+      "tz": "Asia/Seoul",
+      "screen": [
+        1680,
+        1050
+      ],
+      "dpr": 1,
+      "hw": 8,
+      "webdriver": false,
+      "webgl": [
+        "Google Inc. (NVIDIA)",
+        "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"
+      ]
+    }
+  }
+]

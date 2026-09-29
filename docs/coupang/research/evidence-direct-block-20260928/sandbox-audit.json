@@ -1,0 +1,29 @@
+{
+  "marker": "SANDBOX_BLOCK_AUDIT",
+  "observed_at": "2026-09-28T00:08:11.7275913+09:00",
+  "direct_public_ip": "118.36.49.213",
+  "files": [
+    {
+      "Name": "blocked_home_warmup_20260927_235836.html",
+      "Length": 455,
+      "modified": "2026-09-27T23:58:36.7922097+09:00"
+    },
+    {
+      "Name": "coupang_block_state.json",
+      "Length": 334,
+      "modified": "2026-09-27T23:58:37.0245391+09:00"
+    },
+    {
+      "Name": "resume.sqlite3",
+      "Length": 69632,
+      "modified": "2026-09-27T23:58:33.2143864+09:00"
+    }
+  ],
+  "blocked_html": "<html><head>\r\n<title>Access Denied</title>\r\n</head><body>\r\n<h1>Access Denied</h1>\r\n \r\nYou don't have permission to access \"http://www.coupang.com/\" on this server.<p>\r\nReference #18.fa3c117.1790521115.88973e17\r\n</p><p>https://errors.edgesuite.net/18.fa3c117.1790521115.88973e17</p>\r\n<script type=\"text/javascript\" src=\"/8Ft_/k6UD/tL3f/5S/yV9w/XkL3XXQ1N5/U0JTICEiIw/aWs/GHERuHCI9?v=89000be8-1698-3738-409c-23d8295417c1\" defer=\"\"></script>\r\n\r\n</body></html>",
+  "block_state": {
+    "blocked_at": "2026-09-27 23:58:37",
+    "blocked_ts": 1790521117.024539,
+    "reason": "홈 웜업 단계에서 차단 감지: 소프트 블록 (445자) — Akamai 접근 거부 — 회선 또는 브라우저 상태 확인 필요. 사이트가 현재 접속을 거부했습니다.",
+    "reference": "Reference #18.fa3c117.1790521115.88973e17"
+  }
+}

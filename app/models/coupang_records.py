@@ -12,6 +12,8 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"LPT{i}" for i in range(1, 10)),
 }
 _WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
+_BROWSER_ENGINES = frozenset(("camoufox", "chromium"))
+_VENDOR_PHASE_LINES = frozenset(("direct", "proxy"))
 
 
 @dataclass
@@ -34,8 +36,25 @@ class CoupangRunConfig:
     # Coupang 카테고리 탭은 Decodo 스티키 세션을 주입한다. 1차 목록은 프록시 IP,
     # 2차 판매자정보는 회선 IP 세션으로 엔진이 전환한다.
     proxy: dict | None = None
+    # 브라우저 엔진은 기존 Camoufox를 기본으로 유지한다. 쿠팡 카테고리
+    # Decodo 실행은 decodo_run에서 Chromium을 명시적으로 선택한다.
+    browser_engine: str = "camoufox"
+    # 판매자 API 단계 회선. "direct"(기본·기존 동작) — 프록시 세션을 닫고
+    # 회선 IP 세션으로 전환한다. "proxy" — 목록과 같은 프록시 세션에서 그대로
+    # 진행한다. 직접 회선 전환의 근거가 된 getStoreReview 프록시 403 실측은
+    # Bright Data ISP 기준이며(BRIGHTDATA_AKAMAI_REVIEW §9), Decodo+Chromium
+    # 조합에서는 재검증 중이다(PROXY_SELLER_PROPOSAL_REVIEW_20260928).
+    vendor_phase_line: str = "direct"
 
     def __post_init__(self) -> None:
+        if self.browser_engine not in _BROWSER_ENGINES:
+            raise ValueError(
+                f"browser_engine must be one of {sorted(_BROWSER_ENGINES)}"
+            )
+        if self.vendor_phase_line not in _VENDOR_PHASE_LINES:
+            raise ValueError(
+                f"vendor_phase_line must be one of {sorted(_VENDOR_PHASE_LINES)}"
+            )
         if not isinstance(self.use_persistent_profile, bool):
             # TRY004 무시 — 설정 검증은 이 파일 전체가 ValueError 관례
             raise ValueError("use_persistent_profile must be a bool")  # noqa: TRY004

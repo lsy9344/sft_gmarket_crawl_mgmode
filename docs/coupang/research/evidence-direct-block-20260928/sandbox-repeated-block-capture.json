@@ -1,0 +1,17 @@
+{
+  "captured_date_kst": "2026-09-28",
+  "source": "Host %LOCALAPPDATA%\\Temp\\codex-coupang-debug\\sandbox-repeated-direct-block-20260928-0050.log",
+  "source_sha256": "18e5a28a997ca0c0d857131481adeddcbd2b0cbc223eb305e842ad78e0949bd5",
+  "source_lines": 178,
+  "retained_lines": 87,
+  "selection": "Category 7 start through final failure; preceding category 6 resume already preserved separately.",
+  "capture_method": "Copied current Windows Sandbox GUI log; no start/resume/cancel commands sent.",
+  "category_id": "432572",
+  "listing_products": 39,
+  "rocket_excluded": 978,
+  "listing_finished_at_kst": "2026-09-28 00:50:17",
+  "direct_home_403_at_kst": "2026-09-28 00:50:19",
+  "stopped_at_kst": "2026-09-28 00:50:21",
+  "reference": "18.c5023517.1790524219.13d45c38",
+  "limits": "Block HTML path is recorded in the GUI log; this capture did not retrieve that file, inspect the resume DB, measure public IP, or send a new Coupang request."
+}

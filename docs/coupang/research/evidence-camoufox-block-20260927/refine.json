@@ -1,0 +1,47 @@
+{
+  "ff147-tls-http11": {
+    "status": 403,
+    "server": "AkamaiGHost",
+    "len": 519
+  },
+  "https://m.coupang.com/|firefox147": {
+    "status": 403,
+    "server": "AkamaiGHost",
+    "len": 508
+  },
+  "https://m.coupang.com/|chrome150": {
+    "status": 403,
+    "server": "AkamaiGHost",
+    "len": 512
+  },
+  "https://www.coupang.com/nm/api/v1/desktop/categories|firefox147": {
+    "status": 404,
+    "server": "envoy",
+    "len": 0
+  },
+  "https://www.coupang.com/nm/api/v1/desktop/categories|chrome150": {
+    "status": 404,
+    "server": "envoy",
+    "len": 431
+  },
+  "https://api.coupang.com/|firefox147": {
+    "error": "Failed to perform, curl: (6) Could not resolve host: api.coupang.com. See https://curl.se/libcurl/c/libcurl-errors.html "
+  },
+  "https://api.coupang.com/|chrome150": {
+    "error": "Failed to perform, curl: (6) Could not resolve host: api.coupang.com. See https://curl.se/libcurl/c/libcurl-errors.html "
+  },
+  "fp|firefox147": {
+    "ja4": null,
+    "ja3_hash": null,
+    "peetprint": "",
+    "h2_akamai_hash": "6ea73faa8fc5aac76bded7bd238f6433",
+    "h2_settings": null
+  },
+  "fp|chrome150": {
+    "ja4": null,
+    "ja3_hash": null,
+    "peetprint": "",
+    "h2_akamai_hash": "52d84b11737d980aef856699f885ca86",
+    "h2_settings": null
+  }
+}

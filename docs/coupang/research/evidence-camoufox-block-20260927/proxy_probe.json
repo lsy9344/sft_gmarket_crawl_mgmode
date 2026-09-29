@@ -1,0 +1,28 @@
+[
+  {
+    "tag": "1-camou-direct",
+    "edge_dns": "23.193.163.17",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "ua": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:152.0) Gecko/20100101 Firef",
+    "title": "Access Denied"
+  },
+  {
+    "tag": "2-camou-decodo",
+    "edge_dns": "23.193.163.26",
+    "error": "InvalidIP: Failed to get IP address: HTTPSConnectionPool(host='ipecho.net', port=443): Max retries exceeded with url: /plain (Caused by ProxyError('Una"
+  },
+  {
+    "tag": "3-chromium-decodo",
+    "edge_dns": "23.53.228.184",
+    "error": "Error: Page.goto: net::ERR_PROXY_CONNECTION_FAILED at https://www.coupang.com/\nCall log:\n  - navigating to \"https://www.coupang.com/\", waiting unti"
+  },
+  {
+    "tag": "4-camou-direct-again",
+    "edge_dns": "23.193.163.18",
+    "status": 403,
+    "server": "AkamaiGHost",
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Fir",
+    "title": "Access Denied"
+  }
+]

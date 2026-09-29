@@ -1,0 +1,24 @@
+{
+  "reviewed_at_kst": "2026-09-28T01:12:59+09:00",
+  "source_result": "/tmp/coupang-blockhunt/vendor_proxy_test.json",
+  "source_script": "/tmp/coupang-blockhunt/vendor_proxy_test.py",
+  "result_sha256": "160a8cd1707a85507c6f7c3cb8c487495d9e1f619f652c04d1f6783847f95c87",
+  "script_sha256": "52b1a4339f8b381f35c774151a3629f28330c3b616af6427a7ac02d916c49ff6",
+  "result_file_modified_kst": "2026-09-28T00:53:14+09:00",
+  "test_environment": "Python curl_cffi.requests with impersonate=chrome150, Decodo sticky proxy. Not the Windows Sandbox Patchright browser.",
+  "seller_endpoint_requests": 1,
+  "seller_ids": [
+    "A00017880"
+  ],
+  "proxy_exit_ip": "121.151.227.230",
+  "saved_body": "Only first120characters and response length; full response JSON was not saved by original test.",
+  "not_tested": [
+    "individualInfo mapping",
+    "the actual shop page used by the app",
+    "browser fetch/session behavior",
+    "required business-info fields in the complete response",
+    "multiple sellers and continuous category collection",
+    "resume after an injected failure"
+  ],
+  "review_actions": "Read original local artifacts and historical docs; no new Coupang request or implementation change."
+}

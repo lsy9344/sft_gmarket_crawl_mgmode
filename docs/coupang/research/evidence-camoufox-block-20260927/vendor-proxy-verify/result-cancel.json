@@ -1,0 +1,13 @@
+{
+  "cancelled": true,
+  "termination_reason": "cancelled",
+  "error": "쿠팡 차단 감지 (이유식/어린이식품 p1): 차단 키워드: Access Denied — Akamai 접근 거부 — 회선 또는 브라우저 상태 확인 필요. 수집을 중단하고 충분한 쿨다운 후 재시도하세요.",
+  "products_seen": 0,
+  "unique_vendors": 0,
+  "business_info_success": 0,
+  "json_path": null,
+  "elapsed_s": 104.0,
+  "block_state_files": [],
+  "log_has_proxy_vendor": false,
+  "log_has_direct_switch": false
+}

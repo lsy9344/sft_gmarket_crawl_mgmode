@@ -129,6 +129,42 @@ class PartialMapPage(SeqPage):
         return super().evaluate(script, *args)
 
 
+class SharedSellerPage(SeqPage):
+    """여러 상품이 같은 판매자를 가리키는 individualInfo 응답을 만든다."""
+
+    def __init__(self, seller_by_viid, *args, drop_viids=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.seller_by_viid = dict(seller_by_viid)
+        self.drop_viids = set(drop_viids)
+
+    def evaluate(self, script, *args):
+        if "individualInfo" in script:
+            self.individual_calls += 1
+            request = args[0] if args else {}
+            viids = list(request.get("viids", [])) if isinstance(request, dict) else []
+            products = []
+            for viid in viids:
+                viid = str(viid)
+                if viid in self.drop_viids:
+                    continue
+                seller = self.seller_by_viid[viid]
+                products.append({
+                    "productId": f"P{viid}",
+                    "itemId": f"I{viid}",
+                    "vendorItemId": viid,
+                    "storeInfoArea": {
+                        "vendorId": seller,
+                        "storeId": 109671,
+                        "displayName": f"스토어{seller}",
+                    },
+                })
+            return {
+                "status": 200,
+                "body": json.dumps({"code": 200, "data": {"products": products}}),
+            }
+        return super().evaluate(script, *args)
+
+
 def _run_category(tmp_dir, pages, store=None, max_pages=6, proxy=_PROXY,
                   batch_size=10):
     """pages: 브라우저 풀 — 목록(1차 세션) → 판매자(2차 세션) 순서로 소비된다."""
@@ -485,6 +521,82 @@ class ResumeConfigGuardTest(unittest.TestCase):
 
 class MappingResumeTest(unittest.TestCase):
     """매핑 배치 부분 실패 — 누락을 봉인하지 않고 재개 대상에 남긴다(§3.3·§5.6)."""
+
+    def test_same_seller_keeps_every_product_mapping(self):
+        """같은 판매자의 상품도 배치 안팎에서 모두 매핑으로 저장한다."""
+        viids = ["11", "22", "33", "44"]
+        seller_by_viid = {viid: "V_SHARED" for viid in viids}
+        with tempfile.TemporaryDirectory() as tmp:
+            page = SharedSellerPage(
+                seller_by_viid,
+                rows_seq=[[_row(v) for v in viids], []],
+                viids=viids,
+            )
+            store = _store_for(tmp)
+            summary = _run_category(tmp, page, store, max_pages=6, batch_size=2)
+
+            self.assertEqual(summary.termination_reason, "success")
+            self.assertEqual(summary.products_seen, len(viids))
+            self.assertEqual(summary.unique_vendors, 1)
+            self.assertEqual(summary.business_info_success, 1)
+            self.assertEqual(set(store.load_mapping()), set(viids))
+            self.assertEqual(store.status, "finished")
+            store.close()
+
+    def test_resume_fills_missing_mappings_without_refetching_known_seller(self):
+        """기존 판매자 정보는 유지하고 누락 상품 매핑만 채운다."""
+        viids = ["11", "22", "33", "44"]
+        seller_by_viid = {viid: "V_SHARED" for viid in viids}
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _store_for(tmp)
+            store.record_page(1, [_prod(v) for v in viids])
+            store.mark_listing_done("empty")
+            store.save_mapping({
+                "11": {
+                    "vendorId": "V_SHARED",
+                    "vendorItemId": "11",
+                    "productId": "P11",
+                    "itemId": "I11",
+                },
+            })
+            store.record_seller_confirmed(
+                "V_SHARED",
+                {"vendor_id": "V_SHARED", "store_name": "기존 판매자", "power_seller": False},
+            )
+            store.close()
+
+            page = SharedSellerPage(seller_by_viid, viids=viids)
+            store2 = ResumeStore(Path(tmp) / "resume.sqlite3")
+            store2.open()
+            summary = _run_category(tmp, page, store2, max_pages=6, batch_size=2)
+
+            self.assertEqual(summary.termination_reason, "success")
+            self.assertEqual(summary.business_info_success, 1)
+            self.assertEqual(page.individual_calls, 2)
+            self.assertEqual(page.review_calls, [])
+            self.assertEqual(set(store2.load_mapping()), set(viids))
+            self.assertEqual(store2.status, "finished")
+            store2.close()
+
+    def test_response_missing_product_stays_resumable(self):
+        """API가 상품 하나를 돌려주지 않으면 완료로 봉인하지 않는다."""
+        viids = ["11", "22", "33", "44"]
+        seller_by_viid = {viid: "V_SHARED" for viid in viids}
+        with tempfile.TemporaryDirectory() as tmp:
+            page = SharedSellerPage(
+                seller_by_viid,
+                drop_viids=["44"],
+                rows_seq=[[_row(v) for v in viids], []],
+                viids=viids,
+            )
+            store = _store_for(tmp)
+            summary = _run_category(tmp, page, store, max_pages=6, batch_size=2)
+
+            self.assertEqual(summary.termination_reason, "mapping_pending")
+            self.assertEqual(determine_outcome(summary), RunOutcome.PARTIAL)
+            self.assertEqual(set(store.load_mapping()), {"11", "22", "33"})
+            self.assertNotEqual(store.status, "finished")
+            store.close()
 
     def test_mapping_batch_failure_stays_resumable(self):
         rows_p1 = [_row(v) for v in _ALL_VIIDS]  # 상품 6개 → 배치 2개(batch_size=3)

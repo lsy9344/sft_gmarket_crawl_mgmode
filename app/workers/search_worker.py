@@ -8,6 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.core.base import Control
 from app.core.coupang.decodo_run import run_category_attempts, run_category_batch
+from app.core.coupang.env_probe import probe_environment
 from app.core.coupang.search_crawler import SearchCrawler, SearchRunConfig
 from app.core.decodo import DecodoSettings
 
@@ -69,6 +70,7 @@ class SearchWorker(QThread):
                     on_log=self.log_message.emit,
                     on_attempt_start=self.attempt_started.emit,
                     start_fresh=self.start_fresh,
+                    probe_fn=probe_environment,
                 )
                 self.target_completed = int(
                     summary.termination_reason == "success" and not summary.error
@@ -85,6 +87,7 @@ class SearchWorker(QThread):
                     on_saved_record=self.item_collected.emit,
                     start_fresh=self.start_fresh,
                     skip_finished=self.skip_finished,
+                    probe_fn=probe_environment,
                 )
             self.summary = summary
             from app.core.coupang.outcome import RunOutcome, determine_outcome

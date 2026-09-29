@@ -1,0 +1,69 @@
+[
+  {
+    "tag": "0-camoufox",
+    "edge_dns": "23.193.163.11",
+    "status": 200,
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "hdrs": {
+      "cache-control": "no-store, no-cache, must-revalidate, private, max-age=0",
+      "server": "envoy",
+      "content-encoding": "gzip",
+      "date": "Sun, 27 Sep 2026 14:46:34 GMT",
+      "_status": 200
+    },
+    "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡"
+  },
+  {
+    "tag": "1-pwff",
+    "edge_dns": "23.193.163.16",
+    "status": 403,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
+    "hdrs": {
+      "server": "AkamaiGHost",
+      "x-reference-error": "18.6a3c117.1790520405.8a1458e3",
+      "date": "Sun, 27 Sep 2026 14:46:45 GMT",
+      "_status": 403
+    },
+    "title": "Access Denied"
+  },
+  {
+    "tag": "2-camoufox",
+    "edge_dns": "23.193.163.19",
+    "status": 200,
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "hdrs": {
+      "cache-control": "no-store, no-cache, must-revalidate",
+      "server": "envoy",
+      "content-encoding": "gzip",
+      "date": "Sun, 27 Sep 2026 14:46:57 GMT",
+      "_status": 200
+    },
+    "title": "로켓배송으로 빠르게, 로켓와우 멤버십으로 할인과 무료 반품까지 | 쿠팡"
+  },
+  {
+    "tag": "3-pwff",
+    "edge_dns": "23.193.163.24",
+    "status": 403,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
+    "hdrs": {
+      "server": "AkamaiGHost",
+      "x-reference-error": "18.fa3c117.1790520430.888005b7",
+      "date": "Sun, 27 Sep 2026 14:47:10 GMT",
+      "_status": 403
+    },
+    "title": "Access Denied"
+  },
+  {
+    "tag": "4-camoufox",
+    "edge_dns": "23.193.163.8",
+    "status": 403,
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "hdrs": {
+      "server": "AkamaiGHost",
+      "x-reference-error": "18.7a3c117.1790520441.20639de1",
+      "date": "Sun, 27 Sep 2026 14:47:21 GMT",
+      "_status": 403
+    },
+    "title": "Access Denied"
+  }
+]
