@@ -105,7 +105,8 @@ class BrightDataPanelTest(unittest.TestCase):
         self.assertEqual(raw["username"], "sp3id")
         self.assertEqual(raw["password"], "secretpw")
         self.assertIn("계정 저장 완료", self.panel.lbl_decodo_saved.text())
-        self.assertIn("사용 준비 완료", self.panel.lbl_decodo_ready.text())
+        self.assertIn("연결·설치 확인 완료", self.panel.lbl_decodo_ready.text())
+        self.assertIn("쿠팡 접속 여부는 수집 시작 시 확인", self.panel.lbl_decodo_ready.text())
         self.assertNotIn("secretpw", self.panel.lbl_decodo_ready.text())
 
     def test_save_decodo_checks_in_worker_without_freezing_ui(self):
@@ -133,7 +134,7 @@ class BrightDataPanelTest(unittest.TestCase):
             finally:
                 release.set()
             self._settle()
-        self.assertIn("사용 준비 완료", self.panel.lbl_decodo_ready.text())
+        self.assertIn("연결·설치 확인 완료", self.panel.lbl_decodo_ready.text())
         self.assertFalse(self.panel.btn_save_decodo.isEnabled())
         self.panel.set_external_busy(False)
         self.assertTrue(self.panel.btn_save_decodo.isEnabled())
@@ -184,7 +185,7 @@ class BrightDataPanelTest(unittest.TestCase):
         self.assertIn("한국 회선이 아닙니다", result.connection_message)
         self.assertEqual(result.runtime_errors, ())
 
-    def test_decodo_readiness_checks_camoufox_geoip_and_patchright(self):
+    def test_decodo_readiness_checks_chromium_without_camoufox(self):
         from app.core.coupang.preflight import PreflightResult, PreflightStatus
         from app.core.gmarket_preflight import GmarketPreflightResult
 
@@ -193,15 +194,15 @@ class BrightDataPanelTest(unittest.TestCase):
                 ip="1.2.3.4", country_code="KR")), \
              mock.patch("app.core.coupang.preflight.check_runtime",
                         return_value=PreflightResult(
-                            PreflightStatus.GEOIP_MISSING, "GeoIP 파일이 없습니다.")), \
+                            PreflightStatus.GEOIP_MISSING, "GeoIP 파일이 없습니다.")) as camoufox, \
              mock.patch("app.core.gmarket_preflight.check_gmarket_runtime",
                         return_value=GmarketPreflightResult(
                             False, "Patchright 브라우저가 없습니다.")):
             result = panel_module._check_decodo_readiness(settings)
         self.assertTrue(result.connection_ok)
-        self.assertEqual(len(result.runtime_errors), 2)
-        self.assertIn("GeoIP", result.runtime_errors[0])
-        self.assertIn("Patchright", result.runtime_errors[1])
+        camoufox.assert_not_called()
+        self.assertEqual(len(result.runtime_errors), 1)
+        self.assertIn("Patchright", result.runtime_errors[0])
         self.panel._on_decodo_readiness(result)
         self.assertIn("수집 준비 안 됨", self.panel.lbl_decodo_ready.text())
         self.assertIn("SellerCollector.exe --setup-runtime",

@@ -128,6 +128,7 @@ class FakePlaywrightPage:
 class FakeContext:
     def __init__(self, page: FakePlaywrightPage):
         self._page = page
+        self._cdp = FakeCdpSession()
 
     async def add_cookies(self, cookies):
         pass
@@ -135,7 +136,18 @@ class FakeContext:
     async def new_page(self):
         return self._page
 
+    async def new_cdp_session(self, page):
+        return self._cdp
+
     async def close(self):
+        pass
+
+
+class FakeCdpSession:
+    async def send(self, method: str, params=None):
+        pass
+
+    def on(self, event: str, handler):
         pass
 
 
@@ -843,6 +855,64 @@ class TestRealWorldApplicationScenarios(unittest.TestCase):
 
             self.assertEqual(summary.collected_items, 2)
             self.assertEqual(summary.unique_vendors, 1)
+
+    def test_cached_placeholder_phone_is_replaced_by_current_product_phone(self):
+        """첫 상품의 상세 참고 값이 캐시되어도 다음 상품의 실제 번호를 반영한다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = AliexpressCategoryRunConfig(
+                output_dir=Path(tmp),
+                category_name="전화번호보강",
+                category_url="https://ko.aliexpress.com/category/1000/phone.html",
+                max_pages=1,
+                delay=0.01,
+            )
+            items = [
+                {"id": "phone_1", "url": "https://ko.aliexpress.com/item/phone_1.html", "title": "상품1", "price": "1", "orders": "1", "is_top_seller": False},
+                {"id": "phone_2", "url": "https://ko.aliexpress.com/item/phone_2.html", "title": "상품2", "price": "2", "orders": "2", "is_top_seller": False},
+            ]
+            first = _make_mtop_response("SELLER_PHONE", "전화상점", "전화회사", "대표", "111-11-11111", "phone@example.com", "상세페이지 참고", "주소", "신고")
+            second = _make_mtop_response("SELLER_PHONE", "전화상점", "전화회사", "대표", "111-11-11111", "phone@example.com", "070-1234-5678", "주소", "신고")
+            fake_page = FakePlaywrightPage(page_items_map={1: items}, pdp_responses={"phone_1": first, "phone_2": second})
+            crawler = AliexpressCategoryCrawler(config=cfg)
+
+            with patch("app.core.aliexpress_category_crawler.async_playwright", return_value=FakePlaywrightManager(fake_page)):
+                summary = crawler.crawl()
+
+            self.assertEqual(summary.collected_items, 2)
+            with open(summary.csv_file, "r", encoding="utf-8-sig") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(rows[0]["phone"], "")
+            self.assertEqual(rows[1]["phone"], "070-1234-5678")
+            run_dir = ali_category_run_dir(Path(tmp), "전화번호보강", "https://ko.aliexpress.com/category/1000/phone.html")
+            with AliexpressResumeStore(run_dir) as store:
+                self.assertEqual(store.confirmed_sellers()["SELLER_PHONE"]["phone"], "070-1234-5678")
+
+    def test_cached_valid_phone_is_preserved_when_current_product_has_detail_placeholder(self):
+        """캐시된 유효 번호는 다음 상품이 번호를 주지 않아도 유지한다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = AliexpressCategoryRunConfig(
+                output_dir=Path(tmp),
+                category_name="전화번호보존",
+                category_url="https://ko.aliexpress.com/category/1001/phone.html",
+                max_pages=1,
+                delay=0.01,
+            )
+            items = [
+                {"id": "keep_1", "url": "https://ko.aliexpress.com/item/keep_1.html", "title": "상품1", "price": "1", "orders": "1", "is_top_seller": False},
+                {"id": "keep_2", "url": "https://ko.aliexpress.com/item/keep_2.html", "title": "상품2", "price": "2", "orders": "2", "is_top_seller": False},
+            ]
+            first = _make_mtop_response("SELLER_KEEP", "전화상점", "전화회사", "대표", "222-22-22222", "keep@example.com", "070-9876-5432", "주소", "신고")
+            second = _make_mtop_response("SELLER_KEEP", "전화상점", "전화회사", "대표", "222-22-22222", "keep@example.com", "Refer to Product Details", "주소", "신고")
+            fake_page = FakePlaywrightPage(page_items_map={1: items}, pdp_responses={"keep_1": first, "keep_2": second})
+            crawler = AliexpressCategoryCrawler(config=cfg)
+
+            with patch("app.core.aliexpress_category_crawler.async_playwright", return_value=FakePlaywrightManager(fake_page)):
+                summary = crawler.crawl()
+
+            self.assertEqual(summary.collected_items, 2)
+            with open(summary.csv_file, "r", encoding="utf-8-sig") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual([row["phone"] for row in rows], ["070-9876-5432", "070-9876-5432"])
 
 
 if __name__ == "__main__":

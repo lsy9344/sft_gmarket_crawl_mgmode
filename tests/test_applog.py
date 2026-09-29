@@ -42,6 +42,18 @@ class FileLoggingTest(unittest.TestCase):
         ]
         self.assertEqual(len(rotating), 1)
 
+    def test_ali_logging_does_not_write_running_gmarket_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original = root / "seller_collector.log"
+            original.write_text("gmarket running", encoding="utf-8")
+            with patch.object(applog, "log_file_dir", return_value=root):
+                path = applog.setup_file_logging(filename="ali_collector.log")
+            applog.log_line("ali started")
+            self.assertEqual(original.read_text(encoding="utf-8"), "gmarket running")
+            self.assertIn("ali started", path.read_text(encoding="utf-8"))
+            self.tearDown()
+
     def test_setup_failure_returns_none_without_raising(self) -> None:
         with patch.object(applog, "log_file_dir", side_effect=OSError("no dir")):
             self.assertIsNone(applog.setup_file_logging())

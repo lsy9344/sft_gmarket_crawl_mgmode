@@ -150,7 +150,11 @@ def main() -> int:
 
     from app.core.applog import log_line, setup_file_logging
 
-    log_path = setup_file_logging()
+    ali_only = "--ali-only" in sys.argv
+    log_path = (
+        setup_file_logging(filename="ali_collector.log")
+        if ali_only else setup_file_logging()
+    )
     _install_crash_hooks()
     log_line("=== 판매자 정보 수집기 시작 ===")
 
@@ -164,12 +168,33 @@ def main() -> int:
     if qss:
         app.setStyleSheet(qss)
 
+    if getattr(sys, "frozen", False):
+        from app.ui.runtime_setup import ensure_runtime
+
+        app.setQuitOnLastWindowClosed(False)
+        ready = ensure_runtime()
+        app.setQuitOnLastWindowClosed(True)
+        if not ready:
+            return 1
+        _set_browsers_path()
+
     window = MainWindow()
+    if ali_only:
+        window.setWindowTitle("Ali 수집기 — 데이터 절약·전화번호 개선판 2026-09-28")
+        for index in range(window.tab_widget.count()):
+            window.tab_widget.setTabVisible(
+                index,
+                window.tab_widget.widget(index) in (
+                    window.aliexpress_category_panel, window.brightdata_panel,
+                ),
+            )
+        window.tab_widget.setCurrentWidget(window.aliexpress_category_panel)
     window.show()
+    startup_log = window.aliexpress_category_panel if ali_only else window.log
     if log_path is not None:
-        window.log.append_log(f"진단 로그 파일: {log_path}")
+        startup_log.append_log(f"진단 로그 파일: {log_path}")
     else:
-        window.log.append_log("진단 로그 파일을 생성하지 못했습니다 — 파일 로그 없이 실행합니다.")
+        startup_log.append_log("진단 로그 파일을 생성하지 못했습니다 — 파일 로그 없이 실행합니다.")
     return app.exec()
 
 

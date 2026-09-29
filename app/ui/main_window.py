@@ -316,12 +316,21 @@ class MainWindow(QMainWindow):
             return self.alicat_control
         return self.control
 
-    def _coupang_runtime_ready(self) -> bool:
+    def _coupang_runtime_ready(self, *, category: bool = False) -> bool:
         """쿠팡 런타임을 확인하고 실패 내용을 사용자에게 알린다."""
         from app.core.coupang.preflight import PreflightStatus, check_runtime
 
         try:
-            result = check_runtime()
+            if category:
+                from app.core.gmarket_preflight import check_gmarket_runtime
+
+                result = check_gmarket_runtime()
+                ready = result.ok
+                message = result.message.replace("Gmarket", "쿠팡 카테고리")
+            else:
+                result = check_runtime()
+                ready = result.status == PreflightStatus.OK
+                message = result.message
         except Exception as e:  # noqa: BLE001 - preflight 경계 격리
             QMessageBox.critical(
                 self,
@@ -329,8 +338,8 @@ class MainWindow(QMainWindow):
                 f"런타임 준비 상태를 확인하는 중 예기치 못한 오류가 발생했습니다:\n{e}",
             )
             return False
-        if result.status != PreflightStatus.OK:
-            QMessageBox.critical(self, "Coupang 런타임 미준비", result.message)
+        if not ready:
+            QMessageBox.critical(self, "Coupang 런타임 미준비", message)
             return False
         return True
 
@@ -1648,7 +1657,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if not self._coupang_runtime_ready():
+        if not self._coupang_runtime_ready(category=True):
             return
 
         # 각 카테고리는 자체 진행 폴더를 쓴다. 앞 카테고리가 끝난 뒤

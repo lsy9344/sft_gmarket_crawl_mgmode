@@ -112,6 +112,7 @@ class FakePageForAdversarial:
 class FakeBrowserContext:
     def __init__(self, page: FakePageForAdversarial):
         self._page = page
+        self._cdp = FakeCdpSession()
 
     async def add_cookies(self, cookies):
         pass
@@ -119,7 +120,18 @@ class FakeBrowserContext:
     async def new_page(self):
         return self._page
 
+    async def new_cdp_session(self, page):
+        return self._cdp
+
     async def close(self):
+        pass
+
+
+class FakeCdpSession:
+    async def send(self, method: str, params=None):
+        pass
+
+    def on(self, event: str, handler):
         pass
 
 
@@ -173,18 +185,16 @@ class TestAdversarialResourceLoading(unittest.TestCase):
             f.parent.mkdir(parents=True)
             f.write_text(json.dumps([{"name": "비공개"}]), encoding="utf-8")
             
-            # Make unreadable
-            os.chmod(str(f), 0o000)
-            try:
-                with patch("sys._MEIPASS", tmp, create=True):
-                    self.panel.category_tree.clear()
-                    self.panel._load_category_tree()
-                    
-                    # Must switch to direct URL input tab without crashing
-                    self.assertEqual(self.panel.input_tabs.currentIndex(), 1)
-                    self.assertIn("기본 카테고리 트리를 불러올 수 없습니다", self.panel.log_text.toPlainText())
-            finally:
-                os.chmod(str(f), 0o644)
+            # Windows chmod does not deny reads; inject the same OS error on
+            # every platform so this checks the fallback, not permission bits.
+            with patch("sys._MEIPASS", tmp, create=True), patch(
+                "builtins.open", side_effect=PermissionError("test read denied")
+            ):
+                self.panel.category_tree.clear()
+                self.panel._load_category_tree()
+
+                self.assertEqual(self.panel.input_tabs.currentIndex(), 1)
+                self.assertIn("기본 카테고리 트리를 불러올 수 없습니다", self.panel.log_text.toPlainText())
 
     def test_tree_file_binary_corrupted_encoding_triggers_fallback(self):
         """Simulate raw invalid byte stream (UnicodeDecodeError)."""

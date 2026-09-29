@@ -1,0 +1,90 @@
+{
+  "checked_on": "2026-09-28",
+  "note": "Logged-in dashboards were not accessed. Official documentation images are labeled as such. No payment, account signup, or credential generation was performed.",
+  "images": [
+    {
+      "file": "decodo-start-1.png",
+      "source": "https://help.decodo.com/docs/residential-proxy-quick-start",
+      "image_url": "https://mintcdn.com/decodo/7Hj3tfc-1rGMirwk/images/docs/cacaa113ee16f353bac01e2eb2cef73663a6c682cbaabb154f8657cc8fc1c595-Group_427323309.png?fit=max&auto=format&n=7Hj3tfc-1rGMirwk&q=85&s=7546da0c0893764e9dcb887a4e6381f3",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "decodo-auth-1.png",
+      "source": "https://help.decodo.com/docs/residential-proxy-authentication-methods",
+      "image_url": "https://mintcdn.com/decodo/7Hj3tfc-1rGMirwk/images/docs/b79190a507f947cc43fee41cefae1575d2c8371ec26f0328a754059df9d0cc3b-Group_427322941.png?fit=max&auto=format&n=7Hj3tfc-1rGMirwk&q=85&s=142c9bd16cac7099367c93d26c75442c",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "decodo-payg-1.png",
+      "source": "https://help.decodo.com/docs/proxy-pay-as-you-go",
+      "image_url": "https://mintcdn.com/decodo/7ZKpc3GV1DKO_XQr/images/docs/148c47c0f79e417d2dbc1b3023b0f44e9d27e98f6e4f069dc437b7bcd4ec0e31-PAYG1.png?fit=max&auto=format&n=7ZKpc3GV1DKO_XQr&q=85&s=a6e5eb046db40ff2d66f83b05b29465f",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "decodo-topup-2.png",
+      "source": "https://help.decodo.com/docs/auto-top-up",
+      "image_url": "https://mintcdn.com/decodo/eRLuBYAbadfvmqDE/images/docs/21f715cab7cee3246b97040391b8991e5ea8265c4d46bdb08bef71d5fb622d33-Group_427323623_2.png?fit=max&auto=format&n=eRLuBYAbadfvmqDE&q=85&s=ab695215ca2cbe2f14b664cc3e68b4d6",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "bright-01-create-api.png",
+      "source": "https://docs.brightdata.com/products/web-unlocker/quickstart",
+      "image_url": "https://mintcdn.com/brightdata/TWn6dM5mNEDO_n6k/images/products/web-unlocker/quick-start/create-an-api.png?fit=max&auto=format&n=TWn6dM5mNEDO_n6k&q=85&s=59e43eba1006dd00ab46ecc879e9146e",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "bright-02-select-unlocker.png",
+      "source": "https://docs.brightdata.com/products/web-unlocker/quickstart",
+      "image_url": "https://mintcdn.com/brightdata/TWn6dM5mNEDO_n6k/images/products/web-unlocker/quick-start/select-unlocker-api.png?fit=max&auto=format&n=TWn6dM5mNEDO_n6k&q=85&s=af09e9edef68ca1ac11f6d4afb4f0fe1",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "bright-03-config.png",
+      "source": "https://docs.brightdata.com/products/web-unlocker/quickstart",
+      "image_url": "https://mintcdn.com/brightdata/TWn6dM5mNEDO_n6k/images/products/web-unlocker/quick-start/config-unlocker-api.png?fit=max&auto=format&n=TWn6dM5mNEDO_n6k&q=85&s=1e4547fdfa15c1f9b468460cdf6c7c63",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "bright-05-overview.png",
+      "source": "https://docs.brightdata.com/products/web-unlocker/send-your-first-request",
+      "image_url": "https://mintcdn.com/brightdata/TWn6dM5mNEDO_n6k/images/products/web-unlocker/send-first-request/web_unlocker_api_overview.png?fit=max&auto=format&n=TWn6dM5mNEDO_n6k&q=85&s=56c3bbc21902322974ebc6c385f6b0e6",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "bright-06-token.png",
+      "source": "https://docs.brightdata.com/products/web-unlocker/send-your-first-request",
+      "image_url": "https://mintcdn.com/brightdata/TWn6dM5mNEDO_n6k/images/products/web-unlocker/send-first-request/web_unlocker_api_token.png?fit=max&auto=format&n=TWn6dM5mNEDO_n6k&q=85&s=e10c481445af376beec59596063d274c",
+      "kind": "official-documentation-image"
+    },
+    {
+      "file": "decodo-public-start.png",
+      "source": "https://decodo.com/decodo-quick-start-guide/residential-proxies",
+      "kind": "direct-public-page-screenshot"
+    },
+    {
+      "file": "bright-signup.png",
+      "source": "https://brightdata.com/?hs_signup=1",
+      "kind": "direct-public-page-screenshot"
+    },
+    {
+      "file": "settings-brightdata-fields.png",
+      "source": "scripts/capture_settings_screenshots.py",
+      "kind": "real-app-widget-screenshot-with-fake-credentials"
+    },
+    {
+      "file": "settings-decodo-fields.png",
+      "source": "scripts/capture_settings_screenshots.py",
+      "kind": "real-app-widget-screenshot-with-fake-credentials"
+    },
+    {
+      "file": "settings-empty.png",
+      "source": "scripts/capture_settings_screenshots.py",
+      "kind": "real-app-widget-screenshot-with-fake-credentials"
+    },
+    {
+      "file": "settings-example.png",
+      "source": "scripts/capture_settings_screenshots.py",
+      "kind": "real-app-widget-screenshot-with-fake-credentials"
+    }
+  ]
+}

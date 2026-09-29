@@ -65,11 +65,14 @@ class AliexpressResumeStore:
     def open(self) -> None:
         if self._conn is not None:
             return
+        conn = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(str(self.path))
             conn.execute("PRAGMA journal_mode=DELETE")
         except sqlite3.Error as e:
+            if conn is not None:
+                conn.close()
             raise ResumeStoreError(f"진행 파일을 열 수 없습니다 ({self.path}): {e}") from e
 
         conn.executescript(
@@ -373,6 +376,22 @@ class AliexpressResumeStore:
         try:
             rows = self.conn.execute("SELECT item_id FROM items").fetchall()
             return {str(r[0]) for r in rows}
+        except sqlite3.Error as e:
+            raise ResumeStoreError(f"진행 기록을 읽을 수 없습니다: {e}") from e
+
+    def pending_product_count(self) -> int:
+        """목록에는 있으나 상세 결과가 없는 상품 수.
+
+        구버전에서 실패 카운터에 도달한 상품을 제외하고 finished 로 봉인한
+        진행 파일을 새 수집으로 아카이브하지 않도록 재개 경계를 판정할 때 쓴다.
+        """
+        try:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM products p "
+                "LEFT JOIN items i ON i.item_id = p.id "
+                "WHERE i.item_id IS NULL"
+            ).fetchone()
+            return int(row[0] or 0)
         except sqlite3.Error as e:
             raise ResumeStoreError(f"진행 기록을 읽을 수 없습니다: {e}") from e
 

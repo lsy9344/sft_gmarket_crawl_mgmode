@@ -64,7 +64,6 @@ class _DecodoReadiness:
 
 def _check_decodo_readiness(settings: decodo.DecodoSettings) -> _DecodoReadiness:
     """저장된 계정 회선과 수집 런타임을 별도로 확인한다(워커 스레드에서 실행)."""
-    from app.core.coupang.preflight import PreflightStatus, check_runtime
     from app.core.gmarket_preflight import check_gmarket_runtime
 
     proxy = decodo.sticky_proxy_dict(settings)
@@ -86,15 +85,9 @@ def _check_decodo_readiness(settings: decodo.DecodoSettings) -> _DecodoReadiness
 
     runtime_errors = []
     try:
-        coupang = check_runtime()
-        if coupang.status != PreflightStatus.OK:
-            runtime_errors.append(f"Camoufox/GeoIP: {coupang.message.splitlines()[0]}")
-    except Exception:  # noqa: BLE001 - 설치 상태 확인 실패도 미준비로 표시
-        runtime_errors.append("Camoufox/GeoIP 설치 상태를 확인할 수 없습니다.")
-    try:
         gmarket = check_gmarket_runtime()
         if not gmarket.ok:
-            runtime_errors.append(f"Patchright: {gmarket.message.splitlines()[0]}")
+            runtime_errors.append(gmarket.message.splitlines()[0].replace("Gmarket", "수집용"))
     except Exception:  # noqa: BLE001 - 설치 상태 확인 실패도 미준비로 표시
         runtime_errors.append("Patchright 설치 상태를 확인할 수 없습니다.")
 
@@ -490,12 +483,15 @@ class BrightDataPanel(QWidget):
     def _on_decodo_readiness(self, result: _DecodoReadiness) -> None:
         runtime_ok = not result.runtime_errors
         runtime_message = (
-            "Camoufox·GeoIP·Patchright 확인됨" if runtime_ok else
+            "수집용 브라우저 확인됨" if runtime_ok else
             "; ".join(result.runtime_errors) +
             " SellerCollector.exe --setup-runtime 을 실행하세요."
         )
         if result.connection_ok and runtime_ok:
-            message = f"사용 준비 완료 — Decodo {result.connection_message}; {runtime_message}."
+            message = (
+                f"연결·설치 확인 완료 — Decodo {result.connection_message}; {runtime_message}. "
+                "쿠팡 접속 여부는 수집 시작 시 확인합니다."
+            )
             error = False
         else:
             message = (

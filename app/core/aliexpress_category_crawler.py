@@ -7,12 +7,12 @@
   - rotation_batch_size 건 단위 자동 회선 순환 + WAF punish 감지 시 즉시 세션 교체
   - 회선 확보 시 실제 출발 국가를 확인해(concatenated _korea_proxy 규율) 한국이 아니면
     최대 MAX_GEO_ROTATIONS 회 새 회선으로 교체한다
-  - 상품 데이터(mtop) 미수신 페이지는 기록하지 않고 같은 회선에서 재시도한다 —
-    빈 껍데기를 "(상세 미기재)"로 확정 저장해 재개 대상에서 누락시키는 일을 막는다
-  - 실행 경계에서 반복 실패하는 상품(삭제·변경 SKU)은 누적 실패가
-    ITEM_GIVE_UP_RUNS 회에 도달하면 재시도를 포기한다 — 포기 상품 하나 때문에
-    완료 봉인이 영원히 불가능한 비수렴을 끊는다
-  - 연속 차단이 CONSECUTIVE_BLOCK_ABORT 에 도달하면 그 지점을 저장한 채 안전 중단한다.
+  - 상품 데이터(mtop) 미수신 페이지는 기록하지 않고, 프록시 사용 시 같은 상품을
+    새 회선에서 즉시 재확인한다 — 빈 껍데기를 확정 저장해 누락시키는 일을 막는다
+  - 네트워크·미수신 실패는 영구 제외하지 않는다. 이전 버전의 실패 카운터가
+    남아 있어도 재개 시 다시 확인한다
+  - 새 회선에서도 상품 2건이 연속 실패하면 그 지점을 저장한 채 안전 중단한다.
+    로컬 모드는 CONSECUTIVE_BLOCK_ABORT 상한을 사용한다.
     다음 시작(우회 회선 선택)에서 저장된 지점부터 이어서 수집된다
 - 재개 규율(쿠팡 search_crawler 동일): 재개 경계는 상품이 확인된 마지막
   페이지(last_item_page)이며, 그 페이지를 다시 확인한 뒤 다음 페이지부터
@@ -31,8 +31,9 @@ import csv
 import json
 import re
 import time
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -66,12 +67,14 @@ MAX_ATTEMPTS = 3               # 카테고리 1건을 최대 몇 회(회선)까�
 RETRY_WAIT_SECONDS = 90.0      # 시도(회선) 간 대기 — 제어 가능한 분할 대기
 MAX_GEO_ROTATIONS = 3          # 세션 1개 확보 시 한국 확인 재시도 상한
 CONSECUTIVE_BLOCK_ABORT = 10   # 연속 차단 상한 — 도달 시 안전 중단(저장 지점 보존)
+PROXY_FAILURE_ABORT = 2        # 새 회선 재확인까지 실패한 상품이 연속 2건이면 중단
+ROTATION_BUDGET_WINDOW = 10    # 최근 상품별 회선 복구 기록을 볼 범위
+ROTATION_BUDGET_LIMIT = 5      # 위 범위 안에서 이 횟수면 추가 회선 소모를 중단
 PHASE1_PAGE_RETRIES = 3        # 목록 페이지 1장의 로드·차단 재시도 상한
 PDP_ITEM_RETRIES = 3           # 상세 페이지 1건의 재시도 상한
-# 상품별 누적 실패 실행 수 상한 — 도달한 상품은 재시도를 포기한다. 데이터를
-# 끝내 주지 않는 삭제·변경 SKU 가 재개 대상에 영원히 남아 완료 봉인이 불가능한
-# 비수렴을 끊는다(검토 2026-09-18). 회선 문제의 실패는 CONSECUTIVE_BLOCK_ABORT 가
-# 실행 자체를 조기 중단시키므로 이 카운터가 쌓일 여지가 적다.
+PDP_RESPONSE_WAIT_MS = 5000    # mtop 응답을 기다리는 최대 시간(탐지 지연 완화)
+# 과거 버전과의 import 호환용 상수. 네트워크·미수신 실패를 영구 제외하면
+# 회선 문제로 상품이 사라질 수 있으므로 현재 크롤러에서는 사용하지 않는다.
 ITEM_GIVE_UP_RUNS = 3
 # 결과 JSON 전체 재작성 주기(건) — 매건 재작성은 대량 수집에서 O(n²) I/O 다.
 # 50건 모일 때와 중단·완료 시점에만 재작성하고, CSV 는 매건 append 로 실시간을
@@ -80,16 +83,208 @@ JSON_FLUSH_INTERVAL = 50
 
 HOME_WARMUP_URL = "https://ko.aliexpress.com/?spm=a2g0o.home.logo.1.6c2f52d1NGQ4SZ"
 
+# CDP Network.setBlockedURLs 는 요청을 가로채지 않으므로 Playwright route 를
+# 쓸 때 생기는 브라우저 캐시 비활성화 부작용이 없다. API/JS 요청은 건드리지
+# 않고, 실제 사용량이 큰 이미지·영상·폰트·분석 호스트만 막는다.
+ALI_RESOURCE_BLOCK_PATTERNS = (
+    "https://ae-pic-a1.aliexpress-media.com/*",
+    "https://gv-vod-cdn.aliexpress-media.com/*",
+    "https://aplus.aliexpress.com/*",
+    "*://assets.aliexpress-media.com/*.jpg*",
+    "*://assets.aliexpress-media.com/*.jpeg*",
+    "*://assets.aliexpress-media.com/*.png*",
+    "*://assets.aliexpress-media.com/*.webp*",
+    "*://assets.aliexpress-media.com/*.avif*",
+    "*://assets.aliexpress-media.com/*.gif*",
+    "*://*/*.mp4*",
+    "*://*/*.webm*",
+    "*://*/*.m3u8*",
+    "*://*/*.m4s*",
+    "*://*/*.woff*",
+    "*://*/*.ttf*",
+    "*://*/*.otf*",
+    "*://*/*.eot*",
+)
+
 # 차단 중단 안내 — UI 다이얼로그와 동일 문구를 요약 error 로도 운반한다
 BLOCKED_ABORT_GUIDE = (
     "IP 차단이 해소되지 않아 수집을 중단했습니다. "
     "다시 시작할 때 우회 회선(Decodo)을 선택하면 중단 지점부터 이어서 수집됩니다."
+)
+RESPONSE_ABORT_GUIDE = (
+    "상품 응답이 반복해서 비어 있어 추가 요청을 멈췄습니다. "
+    "원인을 IP 차단으로 단정하지 않고, 저장된 미처리 상품은 다시 시작할 때 확인합니다."
 )
 
 
 def _is_blocked_url(url: str) -> bool:
     """AliExpress WAF 차단 신호 URL(punish / tmd) 판정."""
     return "punish" in (url or "") or "_____tmd_____" in (url or "")
+
+
+_PHONE_LABEL_ALIASES = frozenset(
+    {
+        # 한국어 표기 — 공백·괄호·구분기호는 아래 정규화 후 비교한다.
+        "소비자상담전화번호",
+        "전화번호",
+        "연락처",
+        "고객센터",
+        "고객센터전화",
+        "고객센터전화번호",
+        "문의전화",
+        "문의처",
+        "상담전화",
+        "상담전화번호",
+        # 상품 정보에서 실제로 쓰이는 영어 표기만 허용한다.
+        "phone",
+        "phonenumber",
+        "telephone",
+        "telephonenumber",
+        "tel",
+        "contactnumber",
+        "contactphonenumber",
+        "customerservicephone",
+        "customerservicephonenumber",
+        "customerservicetelephone",
+        "customerservicetelephonenumber",
+        "customerservicehotline",
+        "hotline",
+    }
+)
+
+_PHONE_PLACEHOLDER_EXACT = frozenset(
+    {
+        "",
+        "-",
+        "na",
+        "none",
+        "null",
+        "없음",
+        "미기재",
+        "참조",
+        "상세참고",
+        "상세참조",
+        "상세페이지참고",
+        "상세페이지참조",
+        "상세설명참고",
+        "상세설명참조",
+        "상세페이지별도표기",
+        "referto",
+        "details",
+        "detail",
+        "referproductdetails",
+        "refertoproductdetail",
+        "refertoproductdetails",
+        "seproductdetails",
+        "seeproductdetail",
+        "seeproductdetails",
+        "seethedetail",
+        "seethedetails",
+    }
+)
+
+_PHONE_CANDIDATE_PATTERNS = (
+    # 한국 국가번호 뒤에 국내번호가 붙어도 중간 구분기호가 없을 수 있다:
+    # 82-1012345678, +82 1012345678 등. 이 패턴을 국내번호보다 먼저 본다.
+    re.compile(r"(?<!\d)\+?82[./\s\-]\d{8,12}(?!\d)"),
+    # 한국 유선·휴대전화 표기: 02-123-4567, 070 1234 5678 등
+    re.compile(r"(?<!\d)0\d{1,3}[./\s()\-]*\d{3,4}[./\s()\-]*\d{4}(?!\d)"),
+    # 국가번호가 붙은 전화: +82 2-1234-5678, +1 212-555-1234 등
+    re.compile(r"(?<!\d)\+?\d{1,3}(?:[./\s\-]\d{1,4}){2,4}(?!\d)"),
+    # 구분기호 없는 한국 전화번호
+    re.compile(r"(?<!\d)0\d{7,10}(?!\d)"),
+    # 8자리 지역·대표번호(1234-5678 등)
+    re.compile(r"(?<!\d)\d{3,4}[./\s\-]\d{4}(?!\d)"),
+    # 1588xxxx·1600xxxx 같은 8자리 대표번호는 구분기호가 없기도 하다.
+    re.compile(r"(?<!\d)\d{8}(?!\d)"),
+)
+
+
+def _normalize_property_label(value: object) -> str:
+    """속성명 비교용 정규화 — 값 자체는 임의 숫자 추출에 사용하지 않는다."""
+    return re.sub(r"[\W_]+", "", str(value or "").casefold())
+
+
+def _is_phone_label(value: object) -> bool:
+    return _normalize_property_label(value) in _PHONE_LABEL_ALIASES
+
+
+def _is_phone_placeholder(value: object) -> bool:
+    raw = str(value or "").strip()
+    compact = _normalize_property_label(raw)
+    if compact in _PHONE_PLACEHOLDER_EXACT:
+        return True
+    return any(
+        marker in compact
+        for marker in (
+            "상세참고",
+            "상세참조",
+            "상세설명참고",
+            "상세설명참조",
+            "상세페이지별도표기",
+            "refertoproductdetail",
+            "seeproductdetail",
+            "seethedetail",
+        )
+    )
+
+
+def _clean_phone_candidate(value: object) -> str:
+    """전화번호 속성에서만 번호를 골라 원문 표기를 보존한다.
+
+    상담 가능 시간처럼 번호 뒤에 설명이 붙는 값은 허용하되, 전화 라벨이
+    없는 다른 사업자 속성의 숫자를 이 함수에 넘기지 않는 것을 호출 규약으로
+    삼는다.
+    """
+    raw = str(value or "").strip()
+    if _is_phone_placeholder(raw):
+        return ""
+    for pattern in _PHONE_CANDIDATE_PATTERNS:
+        for match in pattern.finditer(raw):
+            candidate = match.group(0).strip()
+            digits = re.sub(r"\D", "", candidate)
+            if 8 <= len(digits) <= 15:
+                return re.sub(r"\s+", " ", candidate)
+    return ""
+
+
+def _iter_property_pairs(product_props: object):
+    if not isinstance(product_props, dict):
+        return
+    showed_props = product_props.get("showedProps", [])
+    if isinstance(showed_props, list):
+        for prop in showed_props:
+            if isinstance(prop, dict):
+                yield prop.get("attrName", ""), prop.get("attrValue", "")
+    props_map = product_props.get("showedPropsMap", {})
+    if isinstance(props_map, dict):
+        for prop in props_map.values():
+            if isinstance(prop, dict):
+                yield prop.get("attrName", ""), prop.get("attrValue", "")
+
+
+def _extract_phone_from_product_props(product_props: object) -> str:
+    """showedProps/showedPropsMap의 전화 라벨 값만 전화번호로 추출한다."""
+    for name, value in _iter_property_pairs(product_props):
+        if not _is_phone_label(name):
+            continue
+        phone = _clean_phone_candidate(value)
+        if phone:
+            return phone
+    return ""
+
+
+def _merge_cached_phone(cached_info: dict, current_phone: object) -> tuple[str, dict | None]:
+    """현재 상품의 유효 전화번호를 캐시에 반영하되 다른 필드는 보존한다."""
+    cached_phone = _clean_phone_candidate(cached_info.get("phone", ""))
+    current = _clean_phone_candidate(current_phone)
+    if not current:
+        return cached_phone, None
+    if cached_info.get("phone") == current:
+        return current, None
+    merged = dict(cached_info)
+    merged["phone"] = current
+    return current, merged
 
 
 class _LineFailure(RuntimeError):
@@ -140,6 +335,74 @@ class AliexpressCategoryRunConfig:
             raise ValueError("max_pages 는 1~100 사이여야 합니다.")
 
 
+class _ResourceBlockFailure(RuntimeError):
+    """브라우저 리소스 차단을 설치하지 못해 안전 중단하는 오류."""
+
+
+async def _install_resource_blocks(context, page):
+    """Chromium CDP 차단과 Network 도메인을 웜업 전에 설치한다."""
+    new_cdp_session = getattr(context, "new_cdp_session", None)
+    if not callable(new_cdp_session):
+        raise _ResourceBlockFailure(
+            "브라우저가 CDP 리소스 차단을 지원하지 않아 수집을 중단했습니다."
+        )
+    try:
+        cdp = await new_cdp_session(page)
+        await cdp.send("Network.enable")
+        await cdp.send(
+            "Network.setBlockedURLs",
+            {"urls": list(ALI_RESOURCE_BLOCK_PATTERNS)},
+        )
+        return cdp
+    except Exception as exc:  # noqa: BLE001 - CDP 구현별 예외를 안전 중단
+        raise _ResourceBlockFailure(
+            f"브라우저 리소스 차단 설치에 실패해 수집을 중단했습니다: {type(exc).__name__}"
+        ) from exc
+
+
+def _safe_mtop_error_code(payload: object) -> str | None:
+    """mtop 응답의 ``ret`` 코드만 안전한 문자 집합으로 추출한다.
+
+    응답 본문·메시지·토큰은 로그에 남기지 않는다. mtop은 ret 를 문자열
+    배열로 주는 경우가 많고, 일부 응답은 code/errorCode 키를 사용한다.
+    """
+    if not isinstance(payload, dict):
+        return None
+    ret = payload.get("ret")
+    candidates: list[object] = []
+    if isinstance(ret, (list, tuple)):
+        candidates.extend(ret)
+    elif isinstance(ret, dict):
+        candidates.extend((ret.get("code"), ret.get("errorCode")))
+    elif ret is not None:
+        candidates.append(ret)
+    candidates.extend((payload.get("code"), payload.get("errorCode")))
+    data = payload.get("data")
+    if isinstance(data, dict):
+        nested_ret = data.get("ret")
+        if isinstance(nested_ret, (list, tuple)):
+            candidates.extend(nested_ret)
+        elif isinstance(nested_ret, str):
+            candidates.append(nested_ret)
+
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        # ``FAIL_SYS_xxx::message`` 에서 코드 앞부분만 취한다.
+        normalized = candidate.strip()
+        if not normalized:
+            continue
+        token_parts = normalized.split("::", 1)[0].split(":", 1)[0].split(None, 1)
+        if not token_parts:
+            continue
+        token = token_parts[0]
+        if re.fullmatch(r"[A-Z][A-Z0-9_-]{0,63}", token):
+            return token
+        if re.fullmatch(r"\d{1,8}", token):
+            return token
+    return None
+
+
 @dataclass
 class AliexpressCrawlSummary:
     """수집 결과 요약 통계.
@@ -154,7 +417,7 @@ class AliexpressCrawlSummary:
     has_email: int = 0
     has_business_number: int = 0
     has_ceo_name: int = 0
-    # 누적 실패 ITEM_GIVE_UP_RUNS 회로 재시도를 포기해 결과에서 제외된 상품 수
+    # 이전 버전 호환용 필드. 현재는 네트워크·미수신 상품을 영구 제외하지 않으므로 0이다.
     given_up_items: int = 0
     csv_file: Path | None = None
     json_file: Path | None = None
@@ -162,6 +425,12 @@ class AliexpressCrawlSummary:
     error: str | None = None
     cancelled: bool = False
     termination_reason: str = ""
+    # CDP Network.loadingFinished 의 encodedDataLength 합계. 브라우저 측
+    # 추정치이며 Decodo 청구량과 동일한 값은 아니다.
+    estimated_browser_bytes: int = 0
+    browser_bytes_by_session: list[int] = field(default_factory=list)
+    # True 이면 저장된 미처리 상품을 남기고 외부 시도 루프도 더 돌지 않는다.
+    rotation_budget_exhausted: bool = False
 
 
 class AliexpressCategoryCrawler:
@@ -195,6 +464,9 @@ class AliexpressCategoryCrawler:
         self._exit_ip_fn = exit_ip_fn or decodo.fetch_exit_ip
         # 재개 시 저장본을 테이블에 다시 흘릴 때 중복 행이 생기지 않게 하는 가드
         self._emitted_urls: set[str] = set()
+        # 한 번의 crawl() 안에서만 유지한다. 성공 상품이 나와도 회선 복구
+        # 비율을 0으로 되돌리지 않아 outer MAX_ATTEMPTS 재시도를 우회하지 못한다.
+        self._rotation_window: deque[int] = deque(maxlen=ROTATION_BUDGET_WINDOW)
 
     def crawl(self) -> AliexpressCrawlSummary:
         """동기 인터페이스: 시도 루프를 이벤트 루프에서 실행."""
@@ -222,6 +494,12 @@ class AliexpressCategoryCrawler:
         try:
             summary.collected_items = store.item_result_count
             summary.unique_vendors = store.confirmed_seller_count
+            records = store.load_item_results()
+            summary.has_email = sum(1 for record in records if record.get("email"))
+            summary.has_business_number = sum(
+                1 for record in records if record.get("business_number")
+            )
+            summary.has_ceo_name = sum(1 for record in records if record.get("ceo_name"))
         except ResumeStoreError:
             pass
 
@@ -257,15 +535,26 @@ class AliexpressCategoryCrawler:
                         self.on_log(f"[아카이브] 이전 진행 기록 보관 완료: {archived.name}")
                 store.open()
                 if not self.config.start_fresh and store.status == STATUS_FINISHED and store.has_state():
-                    # 완료 봉인된 기록은 이어서 수집 대상이 아니다 — 다시 시작은
-                    # 새 수집이다(쿠팡 decodo_run 과 동일). 기록은 아카이브로 보존.
-                    archived = store.archive()
-                    if archived:
+                    # 구버전은 실패 카운터 상한 상품을 제외한 채 finished 로
+                    # 봉인할 수 있었다. 목록에 상세 결과가 없는 상품이 남아
+                    # 있으면 그 기록을 새 수집으로 아카이브하지 않고 재개한다.
+                    pending_count = store.pending_product_count()
+                    if pending_count:
+                        store.mark_listing_done(end_reason="legacy_pending")
                         self.on_log(
-                            "[재개] 이 카테고리의 이전 실행은 완료됐습니다 — 진행 기록을 "
-                            f"보관하고 처음부터 새로 수집합니다: {archived.name}"
+                            f"[재개] 이전 완료 기록에 미확인 상품 {pending_count:,}건이 남아 있어 "
+                            "제외하지 않고 다시 확인합니다."
                         )
-                    store.open()
+                    else:
+                        # 완료 봉인된 기록은 이어서 수집 대상이 아니다 — 다시 시작은
+                        # 새 수집이다(쿠팡 decodo_run 과 동일). 기록은 아카이브로 보존.
+                        archived = store.archive()
+                        if archived:
+                            self.on_log(
+                                "[재개] 이 카테고리의 이전 실행은 완료됐습니다 — 진행 기록을 "
+                                f"보관하고 처음부터 새로 수집합니다: {archived.name}"
+                            )
+                        store.open()
                 mismatch = store.check_config(
                     self.config.category_name, self.config.category_url, self.config.max_pages
                 )
@@ -332,6 +621,13 @@ class AliexpressCategoryCrawler:
                     summary.error = str(e)
                     self._apply_store_stats(summary, store)
                     self.on_log(f"[Decodo] 시도 {attempt} 회선 확보 실패 — {e}")
+                except _ResourceBlockFailure as e:
+                    summary = self._new_summary(csv_file, json_file)
+                    summary.termination_reason = "error"
+                    summary.error = str(e)
+                    self._apply_store_stats(summary, store)
+                    self.on_log(f"[브라우저] {summary.error}")
+                    break
                 except Exception as e:
                     summary = self._new_summary(csv_file, json_file)
                     summary.termination_reason = "error"
@@ -340,6 +636,10 @@ class AliexpressCategoryCrawler:
                     self.on_log(f"[오류] 시도 {attempt} 실패: {summary.error}")
                 else:
                     if summary.cancelled or summary.termination_reason in ("success", "empty"):
+                        break
+                    if summary.rotation_budget_exhausted:
+                        # 회선 소모 상한은 같은 crawl()의 외부 시도 루프가
+                        # 90초 뒤 다시 회선을 태워 무력화하지 않게 즉시 종료한다.
                         break
                     if int(summary.collected_items or 0) == 0:
                         # 목록 단계에서 끝난 시도 — 요약에 저장 누적분이라도
@@ -388,9 +688,26 @@ class AliexpressCategoryCrawler:
             current_browser = None
             current_context = None
             current_page = None
+            current_cdp = None
+            current_session_bytes = 0
+            browser_bytes_by_session: list[int] = []
+
+            def update_browser_byte_summary() -> None:
+                summary.estimated_browser_bytes = sum(browser_bytes_by_session)
+                summary.browser_bytes_by_session = list(browser_bytes_by_session)
 
             async def close_session() -> None:
                 nonlocal current_browser, current_context, current_page
+                nonlocal current_cdp, current_session_bytes
+                if current_cdp is not None:
+                    browser_bytes_by_session.append(max(0, int(current_session_bytes)))
+                    update_browser_byte_summary()
+                    self.on_log(
+                        "  [네트워크] 브라우저 측 수신 추정 "
+                        f"{current_session_bytes:,}바이트 (청구량과 다른 측정값)"
+                    )
+                    current_cdp = None
+                    current_session_bytes = 0
                 if current_page:
                     try:
                         await current_page.close()
@@ -414,6 +731,7 @@ class AliexpressCategoryCrawler:
                 """새 스티키 세션 확보. 우회 모드에서는 한국 출발 회선만 채택한다
                 (쿠팡 _korea_proxy 와 동일 — 확인 실패 시 MAX_GEO_ROTATIONS 회 교체)."""
                 nonlocal session_counter, current_browser, current_context, current_page
+                nonlocal current_cdp, current_session_bytes
                 await close_session()
 
                 proxy = None
@@ -475,6 +793,33 @@ class AliexpressCategoryCrawler:
                     {"name": "xman_us_f", "value": "x_locale=ko_KR&x_l=0", "domain": ".aliexpress.com", "path": "/"}
                 ])
                 current_page = await current_context.new_page()
+
+                # 홈 웜업보다 먼저 설치해야 첫 페이지부터 이미지/영상/분석
+                # 트래픽이 회선으로 내려가지 않는다. CDP 설치 실패는 차단
+                # 없이 진행하면 곧바로 비용이 생기므로 안전하게 중단한다.
+                try:
+                    current_cdp = await _install_resource_blocks(current_context, current_page)
+                    current_session_bytes = 0
+
+                    def on_loading_finished(event: object) -> None:
+                        nonlocal current_session_bytes
+                        if not isinstance(event, dict):
+                            return
+                        encoded = event.get("encodedDataLength")
+                        if isinstance(encoded, (int, float)) and encoded >= 0:
+                            current_session_bytes += int(encoded)
+
+                    current_cdp.on("Network.loadingFinished", on_loading_finished)
+                except Exception as exc:  # noqa: BLE001 - 측정 설치도 비용 보호에 필요
+                    if isinstance(exc, _ResourceBlockFailure):
+                        current_cdp = None
+                        await close_session()
+                        raise
+                    current_cdp = None
+                    await close_session()
+                    raise _ResourceBlockFailure(
+                        f"브라우저 네트워크 측정 설치에 실패해 수집을 중단했습니다: {type(exc).__name__}"
+                    ) from exc
 
                 # 홈 웜업
                 try:
@@ -691,9 +1036,6 @@ class AliexpressCategoryCrawler:
             collected_records: list[dict] = store.load_item_results()
             processed_items: set[str] = store.processed_item_ids()
             vendor_cache: dict[str, dict] = store.confirmed_sellers()
-            # 영구 실패 추적 — 누적 실패가 상한에 도달한 상품은 이번 실행에서도
-            # 재시도하지 않는다(ITEM_GIVE_UP_RUNS 주석의 비수렴 방지 규율).
-            give_up_ids = store.give_up_item_ids(ITEM_GIVE_UP_RUNS)
             req_count_in_session = 0
 
             # 기존 저장소에서 고유 판매자 시드 자동 로드
@@ -762,7 +1104,27 @@ class AliexpressCategoryCrawler:
                 await open_new_session()
 
             consecutive_failures = 0
+            failure_limit = PROXY_FAILURE_ABORT if self.config.use_proxy else CONSECUTIVE_BLOCK_ABORT
             dropped_count = 0
+            active_pdp_attempt = None
+
+            def note_item_rotation(rotation_count: int) -> bool:
+                """상품별 회선 복구를 최근 10건 창에 기록한다."""
+                if not self.config.use_proxy:
+                    return False
+                self._rotation_window.append(max(0, int(rotation_count)))
+                rotations = sum(self._rotation_window)
+                if rotations < ROTATION_BUDGET_LIMIT:
+                    return False
+                summary.rotation_budget_exhausted = True
+                summary.termination_reason = "blocked"
+                summary.error = (
+                    "최근 상품 처리 중 회선 복구가 너무 자주 발생해 추가 데이터 소모를 막고 "
+                    f"안전 중단했습니다 ({rotations}/{len(self._rotation_window)}건). "
+                    "저장된 미처리 상품은 다음 시작 때 다시 확인됩니다."
+                )
+                self.on_log(f"[회선 소모 보호] {summary.error}")
+                return True
 
             for idx, itm in enumerate(product_targets, 1):
                 self._checkpoint()
@@ -776,15 +1138,6 @@ class AliexpressCategoryCrawler:
                 if p_id in processed_items:
                     continue
 
-                # 누적 실패 상한 도달 상품 — 재시도하지 않고 결과에서 제외
-                if p_id in give_up_ids:
-                    summary.given_up_items += 1
-                    self.on_log(
-                        f"  [{idx}/{total_items}] 누적 실패 {ITEM_GIVE_UP_RUNS}회 상품 — "
-                        "재시도를 포기합니다 (삭제·변경된 상품으로 보입니다)"
-                    )
-                    continue
-
                 # rotation_batch_size 주기 회선 자동 순환 (프록시 사용 시에만)
                 if self.config.use_proxy and req_count_in_session >= self.config.rotation_batch_size:
                     self.on_log(f"  [회선 자동 순환] {req_count_in_session}건 도달 -> 새 주거용 회선 세션 교체...")
@@ -792,38 +1145,82 @@ class AliexpressCategoryCrawler:
                     req_count_in_session = 0
 
                 record = None
+                rotations_for_item = 0
                 clean_url = f"https://ko.aliexpress.com/item/{p_id}.html"
 
                 for attempt in range(1, PDP_ITEM_RETRIES + 1):
                     self._checkpoint()
+                    pdp_attempt = object()
+                    active_pdp_attempt = pdp_attempt
                     pdp_json_data = {}
                     pdp_received = False
+                    api_response_seen = False
+                    api_status: int | None = None
+                    navigation_status: int | None = None
+                    navigation_error: str | None = None
+                    parse_issue: str | None = None
+                    api_error_code: str | None = None
 
-                    async def handle_response(response):
-                        nonlocal pdp_json_data, pdp_received
-                        if "mtop.aliexpress.pdp.pc.query" in response.url and response.status == 200:
-                            try:
-                                b = await response.body()
-                                txt = b.decode("utf-8", errors="ignore")
-                                if "PRODUCT_PROP_PC" in txt or "SHOP_CARD_PC" in txt:
-                                    m = re.search(r'^[^{]*(\{.*\})[^}]*$', txt, re.DOTALL)
-                                    if m:
-                                        pdp_json_data = json.loads(m.group(1))
-                                        pdp_received = True
-                            except Exception:
-                                pass
+                    async def handle_response(response, _attempt_token=pdp_attempt):
+                        nonlocal pdp_json_data, pdp_received, api_response_seen, api_status, parse_issue, api_error_code
+                        if _attempt_token is not active_pdp_attempt:
+                            return
+                        if "mtop.aliexpress.pdp.pc.query" not in response.url:
+                            return
+                        api_response_seen = True
+                        try:
+                            api_status = int(response.status)
+                        except (TypeError, ValueError):
+                            api_status = None
+                        if api_status != 200:
+                            parse_issue = "http_status"
+                            return
+                        try:
+                            b = await response.body()
+                            if _attempt_token is not active_pdp_attempt:
+                                return
+                            txt = b.decode("utf-8", errors="ignore")
+                            m = re.search(r'^[^{]*(\{.*\})[^}]*$', txt, re.DOTALL)
+                            if not m:
+                                parse_issue = "json_envelope_missing"
+                                return
+                            candidate_payload = json.loads(m.group(1))
+                            if not isinstance(candidate_payload, dict):
+                                parse_issue = "invalid_payload_shape"
+                                return
+                            api_error_code = _safe_mtop_error_code(candidate_payload)
+                            if "PRODUCT_PROP_PC" not in txt and "SHOP_CARD_PC" not in txt:
+                                parse_issue = "payload_fields_missing"
+                                return
+                            pdp_json_data = candidate_payload
+                            pdp_received = True
+                        except json.JSONDecodeError:
+                            if _attempt_token is active_pdp_attempt:
+                                parse_issue = "invalid_json"
+                        except Exception as exc:  # noqa: BLE001 - response shape varies by edge
+                            if _attempt_token is active_pdp_attempt:
+                                parse_issue = type(exc).__name__
 
                     current_page.on("response", handle_response)
-
                     try:
-                        await current_page.goto(clean_url, wait_until="domcontentloaded", timeout=25000)
-                        for _ in range(35):
+                        navigation_response = await current_page.goto(
+                            clean_url, wait_until="domcontentloaded", timeout=25000
+                        )
+                        try:
+                            navigation_status = int(getattr(navigation_response, "status", None))
+                        except (TypeError, ValueError):
+                            navigation_status = None
+                        # mtop is often sent shortly after DOMContentLoaded. Give it a
+                        # little more time, but do not add a long fixed sleep to retries.
+                        for _ in range(max(1, PDP_RESPONSE_WAIT_MS // 100)):
                             if pdp_received:
                                 break
                             await current_page.wait_for_timeout(100)
-                    except Exception:
+                    except Exception as exc:  # noqa: BLE001 - classified below without body/URL
+                        navigation_error = type(exc).__name__
                         await current_page.wait_for_timeout(500)
 
+                    active_pdp_attempt = None
                     current_page.remove_listener("response", handle_response)
                     req_count_in_session += 1
 
@@ -831,20 +1228,45 @@ class AliexpressCategoryCrawler:
                         self.on_log(
                             f"  [{idx}/{total_items}] 보안 신호 감지 -> "
                             + ("새 회선 세션으로 자가 교체" if self.config.use_proxy else "안전 쿨다운 대기")
-                            + f" (재시도 {attempt}/3)..."
+                            + f" (재시도 {attempt}/{PDP_ITEM_RETRIES})..."
                         )
-                        await block_backoff()
-                        if self.config.use_proxy:
-                            req_count_in_session = 0
+                        if attempt < PDP_ITEM_RETRIES:
+                            if self.config.use_proxy:
+                                rotations_for_item += 1
+                            await block_backoff()
+                            if self.config.use_proxy:
+                                req_count_in_session = 0
+                        else:
+                            self.on_log("    마지막 시도라 추가 회선 교체 없이 이 상품을 보류합니다")
                         continue
 
                     if not pdp_received:
-                        # 소프트 차단(페이지는 열리지만 상품 데이터 미수신) — 빈
-                        # 껍데기를 기록하지 않고 같은 회선에서 재시도한다.
+                        if navigation_error:
+                            reason = f"페이지 요청 오류({navigation_error})"
+                        elif navigation_status is not None and navigation_status >= 400:
+                            reason = f"페이지 HTTP {navigation_status}"
+                        elif api_response_seen and api_status != 200:
+                            reason = f"mtop API HTTP {api_status or '알 수 없음'}"
+                        elif parse_issue:
+                            reason = f"mtop 응답 {parse_issue}"
+                            if api_error_code:
+                                reason += f" (ret {api_error_code})"
+                        else:
+                            reason = "mtop API 응답 없음"
                         self.on_log(
-                            f"  [{idx}/{total_items}] 상품 데이터 미수신(차단 의심) — 재시도 {attempt}/3..."
+                            f"  [{idx}/{total_items}] 상품 데이터 미수신({reason}) — "
+                            f"재시도 {attempt}/{PDP_ITEM_RETRIES}..."
                         )
-                        await current_page.wait_for_timeout(int(self.config.block_cooldown_seconds * 1000))
+                        if attempt < PDP_ITEM_RETRIES:
+                            if self.config.use_proxy:
+                                self.on_log("    수신 실패 — 같은 상품을 새 회선에서 즉시 재확인합니다")
+                                rotations_for_item += 1
+                                await open_new_session()
+                                req_count_in_session = 0
+                            else:
+                                await current_page.wait_for_timeout(
+                                    int(self.config.block_cooldown_seconds * 1000)
+                                )
                         continue
 
                     # ── 파싱 (상품 데이터를 받았을 때만 기록으로 이어진다) ──
@@ -867,9 +1289,18 @@ class AliexpressCategoryCrawler:
                     if not vendor_id:
                         vendor_id = p_id
 
+                    # 캐시를 재사용하기 전에 현재 상품의 전화 속성을 먼저 본다.
+                    # 이전 캐시에 빈칸/상세 참고가 있어도 뒤늦게 확인된 번호를 놓치지 않는다.
+                    current_phone = _extract_phone_from_product_props(product_props)
+
                     # 캐시 적중 확인
                     if vendor_id in vendor_cache:
                         c_info = vendor_cache[vendor_id]
+                        phone, merged_info = _merge_cached_phone(c_info, current_phone)
+                        if merged_info is not None:
+                            vendor_cache[vendor_id] = merged_info
+                            store.record_seller(vendor_id, merged_info)
+                            c_info = merged_info
                         record = {
                             "vendor_id": vendor_id,
                             "url": p_url,
@@ -877,7 +1308,7 @@ class AliexpressCategoryCrawler:
                             "company_name": c_info["company_name"],
                             "ceo_name": c_info["ceo_name"],
                             "business_number": c_info["business_number"],
-                            "phone": c_info["phone"],
+                            "phone": phone,
                             "email": c_info["email"],
                             "address": c_info["address"],
                             "ecommerce_report_number": c_info["ecommerce_report_number"],
@@ -895,7 +1326,7 @@ class AliexpressCategoryCrawler:
                     company_name = ""
                     ceo_name = ""
                     business_number = ""
-                    phone = ""
+                    phone = current_phone
                     email = ""
                     address = ""
                     ecommerce_report_number = ""
@@ -912,9 +1343,6 @@ class AliexpressCategoryCrawler:
                             ceo_name = val
                         elif name in ("사업자번호", "사업자등록번호"):
                             business_number = val
-                        elif name in ("소비자상담전화번호", "전화번호", "연락처", "고객센터"):
-                            if "참조" not in val:
-                                phone = val
                         elif name in ("이메일 주소", "이메일", "E-mail", "Email"):
                             email = val
                         elif name in ("사업장소재지", "주소", "소재지"):
@@ -932,7 +1360,6 @@ class AliexpressCategoryCrawler:
                         if name == "대표자" and not ceo_name: ceo_name = val
                         if name == "사업자번호" and not business_number: business_number = val
                         if name in ("회사 이름", "상호명") and not company_name and "참조" not in val: company_name = val
-                        if name in ("소비자상담전화번호", "고객센터") and not phone and "참조" not in val: phone = val
                         if name == "사업장소재지" and not address: address = val
                         if name == "통신판매업신고번호" and not ecommerce_report_number: ecommerce_report_number = val
 
@@ -1008,32 +1435,37 @@ class AliexpressCategoryCrawler:
                     self.on_log(f"  [{idx}/{total_items}] 수집: {biz_desc} (누적 {len(collected_records)}건, 고유판매자 {len(vendor_cache)}개사)")
                 else:
                     consecutive_failures += 1
-                    total_failures = store.record_item_failure(p_id)
-                    if total_failures >= ITEM_GIVE_UP_RUNS:
-                        # 이 실행에서 포기 — dropped_count 에 넣지 않아 남은 수집이
-                        # 모이면 완료 봉인이 가능해진다(비수렴 방지).
-                        give_up_ids.add(p_id)
-                        summary.given_up_items += 1
-                        self.on_log(
-                            f"  [{idx}/{total_items}] 수집 실패 누적 {total_failures}회 — "
-                            "이 상품은 재시도를 포기합니다. "
-                            f"(연속 실패 {consecutive_failures}/{CONSECUTIVE_BLOCK_ABORT})"
-                        )
-                    else:
-                        dropped_count += 1
-                        self.on_log(
-                            f"  [{idx}/{total_items}] 수집 실패(차단 의심) — 건너뜁니다. "
-                            f"다음 시작 때 이 상품부터 다시 시도됩니다. "
-                            f"(연속 실패 {consecutive_failures}/{CONSECUTIVE_BLOCK_ABORT}, "
-                            f"누적 {total_failures}/{ITEM_GIVE_UP_RUNS})"
-                        )
-                    if consecutive_failures >= CONSECUTIVE_BLOCK_ABORT:
+                    # 회선·응답 문제는 상품 삭제로 확정할 수 없다. 실패 카운터를
+                    # 누적하거나 포기 처리하지 않고, 진행 파일에는 상품을 남겨
+                    # 다음 실행에서 다시 확인한다.
+                    dropped_count += 1
+                    self.on_log(
+                        f"  [{idx}/{total_items}] 수집 실패(보류) — 다음 시작 때 "
+                        f"이 상품부터 다시 시도됩니다. "
+                        f"(연속 실패 {consecutive_failures}/{failure_limit})"
+                    )
+                    if consecutive_failures >= failure_limit:
+                        if note_item_rotation(rotations_for_item):
+                            # 실패 상품에는 결과 행이 없으므로 진행 저장소에 남아 있다.
+                            flush_json()
+                            await close_session()
+                            return summary
                         summary.termination_reason = "blocked"
-                        summary.error = BLOCKED_ABORT_GUIDE
-                        self.on_log(f"[차단 중단] 연속 {consecutive_failures}건 실패 — 안전 중단. {BLOCKED_ABORT_GUIDE}")
+                        summary.error = RESPONSE_ABORT_GUIDE
+                        self.on_log(
+                            f"[응답 중단] 연속 {consecutive_failures}건 실패 — 안전 중단. "
+                            f"{RESPONSE_ABORT_GUIDE}"
+                        )
                         flush_json()
                         await close_session()
                         return summary
+
+                if note_item_rotation(rotations_for_item):
+                    # 현재 상품이 성공했다면 그 결과까지 저장한 뒤 멈춘다.
+                    # 실패 상품에는 결과 행이 없으므로 진행 저장소에 남아 있다.
+                    flush_json()
+                    await close_session()
+                    return summary
 
                 await current_page.wait_for_timeout(int(self.config.delay * 1000))
 
@@ -1041,19 +1473,15 @@ class AliexpressCategoryCrawler:
                 # 실패(데이터 미수신) 상품이 남으면 완료 봉인하지 않는다 — 다음
                 # 시작 때 이 상품부터 다시 시도된다.
                 summary.termination_reason = "blocked"
-                summary.error = BLOCKED_ABORT_GUIDE
+                summary.error = RESPONSE_ABORT_GUIDE
                 self.on_log(
-                    f"[차단 중단] 수집 못 건 상품 {dropped_count}건 — 완료 봉인하지 않고 종료. {BLOCKED_ABORT_GUIDE}"
+                    f"[응답 중단] 수집 못 건 상품 {dropped_count}건 — 완료 봉인하지 않고 종료. "
+                    f"{RESPONSE_ABORT_GUIDE}"
                 )
                 flush_json()
                 await close_session()
                 return summary
 
-            if summary.given_up_items > 0:
-                self.on_log(
-                    f"[완료 제외] 누적 실패 {ITEM_GIVE_UP_RUNS}회로 재시도를 포기한 상품 "
-                    f"{summary.given_up_items}건은 결과에서 제외됐습니다."
-                )
             summary.termination_reason = "success"
             store.mark_finished()
             flush_json()

@@ -249,7 +249,7 @@ class ListerTest(unittest.TestCase):
             )
         self.assertTrue(blocked)
 
-    def test_legacy_large_variant_treated_as_empty(self):
+    def test_legacy_large_variant_retries_then_reports_incomplete(self):
         # 실측(2026-09-08): 대분류(L-code)는 CategoryLarge 레거시 변형 —
         # 광고 goodscode 링크만 담겨 상품으로 오인되면 안 된다.
         url = category_list_url("100000003", None)
@@ -261,11 +261,86 @@ class ListerTest(unittest.TestCase):
         )
         session = _FakeUnlockerSession({url: _FakeResponse(200, legacy_html)})
         lister = self._lister()
-        codes, blocked = lister._fetch_page(
-            session, url, CategoryTarget("100000003", "여성의류")
-        )
+        with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0):
+            codes, blocked = lister._fetch_page(
+                session, url, CategoryTarget("100000003", "여성의류")
+            )
         self.assertEqual(codes, [])
+        self.assertTrue(blocked)
+        self.assertEqual(len(session.calls), config.LISTING_MAX_RETRIES + 1)
+
+    def test_legacy_retry_recovers_same_page_and_continues(self):
+        target = CategoryTarget("100000003", "여성의류")
+        session = _FakeUnlockerSession({
+            category_list_url(target.code): [
+                _FakeResponse(200, "CategoryLargeFuction"),
+                _FakeResponse(200, _listing_html(["111111111"])),
+            ],
+            category_list_url(target.code, 2):
+                _FakeResponse(200, _listing_html(["222222222"])),
+        })
+        with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0):
+            out = self._lister(max_pages=2)._collect_one(session, target)
+        self.assertEqual(out.codes, ["111111111", "222222222"])
+        self.assertFalse(out.blocked)
+        self.assertEqual(len(session.calls), 3)
+
+    def test_timeout_then_legacy_preserves_partial_codes_as_incomplete(self):
+        from requests.exceptions import ReadTimeout
+
+        session = mock.Mock()
+        session.post.side_effect = [
+            _FakeResponse(200, _listing_html(["111111111"])),
+            ReadTimeout("read timeout=90"),
+            _FakeResponse(200, "CategoryLargeFuction"),
+            _FakeResponse(200, "CategoryLargeFuction"),
+        ]
+        with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0), \
+                mock.patch.object(config, "UNLOCKER_RETRY_WAIT", 0):
+            out = self._lister(max_pages=22)._collect_one(
+                session, CategoryTarget("100000003", "여성의류")
+            )
+        self.assertEqual(out.codes, ["111111111"])
+        self.assertTrue(out.blocked)
+        self.assertEqual(session.post.call_count, 4)
+        self.assertTrue(any("일부 미수집" in line for line in self.logs))
+        self.assertFalse(any("빈 페이지 연속" in line for line in self.logs))
+
+    def test_legacy_followed_by_empty_responses_stays_incomplete(self):
+        target = CategoryTarget("100000003", "여성의류")
+        url = category_list_url(target.code)
+        for bodies in (
+            ["CategoryLargeFuction", "", ""],
+            ["", "CategoryLargeFuction", ""],
+        ):
+            with self.subTest(bodies=bodies):
+                session = _FakeUnlockerSession({
+                    url: [_FakeResponse(200, body) for body in bodies],
+                })
+                with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0):
+                    codes, blocked = self._lister()._fetch_page(session, url, target)
+                self.assertEqual(codes, [])
+                self.assertTrue(blocked)
+                self.assertEqual(len(session.calls), 3)
+
+    def test_timeout_then_legacy_can_recover_within_retry_budget(self):
+        from requests.exceptions import ReadTimeout
+
+        session = mock.Mock()
+        session.post.side_effect = [
+            ReadTimeout("read timeout=90"),
+            _FakeResponse(200, "CategoryLargeFuction"),
+            _FakeResponse(200, _listing_html(["111111111"])),
+        ]
+        target = CategoryTarget("100000003", "여성의류")
+        with mock.patch.object(config, "UNLOCKER_EMPTY_RETRY_WAIT", 0), \
+                mock.patch.object(config, "UNLOCKER_RETRY_WAIT", 0):
+            codes, blocked = self._lister()._fetch_page(
+                session, category_list_url(target.code), target
+            )
+        self.assertEqual(codes, ["111111111"])
         self.assertFalse(blocked)
+        self.assertEqual(session.post.call_count, 3)
 
     def test_fetch_page_retries_empty_once_and_recovers(self):
         # 빈 껍데기(200 + 코드 0)는 1회 재요청으로 회복을 시도한다 —

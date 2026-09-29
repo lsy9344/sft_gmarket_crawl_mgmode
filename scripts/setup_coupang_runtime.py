@@ -23,7 +23,7 @@ try:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
-            reconfigure(encoding="utf-8", errors="replace")
+            reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 except (AttributeError, ValueError):
     pass
 

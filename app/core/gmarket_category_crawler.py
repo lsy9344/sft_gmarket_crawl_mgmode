@@ -10,8 +10,8 @@ Phase A 는 Bright Data Web Unlocker 로 `/n/list` 리스팅을 fetch 한다
   동일 페이지 실측). 상품이 없으면 200 + goodscode 0 이므로 기존처럼 연속
   빈 페이지 허용치로 종료한다.
 - 주의(실측): 대분류(L-code) 페이지는 레거시 CategoryLarge 변형(광고 링크
-  7개뿐인 셸)으로 응답할 수 있다 → 빈 페이지로 취급하고, 수집 대상은 상품
-  목록이 보장되는 중/소분류(M/S)를 권장한다.
+  7개뿐인 셸)으로 응답할 수 있다 → 제한적으로 재요청하고, 회복하지 못하면
+  미수집으로 처리한다. 수집 대상은 중/소분류(M/S)를 권장한다.
 - goodscode 는 기존 `extract_goodscodes()`(정규식)로 뽑는다.
 
 수집 결과는 PrescanResult 목록으로 만들어져, 기존 Phase B
@@ -242,6 +242,10 @@ class GmarketCategoryLister:
 
             codes, blocked = self._fetch_page(session, url, target)
             if blocked:
+                self.on_log(
+                    f"  [{target.label}] page {page}: 목록 확인 실패 — 일부 미수집 "
+                    f"(확보한 상품번호 {len(seen)}개, 이 카테고리는 재수집 필요)"
+                )
                 return ListingOutcome(label=target.label, codes=seen, blocked=True)
 
             fresh = [c for c in codes if c not in seen_set]
@@ -273,7 +277,8 @@ class GmarketCategoryLister:
         """Unlocker 1요청 → (goodscode 목록, blocked 여부).
 
         blocked=True 는 재시도 소진 후에도 오류/차단으로 페이지를 읽지 못한
-        경우. 200 으로 정상 수신됐으면(코드 0개여도) blocked=False.
+        경우. 레거시 대분류 변형도 정상 목록이 아니므로 재요청 후 목록을
+        확보하지 못하면 blocked=True 로 반환한다.
 
         Unlocker 실패는 200 + 빈 본문 + `x-brd-error` 헤더로 포장되기도 한다
         (BRIGHTDATA_AKAMAI_REVIEW §2) — 상태 코드와 함께 헤더를 검사한다.
@@ -290,6 +295,7 @@ class GmarketCategoryLister:
         }
         headers = {"Authorization": f"Bearer {self._token}"}
         empty_retried = False
+        legacy_seen = False
 
         for attempt in range(config.LISTING_MAX_RETRIES + 1):
             self._checkpoint()
@@ -326,10 +332,19 @@ class GmarketCategoryLister:
             if "CategoryLargeFuction" in html:
                 # 대분류(L-code) 레거시 변형 — 실측(2026-09-08): 상품 목록 없이
                 # 광고 goodscode 링크 7개만 담은 CategoryLarge 셸이 온다.
-                # 광고 링크를 상품으로 오인하지 않게 빈 페이지로 취급한다
-                # (연속 빈 페이지 허용치로 순회 종료).
-                self.on_log(f"  [{target.label}] 레거시 대분류 변형 페이지 — 목록 없음, 건너뜀")
-                return [], False
+                # 광고 링크는 제외하되, 목록 끝으로 오인하지 않게 재요청한다.
+                legacy_seen = True
+                if attempt < config.LISTING_MAX_RETRIES:
+                    self.on_log(
+                        f"  [{target.label}] 레거시 대분류 변형 페이지 — 목록 확인 불가, "
+                        f"{config.UNLOCKER_EMPTY_RETRY_WAIT}초 후 같은 페이지 재요청..."
+                    )
+                    self._wait_seconds(config.UNLOCKER_EMPTY_RETRY_WAIT)
+                    continue
+                self.on_log(
+                    f"  [{target.label}] 레거시 대분류 변형 페이지 — 재시도 소진, 목록 확인 실패"
+                )
+                return [], True
 
             codes = extract_goodscodes(html)
             if codes:
@@ -346,7 +361,7 @@ class GmarketCategoryLister:
                 )
                 self._wait_seconds(config.UNLOCKER_EMPTY_RETRY_WAIT)
                 continue
-            return [], False
+            return [], legacy_seen
 
         return [], True
 

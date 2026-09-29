@@ -116,6 +116,30 @@ class GmarketRuntimePreflightTest(_MainWindowTestCase):
         make_storage.assert_not_called()
         self.assertIsNone(self.win.prescan_worker)
 
+    def test_coupang_category_checks_chromium_without_camoufox(self) -> None:
+        from app.core.gmarket_preflight import GmarketPreflightResult
+
+        with (
+            patch("app.core.gmarket_preflight.check_gmarket_runtime",
+                  return_value=GmarketPreflightResult(True, "ready")) as chromium,
+            patch("app.core.coupang.preflight.check_runtime") as camoufox,
+        ):
+            self.assertTrue(self.win._coupang_runtime_ready(category=True))
+        chromium.assert_called_once()
+        camoufox.assert_not_called()
+
+    def test_coupang_category_missing_chromium_reports_install_instruction(self) -> None:
+        from app.core.gmarket_preflight import GmarketPreflightResult
+
+        with (
+            patch("app.core.gmarket_preflight.check_gmarket_runtime",
+                  return_value=GmarketPreflightResult(False, "Gmarket: --setup-runtime")),
+            patch.object(QMessageBox, "critical") as critical,
+        ):
+            self.assertFalse(self.win._coupang_runtime_ready(category=True))
+        self.assertIn("--setup-runtime", critical.call_args.args[2])
+        self.assertNotIn("Gmarket", critical.call_args.args[2])
+
 
 class CloseEventRaceTest(_MainWindowTestCase):
     """3차 리뷰 HIGH-2/HIGH-3 회귀: 종료 확인 대화상자가 열려 있는 동안(Qt 의

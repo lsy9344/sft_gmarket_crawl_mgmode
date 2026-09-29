@@ -18,8 +18,12 @@ pip install -r requirements.txt
 python scripts/setup_coupang_runtime.py
 ```
 
-배포본은 `SellerCollector.exe` 단일 파일이다. 최초 1회 명령 프롬프트에서
-런타임 설치 모드를 실행한 뒤 GUI를 연다.
+배포본은 `SellerCollector.exe` 단일 파일이다. 더블클릭하면 필요한 도구를 확인하고,
+없거나 갱신이 필요하면 자동으로 설치한 뒤 앱을 연다. 처음에는 인터넷 연결과
+약 1.4GB 다운로드가 필요하다. 실패하면 준비 화면의 ‘다시 시도’를 누른다.
+Python을 따로 설치할 필요는 없다. 소스 실행은 위 설치 명령을 사용한다.
+
+수동 설치·점검도 지원한다:
 
 ```bat
 SellerCollector.exe --setup-runtime
@@ -72,6 +76,8 @@ python -m app.main
 **[이어서 수집]**(사전 조사 후 남은 신규 건만 자동 수집), **[초기화]**(수집 이력/상태 리셋).
 
 ## 설정 탭 (계정)
+
+처음 설정하는 이용자는 **[Decodo·Bright Data 가입·충전·설정 매뉴얼 (PDF)](docs/SETTINGS_PLATFORM_GUIDE_KO.pdf)**을 따라 하면 됩니다. **[사진을 확대할 수 있는 웹 문서](docs/SETTINGS_PLATFORM_GUIDE_KO.html)**도 제공합니다.
 
 Gmarket 카테고리 탭은 Bright Data Web Unlocker를 쓰고, 사용량은 **설정 탭에
 입력한 API 토큰**에서 차감된다. Coupang 카테고리 탭은 **Decodo 한국 고정
@@ -423,9 +429,8 @@ scripts\build_windows.bat
 | `SellerCollector.exe` | 메인 7개 탭 통합 UI + `--setup-runtime` 설치 + `--verify-runtime` 검증 | 설치 모드만 표시 |
 
 배포 시 단일 EXE와 스크립트가 만든 `SHA256SUMS.txt`를 함께 제공한다. 사용자는
-최초 1회 `SellerCollector.exe --setup-runtime`을 실행하여 **두 브라우저
-런타임(Coupang용 Camoufox+GeoIP, Gmarket용 patchright Chromium)**을 설치한 뒤
-인자 없이 `SellerCollector.exe`를 실행한다.
+`SellerCollector.exe`를 더블클릭하면 **두 브라우저 런타임(Coupang용 Camoufox+GeoIP,
+Gmarket용 patchright Chromium)**을 자동으로 확인·설치한 뒤 앱을 연다.
 
 ### 배포 시 유의사항 (2026-07-28 clean-cache 재검증)
 

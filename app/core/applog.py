@@ -29,7 +29,7 @@ def log_file_dir() -> Path:
     return Path.home() / ".local" / "share" / "SellerCollector" / "logs"
 
 
-def setup_file_logging() -> Path | None:
+def setup_file_logging(*, filename: str = "seller_collector.log") -> Path | None:
     """회전 파일 핸들러를 설치하고 로그 파일 경로를 반환한다. 실패 시 None."""
     logger = get_logger()
     logger.setLevel(logging.INFO)
@@ -41,7 +41,7 @@ def setup_file_logging() -> Path | None:
     try:
         log_dir = log_file_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
-        path = log_dir / "seller_collector.log"
+        path = log_dir / filename
         handler = RotatingFileHandler(
             path, maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8"
         )

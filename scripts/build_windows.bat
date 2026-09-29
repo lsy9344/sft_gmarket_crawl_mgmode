@@ -108,11 +108,11 @@ echo [성공] SHA-256 목록:         %CD%\dist\SHA256SUMS.txt
 echo ============================================================
 echo.
 echo [다음 단계]
-echo   - 먼저 SellerCollector.exe --setup-runtime 을 1회 실행하세요. Gmarket용 patchright
+echo   - SellerCollector.exe 를 더블클릭하면 필요한 도구를 자동 설치하고 앱을 엽니다.
 echo     Downloads Chromium, Camoufox, and GeoIP data, about 1.4 GB total.
-echo     Both application tabs require this runtime.
-echo   - SellerCollector.exe --verify-runtime 으로 설치 상태를 확인할 수 있습니다.
-echo   - 이후 SellerCollector.exe 를 인자 없이 실행해 두 탭을 사용하세요.
+echo   - 설치 실패 시 준비 화면에서 다시 시도할 수 있습니다.
+echo   - 수동 점검: SellerCollector.exe --verify-runtime
+echo   - 수동 설치: SellerCollector.exe --setup-runtime
 echo.
 echo [배포 유의사항]
 echo   - 인터넷 필수: 설치 모드는 GitHub/jsdelivr/Playwright CDN 에서 약 1.4GB 를 내려받습니다.

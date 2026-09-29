@@ -27,12 +27,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from app.core import decodo
 from app.core.aliexpress_category_crawler import (
+    ALI_RESOURCE_BLOCK_PATTERNS,
+    COUPANG_DATASET_FIELDS,
     CONSECUTIVE_BLOCK_ABORT,
+    HOME_WARMUP_URL,
     ITEM_GIVE_UP_RUNS,
     JSON_FLUSH_INTERVAL,
-    RETRY_WAIT_SECONDS,
     AliexpressCategoryCrawler,
     AliexpressCategoryRunConfig,
+    _safe_mtop_error_code,
 )
 from app.core.aliexpress_resume_store import (
     AliexpressResumeStore,
@@ -78,12 +81,17 @@ class ScriptedPage:
         self._goto_counts: dict[str, int] = {}
         self._listeners: dict[str, list] = {}
         self.url = ""
+        self.cdp = None
+        self.event_log: list[tuple[str, str]] = []
 
     async def goto(self, url: str, **kwargs):
         n = self._goto_counts.get(url, 0) + 1
         self._goto_counts[url] = n
         self.goto_urls.append(url)
         self.url = url
+        self.event_log.append(("goto", url))
+        if self.cdp is not None:
+            self.cdp.emit("Network.loadingFinished", {"encodedDataLength": 1024})
 
         for item_id, payload in self.pdp_payloads.items():
             if f"/item/{item_id}.html" not in url:
@@ -163,12 +171,17 @@ class PunishListingPage(ScriptedPage):
 class FakeContext:
     def __init__(self, page: ScriptedPage):
         self._page = page
+        self.cdp = FakeCdpSession(page.event_log)
 
     async def add_cookies(self, cookies):
         pass
 
     async def new_page(self):
+        self._page.cdp = self.cdp
         return self._page
+
+    async def new_cdp_session(self, page):
+        return self.cdp
 
     async def close(self):
         pass
@@ -183,6 +196,25 @@ class FakeBrowser:
 
     async def close(self):
         pass
+
+
+class FakeCdpSession:
+    def __init__(self, event_log=None):
+        self.commands: list[tuple[str, dict | None]] = []
+        self._listeners: dict[str, list] = {}
+        self.event_log = event_log
+
+    async def send(self, method: str, params=None):
+        self.commands.append((method, params))
+        if self.event_log is not None:
+            self.event_log.append(("cdp", method))
+
+    def on(self, event: str, handler):
+        self._listeners.setdefault(event, []).append(handler)
+
+    def emit(self, event: str, payload):
+        for handler in list(self._listeners.get(event, [])):
+            handler(payload)
 
 
 class FakePlaywrightManager:
@@ -532,6 +564,63 @@ class TestScheduledRotation(unittest.TestCase):
             self.assertGreaterEqual(h.record["launch_count"], 3, "5건/2건 배치 → 초기+교체 2회 이상")
             self.assertEqual(len(h.sids), len(set(h.sids)), "세션 ID 는 모두 달라야 합니다")
 
+    def test_cdp_resource_blocks_are_installed_before_warmup(self):
+        products = make_products("bandwidth", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={"bandwidth1": make_mtop("S1", "회사1")},
+            )
+            h = CrawlHarness(page, use_proxy=True)
+            _, summary = h.crawl(make_cfg(Path(tmp)))
+
+        methods = [method for method, _ in page.cdp.commands]
+        self.assertLess(
+            page.event_log.index(("cdp", "Network.setBlockedURLs")),
+            page.event_log.index(("goto", HOME_WARMUP_URL)),
+        )
+        blocked = dict(page.cdp.commands)["Network.setBlockedURLs"]["urls"]
+        self.assertEqual(tuple(blocked), ALI_RESOURCE_BLOCK_PATTERNS)
+        self.assertIn("https://ae-pic-a1.aliexpress-media.com/*", blocked)
+        self.assertNotIn("https://assets.aliexpress-media.com/*", blocked)
+        self.assertGreater(summary.estimated_browser_bytes, 0)
+        self.assertEqual(summary.browser_bytes_by_session[-1], summary.estimated_browser_bytes)
+
+    def test_recovery_rotation_budget_stops_outer_retries(self):
+        products = make_products("rotate", 6)
+        plan = {p["id"]: ["nodata", "ok"] for p in products}
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={p["id"]: make_mtop(f"S{i}", f"회사{i}") for i, p in enumerate(products)},
+                pdp_plan=plan,
+            )
+            h = CrawlHarness(page, use_proxy=True)
+            _, summary = h.crawl(make_cfg(Path(tmp), rotation_batch_size=100))
+
+        self.assertEqual(summary.termination_reason, "blocked")
+        self.assertTrue(summary.rotation_budget_exhausted)
+        self.assertEqual(summary.collected_items, 5)
+        self.assertEqual(page.goto_urls.count("https://ko.aliexpress.com/item/rotate6.html"), 0)
+        self.assertEqual(h.record["launch_count"], 6, "회선 복구 5회 뒤 outer 재시도를 하지 않아야 합니다")
+
+    def test_recovery_budget_counts_failed_products_across_outer_attempts(self):
+        products = make_products("attempt", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={"attempt1": None},
+                pdp_plan={"attempt1": ["nodata"]},
+            )
+            h = CrawlHarness(page, use_proxy=True)
+            with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 5):
+                _, summary = h.crawl(make_cfg(Path(tmp), rotation_batch_size=100))
+
+        self.assertEqual(summary.termination_reason, "blocked")
+        self.assertTrue(summary.rotation_budget_exhausted)
+        self.assertEqual(h.record["launch_count"], 9, "세 번째 outer 시도에서 회선 소모 보호가 발동해야 합니다")
+        self.assertEqual(page.goto_urls.count("https://ko.aliexpress.com/item/attempt1.html"), 9)
+
 
 class TestResumeStoreEmptyStreak(unittest.TestCase):
     """record_page new_count — 크롤러 중단 판정과 저장값 일치."""
@@ -680,14 +769,14 @@ class TestResumeBoundary(unittest.TestCase):
             )
 
 
-class TestGiveUpCounter(unittest.TestCase):
-    """영구 실패 상품 포기 규율 — 재시도 비수렴 방지 (검토 2026-09-18)."""
+class TestFailureRetention(unittest.TestCase):
+    """회선·mtop 실패 상품은 영구 제외하지 않고 재개 대상으로 남긴다."""
 
     URL = "https://ko.aliexpress.com/category/100/v.html"
 
-    def test_permanently_dead_item_gives_up_after_three_runs(self):
-        """실행 경계에서 반복 실패한 상품은 누적 3회차에 포기되고 완료 봉인된다."""
-        products = make_products("g", 2)  # g1 = 영구 실패, g2 = 정상
+    def test_repeated_network_failure_is_pending_on_every_run(self):
+        """반복 실패가 쌓여도 상품을 포기하지 않고 다음 실행으로 넘긴다."""
+        products = make_products("g", 2)  # g1 = 실패, g2 = 정상
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             run_dir = ali_category_run_dir(out, "채소", self.URL)
@@ -710,20 +799,14 @@ class TestGiveUpCounter(unittest.TestCase):
                 with AliexpressResumeStore(run_dir) as store:
                     g1_failures.append(store.item_failure_counts().get("g1"))
 
-            self.assertEqual(summaries[0].termination_reason, "blocked", "1회차: 실패 1 누적")
-            self.assertEqual(summaries[1].termination_reason, "blocked", "2회차: 실패 2 누적")
-            self.assertEqual(g1_failures, [1, 2, 3], "실행당 1씩 누적된다")
+            self.assertEqual([s.termination_reason for s in summaries], ["blocked"] * 3)
+            self.assertEqual(g1_failures, [None, None, None], "실패 카운터를 영구 판정에 사용하지 않는다")
             with AliexpressResumeStore(run_dir) as store:
-                self.assertEqual(store.give_up_item_ids(ITEM_GIVE_UP_RUNS), {"g1"})
+                self.assertNotIn("g1", store.processed_item_ids(), "실패 상품은 재개 대상으로 남아야 한다")
+                self.assertNotEqual(store.status, "finished")
 
-            # 3회차: 누적 3 도달 → 포기 → 남은 미수집 없음 → 완료 봉인
-            self.assertEqual(summaries[2].termination_reason, "success")
-            self.assertEqual(summaries[2].given_up_items, 1, "이번 실행에서 포기된 상품 수")
-            with AliexpressResumeStore(run_dir) as store:
-                self.assertEqual(store.status, "finished", "포기 후에는 봉인돼야 합니다")
-
-    def test_give_up_item_is_skipped_without_retry(self):
-        """누적 실패 상한 상품은 데이터가 살아 있어도 재시도(브라우저 요청)하지 않는다."""
+    def test_legacy_failure_counter_does_not_skip_recovered_item(self):
+        """구버전 실패 카운터가 있어도 데이터가 살아 있으면 다시 수집한다."""
         products = make_products("u", 1)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -743,13 +826,137 @@ class TestGiveUpCounter(unittest.TestCase):
             _, summary = h.crawl(make_cfg(out, use_proxy=False))
 
             self.assertEqual(summary.termination_reason, "success")
-            self.assertEqual(summary.given_up_items, 1)
-            self.assertNotIn(
-                "https://ko.aliexpress.com/item/u1.html", page.goto_urls,
-                "포기 상품으로는 상세 페이지를 요청하면 안 됩니다",
-            )
+            self.assertEqual(summary.given_up_items, 0)
+            self.assertIn("https://ko.aliexpress.com/item/u1.html", page.goto_urls)
             with AliexpressResumeStore(run_dir) as store:
                 self.assertEqual(store.status, "finished")
+
+    def test_legacy_finished_run_with_pending_item_is_reopened(self):
+        """구버전의 조기 완료 봉인도 성공 상품을 보존한 채 미확인분을 재개한다."""
+        products = make_products("l", 2)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            run_dir = ali_category_run_dir(out, "채소", self.URL)
+            with AliexpressResumeStore(run_dir) as store:
+                store.check_config("채소", self.URL, 1)
+                store.record_page(1, products, new_count=2)
+                store.mark_listing_done()
+                store.record_item_failure("l1")
+                saved = {key: "" for key in COUPANG_DATASET_FIELDS}
+                saved.update(vendor_id="S2", url=products[1]["url"], company_name="기존 성공")
+                store.record_item_result("l2", "S2", saved)
+                store.record_seller("S2", saved)
+                store.mark_finished()  # 구버전이 남긴 상태
+                self.assertEqual(store.pending_product_count(), 1)
+
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={
+                    "l1": make_mtop("S1", "회사1"),
+                    "l2": make_mtop("S2", "회사2"),
+                },
+            )
+            h = CrawlHarness(page, use_proxy=False)
+            _, summary = h.crawl(make_cfg(out, use_proxy=False))
+
+            self.assertEqual(summary.termination_reason, "success")
+            self.assertEqual(summary.collected_items, 2)
+            self.assertNotIn(products[1]["url"], page.goto_urls)
+            with AliexpressResumeStore(run_dir) as store:
+                preserved = next(r for r in store.load_item_results() if r["vendor_id"] == "S2")
+                self.assertEqual(preserved, saved)
+            self.assertEqual(list(run_dir.glob("resume_archive_*.sqlite3")), [])
+
+
+class TestPdpLineRotation(unittest.TestCase):
+    """mtop 미수신 시 상품을 보류하고 회선을 바꾼 뒤 같은 상품을 재확인한다."""
+
+    def test_proxy_recovery_stops_after_two_failed_products(self):
+        products = make_products("bounded", 5)
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={p["id"]: None for p in products},
+                pdp_plan={p["id"]: ["nodata"] for p in products},
+            )
+            h = CrawlHarness(page, use_proxy=True)
+            with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 1):
+                _, summary = h.crawl(make_cfg(Path(tmp), use_proxy=True))
+            self.assertEqual(summary.termination_reason, "blocked")
+            self.assertEqual(sum("/item/" in url for url in page.goto_urls), 6)
+            self.assertNotIn(products[2]["url"], page.goto_urls)
+            run_dir = ali_category_run_dir(Path(tmp), "채소", TestFailureRetention.URL)
+            with AliexpressResumeStore(run_dir) as store:
+                self.assertEqual(store.pending_product_count(), 5)
+                self.assertEqual(store.item_failure_counts(), {})
+
+    def test_missing_mtop_rotates_before_retrying_same_item(self):
+        products = make_products("m", 1)
+        logs: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={"m1": make_mtop("S1", "회사1")},
+                pdp_plan={"m1": ["nodata", "ok"]},
+            )
+            h = CrawlHarness(page, use_proxy=True)
+            _, summary = h.crawl(make_cfg(Path(tmp), use_proxy=True), on_log=logs.append)
+
+        self.assertEqual(summary.termination_reason, "success")
+        self.assertEqual(summary.collected_items, 1)
+        self.assertEqual(page.goto_urls.count("https://ko.aliexpress.com/item/m1.html"), 2)
+        self.assertGreaterEqual(h.record["launch_count"], 2, "첫 실패 직후 새 회선을 열어야 한다")
+        self.assertTrue(any("새 회선에서 즉시 재확인" in log for log in logs))
+
+    def test_last_missing_attempt_does_not_rotate_again(self):
+        products = make_products("n", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={"n1": None},
+                pdp_plan={"n1": ["nodata"]},
+            )
+            h = CrawlHarness(page, use_proxy=True)
+            with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 1):
+                _, summary = h.crawl(make_cfg(Path(tmp), use_proxy=True))
+
+        self.assertEqual(summary.termination_reason, "blocked")
+        self.assertEqual(h.record["launch_count"], 3, "3회 시도에 필요한 초기 세션+중간 교체만 열어야 한다")
+        self.assertEqual(summary.given_up_items, 0)
+
+    def test_missing_data_log_contains_safe_diagnostic(self):
+        products = make_products("d", 1)
+        logs: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={"d1": None},
+                pdp_plan={"d1": ["nodata"]},
+            )
+            h = CrawlHarness(page, use_proxy=False)
+            with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 1):
+                h.crawl(make_cfg(Path(tmp), use_proxy=False), on_log=logs.append)
+
+        self.assertTrue(any("mtop API 응답 없음" in log for log in logs))
+        self.assertFalse(any('"data"' in log for log in logs))
+
+    def test_missing_data_log_only_contains_sanitized_ret_code(self):
+        products = make_products("code", 1)
+        logs: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            page = ScriptedPage(
+                listing_map={1: products},
+                pdp_payloads={"code1": {"ret": ["FAIL_SYS_BLOCKED::private-token"]}},
+            )
+            h = CrawlHarness(page, use_proxy=False)
+            with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 1):
+                h.crawl(make_cfg(Path(tmp), use_proxy=False), on_log=logs.append)
+
+        self.assertTrue(any("payload_fields_missing (ret FAIL_SYS_BLOCKED)" in log for log in logs))
+        self.assertFalse(any("private-token" in log for log in logs))
+
+    def test_empty_mtop_ret_code_is_ignored_safely(self):
+        self.assertIsNone(_safe_mtop_error_code({"ret": ["", "  ", None]}))
 
 
 class TestJsonFlushInterval(unittest.TestCase):
