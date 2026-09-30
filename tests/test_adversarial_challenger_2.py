@@ -269,6 +269,7 @@ class TestAdversarialProxyCredentialsFlow(unittest.TestCase):
     def test_proxy_missing_local_safe_mode_launches_without_proxy(self):
         """Selecting [로컬 회선으로 안전 수집] configures use_proxy=False and delay=3.5."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="로컬테스트",
             category_url="https://ko.aliexpress.com/w/local.html",
@@ -295,6 +296,7 @@ class TestAdversarialProxyCredentialsFlow(unittest.TestCase):
     def test_proxy_missing_settings_tab_redirect_does_not_launch_worker(self):
         """Selecting [설정 탭으로 이동] switches tab without launching worker."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="설정테스트",
             category_url="https://ko.aliexpress.com/w/settings.html",
@@ -318,6 +320,7 @@ class TestAdversarialProxyCredentialsFlow(unittest.TestCase):
     def test_proxy_dialog_window_close_or_escape_aborts_without_side_effects(self):
         """Escaping or closing the proxy dialog aborts start cleanly."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="취소테스트",
             category_url="https://ko.aliexpress.com/w/cancel.html",
@@ -334,6 +337,7 @@ class TestAdversarialProxyCredentialsFlow(unittest.TestCase):
     def test_duplicate_worker_start_blocked_when_another_tab_active(self):
         """Attempting to start when another worker is active triggers warning and blocks."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="중복테스트",
             category_url="https://ko.aliexpress.com/w/dup.html",
@@ -383,6 +387,7 @@ class TestAdversarialZeroItemListings(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "ali_empty_run"
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=run_dir,
                 category_name="완전빈카테고리",
                 category_url="https://ko.aliexpress.com/category/000/empty.html",
@@ -414,6 +419,7 @@ class TestAdversarialZeroItemListings(unittest.TestCase):
         """Crawler breaks after 2 consecutive empty pages even if max_pages=10."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="빈카테고리조기종료",
                 category_url="https://ko.aliexpress.com/category/000/empty.html",
@@ -435,6 +441,7 @@ class TestAdversarialZeroItemListings(unittest.TestCase):
         """If user cancels immediately, crawler exits without creating CSV or JSON."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="즉시취소",
                 category_url="https://ko.aliexpress.com/category/111/cancel.html",
@@ -525,6 +532,7 @@ class TestAdversarialDatasetSchemaAndBusinessFields(unittest.TestCase):
         """Simulate end-to-end extraction with diverse mtop property names."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="데이터무결성테스트",
                 category_url="https://ko.aliexpress.com/category/999/integrity.html",
@@ -629,6 +637,7 @@ class TestAdversarialDatasetSchemaAndBusinessFields(unittest.TestCase):
         """When seller has no business info, company_name gracefully falls back."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="정보누락테스트",
                 category_url="https://ko.aliexpress.com/category/999/missing.html",
@@ -683,6 +692,7 @@ class TestAdversarialDatasetSchemaAndBusinessFields(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="피드백경계테스트",
                 category_url="https://ko.aliexpress.com/category/999/feedback.html",

@@ -198,3 +198,22 @@
 - **배포**: 호스트 `ShipTest\SellerCollector.exe` 교체(이전 ali 빌드 `523dba10…` → `SellerCollector_before_preflight_20260929.exe` 보존, SHA256SUMS 갱신). 샌드박스 앱 종료(2 PID) → `Desktop\ShipTestRun\SellerCollector.exe` 교체(기존 `451fe5dc…` 보존) → 해시 일치 `match:true` 확인.
 - **기동 스모크**: 13:25:09 앱 시작 로그 확인, 7개 탭 정상 표시(Gmarket·Coupang·Foodspring·쿠팡카테고리·Gmarket카테고리·Ali카테고리·설정), 오류·런타임 설치 화면 없음.
 - **미완료·유의**: ① 1카테고리 실시험(§6.3 절차)은 차단 상태(§13.5 NO-GO)로 보류 — **다음 날 사전점검 통과 후 첫 수집이 곧 실시험을 겸함**(새 EXE는 시작 전 [사전점검] 로그가 먼저 찍혀야 정상). ② `vendor_phase_line="proxy"` 전환은 실증 A 통과 전까지 유보(§13.4). ③ 수정분 커밋은 본 갱신과 함께 진행 예정.
+
+### 13.7 (9/29 1x:xx) Ali 탭 '회선 소모 보호' 개선 3종 — 구현·테스트 완료(미커밋·미배포)
+
+사용자 보고: Ali 수집 중 "[회선 소모 보호] 최근 상품 처리 중 회선 복구가 너무 자주 발생해…" 중단이 반복돼 컴퓨터를 못 떠남. 원인 — 예산(최근 10상품 내 회선 교체 5회) 초과마다 실행이 끊기고, 사용자가 즉시 재시작 → 새 회선 급속 순환 → 재발 루프(쿠팡 층3·급속순환 악화 패턴과 동일 구조). 당일 Decodo 품질이 나쁜 상태에서 교체(보안차단·mtop 미수신)가 잦았음.
+
+`app/core/aliexpress_category_crawler.py` 변경:
+1. **예산 초과 시 실행 종료 대신 장시간 대기 후 자동 재개** — `rotation_budget_cooldown_seconds`(기본 900초=15분) 대기 → 회선 교체 기록 창 초기화 → 같은 실행에서 이어서. 대기 횟수 상한 `rotation_budget_max_pauses`(기본 3) 초과 시에만 안전 중단. 로그: "N분 대기 후 자동으로 이어서 수집합니다 (k/3회 차). 화면을 지키지 않아도 됩니다".
+2. **회선 교체 스로틀** — `open_new_session` 직전 `rotation_min_interval_seconds`(기본 30초) 최소 간격. 새 회선 연속 채택(급속 순환) 억제.
+3. **중단 안내문 강화** — 최종 중단 메시지에 "최소 30분~1시간 뒤 또는 다음 날 재개를 권장합니다" 명시.
+
+테스트: `tests/test_aliexpress_rotation_budget.py` 신규 4건(일시정지→재개→완주 / 상한 초과 중단+안내문 / cooldown=0 구동작 호환 / 스로틀 실측). 기존 시뮬레이션 28곳(config)·`make_cfg`에 스로틀·대기 무효화값 추가(실측은 신규 파일이 담당). WSL 770 passed + 39 subtests, **Windows 763 OK**, ruff 신규 위반 0.
+
+미완료: 커밋·푸시·빌드·샌드박스 재배포(사용자 지시 대기 — Ali 수집이 돌고 있으면 EXE 교체 불가). 배포 시 §6.3 절차, 기존 EXE는 `SellerCollector_before_rotation_guard_*` 로 보존.
+
+### 13.8 (9/29 오후) 회선 소모 예산 완전 폐지 — 사용자 결정
+
+사용자 지시: "15분 대기 후 자동재개도 없애고, 회선 많이 나와도 그냥 진행" + EXE 재빌드. 배경 질문 "회선 교체 비용은 없고 데이터 비용만 나오는 것 아니냐" — **맞음**: 계정은 트래픽 과금(사용자 제시 $4/GB, 4GB 구독 — 9/28 01:01 기준 3.3GB 사용, `evidence-direct-block-20260928/decodo-usage-0101.json`). 세션 교체 건당 수수료는 없고, 교체가 잦으면 쿠키/캐시 없는 새 세션이 웜업·재요청을 반복해 같은 상품당 트래픽이 늘어나는 간접 비용만 있다. 예산 보호의 원래 취지(급속 순환→차단 악화 방지)는 스로틀(교체 사이 최소 30초, `rotation_min_interval_seconds`)로 유지한다.
+
+변경(`app/core/aliexpress_category_crawler.py`): `note_item_rotation`·`rotation_budget_pause`·`ROTATION_BUDGET_*` 상수·config 필드 2개·`AliexpressCrawlSummary.rotation_budget_exhausted` 전부 제거. 회선이 많이 나와도 중단/대기 없이 진행. 남은 중단 규율: 연속 실패 2건(응답 중단)·로컬 연속 차단 10회 — 그대로. 테스트: 예산 테스트 6건 삭제, 스로틀 테스트 2건(`tests/test_aliexpress_rotation_throttle.py`, 예산 파일 대체). WSL 766 passed + 39 subtests, Windows 759 OK.

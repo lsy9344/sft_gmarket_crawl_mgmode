@@ -5,6 +5,8 @@
 - Plan: 스마트 판매자 중복 제거 및 수집 계획 확정 (시드 캐시 활용)
 - Phase B: Decodo 한국 주거용 고정 회선(Sticky 1440min Session) 기반 브라우저 세션 운용
   - rotation_batch_size 건 단위 자동 회선 순환 + WAF punish 감지 시 즉시 세션 교체
+    (교체 사이 최소 간격 스로틀 적용 — 급속 순환 억제. 회선 소모 예산은
+    2026-09-29 폐지: 교체가 잦아도 수집은 계속 진행한다)
   - 회선 확보 시 실제 출발 국가를 확인해(concatenated _korea_proxy 규율) 한국이 아니면
     최대 MAX_GEO_ROTATIONS 회 새 회선으로 교체한다
   - 상품 데이터(mtop) 미수신 페이지는 기록하지 않고, 프록시 사용 시 같은 상품을
@@ -31,7 +33,6 @@ import csv
 import json
 import re
 import time
-from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -68,8 +69,10 @@ RETRY_WAIT_SECONDS = 90.0      # 시도(회선) 간 대기 — 제어 가능한 
 MAX_GEO_ROTATIONS = 3          # 세션 1개 확보 시 한국 확인 재시도 상한
 CONSECUTIVE_BLOCK_ABORT = 10   # 연속 차단 상한 — 도달 시 안전 중단(저장 지점 보존)
 PROXY_FAILURE_ABORT = 2        # 새 회선 재확인까지 실패한 상품이 연속 2건이면 중단
-ROTATION_BUDGET_WINDOW = 10    # 최근 상품별 회선 복구 기록을 볼 범위
-ROTATION_BUDGET_LIMIT = 5      # 위 범위 안에서 이 횟수면 추가 회선 소모를 중단
+# 회선 교체 스로틀 — 세션 교체가 잦은 날에도 수집은 계속 진행한다(2026-09-29
+# 사용자 결정: 회선 소모 예산은 폐지). 교체 사이 최소 간격만 둬 급속 순환으로
+# 인한 차단 악화만 억제한다.
+ROTATION_MIN_INTERVAL_SECONDS = 30.0   # 회선 교체(새 세션) 사이 최소 간격
 PHASE1_PAGE_RETRIES = 3        # 목록 페이지 1장의 로드·차단 재시도 상한
 PDP_ITEM_RETRIES = 3           # 상세 페이지 1건의 재시도 상한
 PDP_RESPONSE_WAIT_MS = 5000    # mtop 응답을 기다리는 최대 시간(탐지 지연 완화)
@@ -325,6 +328,10 @@ class AliexpressCategoryRunConfig:
     use_proxy: bool = True
     start_fresh: bool = False
     block_cooldown_seconds: float = 15.0  # 차단 감지 직후의 안전 대기(로컬 회선·재시도 직전)
+    # 회선 교체 스로틀 — 새 세션을 열기 직전 최소 간격만큼 대기해 급속 순환을
+    # 막는다(2026-09-29 사용자 보고: '회선 복구가 너무 자주 발생' 반복). 회선이
+    # 많이 나와도 수집은 계속 진행한다(회선 소모 예산 폐지).
+    rotation_min_interval_seconds: float = ROTATION_MIN_INTERVAL_SECONDS
 
     def __post_init__(self) -> None:
         if not self.category_name.strip():
@@ -333,6 +340,8 @@ class AliexpressCategoryRunConfig:
             raise ValueError("카테고리 URL이 비어 있습니다.")
         if not 1 <= self.max_pages <= 100:
             raise ValueError("max_pages 는 1~100 사이여야 합니다.")
+        if self.rotation_min_interval_seconds < 0:
+            raise ValueError("rotation_min_interval_seconds 는 0 이상이어야 합니다.")
 
 
 class _ResourceBlockFailure(RuntimeError):
@@ -429,8 +438,6 @@ class AliexpressCrawlSummary:
     # 추정치이며 Decodo 청구량과 동일한 값은 아니다.
     estimated_browser_bytes: int = 0
     browser_bytes_by_session: list[int] = field(default_factory=list)
-    # True 이면 저장된 미처리 상품을 남기고 외부 시도 루프도 더 돌지 않는다.
-    rotation_budget_exhausted: bool = False
 
 
 class AliexpressCategoryCrawler:
@@ -464,9 +471,9 @@ class AliexpressCategoryCrawler:
         self._exit_ip_fn = exit_ip_fn or decodo.fetch_exit_ip
         # 재개 시 저장본을 테이블에 다시 흘릴 때 중복 행이 생기지 않게 하는 가드
         self._emitted_urls: set[str] = set()
-        # 한 번의 crawl() 안에서만 유지한다. 성공 상품이 나와도 회선 복구
-        # 비율을 0으로 되돌리지 않아 outer MAX_ATTEMPTS 재시도를 우회하지 못한다.
-        self._rotation_window: deque[int] = deque(maxlen=ROTATION_BUDGET_WINDOW)
+        # 회선 교체 스로틀 기준 — 직전 세션 오픈 시각(monotonic). None 이면
+        # 아직 첫 세션이라 간격을 적용하지 않는다.
+        self._last_session_open_at: float | None = None
 
     def crawl(self) -> AliexpressCrawlSummary:
         """동기 인터페이스: 시도 루프를 이벤트 루프에서 실행."""
@@ -485,6 +492,15 @@ class AliexpressCategoryCrawler:
             self.control.sleep(seconds)
         else:
             time.sleep(seconds)
+
+    async def _await_gap(self, seconds: float) -> None:
+        """이벤트 루프를 막지 않으면서 취소 가능한 대기(장시간 쿨다운용)."""
+        remaining = float(seconds)
+        while remaining > 0:
+            self._checkpoint()
+            chunk = min(5.0, remaining)
+            await asyncio.sleep(chunk)
+            remaining -= chunk
 
     def _new_summary(self, csv_file: Path, json_file: Path) -> AliexpressCrawlSummary:
         return AliexpressCrawlSummary(csv_file=csv_file, json_file=json_file)
@@ -637,10 +653,6 @@ class AliexpressCategoryCrawler:
                 else:
                     if summary.cancelled or summary.termination_reason in ("success", "empty"):
                         break
-                    if summary.rotation_budget_exhausted:
-                        # 회선 소모 상한은 같은 crawl()의 외부 시도 루프가
-                        # 90초 뒤 다시 회선을 태워 무력화하지 않게 즉시 종료한다.
-                        break
                     if int(summary.collected_items or 0) == 0:
                         # 목록 단계에서 끝난 시도 — 요약에 저장 누적분이라도
                         # 비치도록 채운다(시도 소진 시 마지막 요약이 최종 표시된다).
@@ -733,6 +745,25 @@ class AliexpressCategoryCrawler:
                 nonlocal session_counter, current_browser, current_context, current_page
                 nonlocal current_cdp, current_session_bytes
                 await close_session()
+
+                # 회선 교체 스로틀 — 직전 세션 오픈과 최소 간격을 두어 급속
+                # 순환(새 회선 연속 채택)을 막는다. 첫 세션에는 적용하지
+                # 않는다. 새 회선을 뽑는 행위 자체가 평판을 깎는다(실측).
+                gap = float(
+                    getattr(self.config, "rotation_min_interval_seconds", 0.0) or 0.0
+                )
+                last_open = self._last_session_open_at
+                elapsed = (
+                    time.monotonic() - last_open if last_open is not None else None
+                )
+                if gap > 0 and elapsed is not None and elapsed < gap:
+                    wait_s = gap - elapsed
+                    self.on_log(
+                        f"[회선 순환 스로틀] 급속 교체 방지 — {wait_s:.0f}초 대기 후 "
+                        "새 회선을 엽니다."
+                    )
+                    await self._await_gap(wait_s)
+                self._last_session_open_at = time.monotonic()
 
                 proxy = None
                 if self.config.use_proxy:
@@ -1107,24 +1138,10 @@ class AliexpressCategoryCrawler:
             failure_limit = PROXY_FAILURE_ABORT if self.config.use_proxy else CONSECUTIVE_BLOCK_ABORT
             dropped_count = 0
             active_pdp_attempt = None
-
-            def note_item_rotation(rotation_count: int) -> bool:
-                """상품별 회선 복구를 최근 10건 창에 기록한다."""
-                if not self.config.use_proxy:
-                    return False
-                self._rotation_window.append(max(0, int(rotation_count)))
-                rotations = sum(self._rotation_window)
-                if rotations < ROTATION_BUDGET_LIMIT:
-                    return False
-                summary.rotation_budget_exhausted = True
-                summary.termination_reason = "blocked"
-                summary.error = (
-                    "최근 상품 처리 중 회선 복구가 너무 자주 발생해 추가 데이터 소모를 막고 "
-                    f"안전 중단했습니다 ({rotations}/{len(self._rotation_window)}건). "
-                    "저장된 미처리 상품은 다음 시작 때 다시 확인됩니다."
-                )
-                self.on_log(f"[회선 소모 보호] {summary.error}")
-                return True
+            # 참고(2026-09-29 사용자 결정): 회선 소모 예산(교체 횟수 상한·대기)은
+            # 폐지했다. 회선이 많이 나와도 세션 교체 스로틀(최소 간격)만 지키며
+            # 수집을 계속 진행한다. 비용은 교체 건수가 아니라 트래픽(GB)으로
+            # 과금되기 때문이다.
 
             for idx, itm in enumerate(product_targets, 1):
                 self._checkpoint()
@@ -1145,7 +1162,6 @@ class AliexpressCategoryCrawler:
                     req_count_in_session = 0
 
                 record = None
-                rotations_for_item = 0
                 clean_url = f"https://ko.aliexpress.com/item/{p_id}.html"
 
                 for attempt in range(1, PDP_ITEM_RETRIES + 1):
@@ -1231,8 +1247,6 @@ class AliexpressCategoryCrawler:
                             + f" (재시도 {attempt}/{PDP_ITEM_RETRIES})..."
                         )
                         if attempt < PDP_ITEM_RETRIES:
-                            if self.config.use_proxy:
-                                rotations_for_item += 1
                             await block_backoff()
                             if self.config.use_proxy:
                                 req_count_in_session = 0
@@ -1260,7 +1274,6 @@ class AliexpressCategoryCrawler:
                         if attempt < PDP_ITEM_RETRIES:
                             if self.config.use_proxy:
                                 self.on_log("    수신 실패 — 같은 상품을 새 회선에서 즉시 재확인합니다")
-                                rotations_for_item += 1
                                 await open_new_session()
                                 req_count_in_session = 0
                             else:
@@ -1445,11 +1458,6 @@ class AliexpressCategoryCrawler:
                         f"(연속 실패 {consecutive_failures}/{failure_limit})"
                     )
                     if consecutive_failures >= failure_limit:
-                        if note_item_rotation(rotations_for_item):
-                            # 실패 상품에는 결과 행이 없으므로 진행 저장소에 남아 있다.
-                            flush_json()
-                            await close_session()
-                            return summary
                         summary.termination_reason = "blocked"
                         summary.error = RESPONSE_ABORT_GUIDE
                         self.on_log(
@@ -1459,13 +1467,6 @@ class AliexpressCategoryCrawler:
                         flush_json()
                         await close_session()
                         return summary
-
-                if note_item_rotation(rotations_for_item):
-                    # 현재 상품이 성공했다면 그 결과까지 저장한 뒤 멈춘다.
-                    # 실패 상품에는 결과 행이 없으므로 진행 저장소에 남아 있다.
-                    flush_json()
-                    await close_session()
-                    return summary
 
                 await current_page.wait_for_timeout(int(self.config.delay * 1000))
 

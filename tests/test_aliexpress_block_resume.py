@@ -320,6 +320,9 @@ def make_cfg(out_dir: Path, name="채소", url="https://ko.aliexpress.com/catego
     kw.setdefault("max_pages", 1)
     kw.setdefault("delay", 0)
     kw.setdefault("block_cooldown_seconds", 0)
+    # 시뮬레이션 테스트는 실제 대기 없이 즉시 진행 — 회선 교체 스로틀 간격만
+    # 끈다. 스로틀 동작 자체는 test_aliexpress_rotation_throttle.py 이 담당한다.
+    kw.setdefault("rotation_min_interval_seconds", 0)
     return AliexpressCategoryRunConfig(output_dir=out_dir, category_name=name, category_url=url, **kw)
 
 
@@ -586,40 +589,8 @@ class TestScheduledRotation(unittest.TestCase):
         self.assertGreater(summary.estimated_browser_bytes, 0)
         self.assertEqual(summary.browser_bytes_by_session[-1], summary.estimated_browser_bytes)
 
-    def test_recovery_rotation_budget_stops_outer_retries(self):
-        products = make_products("rotate", 6)
-        plan = {p["id"]: ["nodata", "ok"] for p in products}
-        with tempfile.TemporaryDirectory() as tmp:
-            page = ScriptedPage(
-                listing_map={1: products},
-                pdp_payloads={p["id"]: make_mtop(f"S{i}", f"회사{i}") for i, p in enumerate(products)},
-                pdp_plan=plan,
-            )
-            h = CrawlHarness(page, use_proxy=True)
-            _, summary = h.crawl(make_cfg(Path(tmp), rotation_batch_size=100))
-
-        self.assertEqual(summary.termination_reason, "blocked")
-        self.assertTrue(summary.rotation_budget_exhausted)
-        self.assertEqual(summary.collected_items, 5)
-        self.assertEqual(page.goto_urls.count("https://ko.aliexpress.com/item/rotate6.html"), 0)
-        self.assertEqual(h.record["launch_count"], 6, "회선 복구 5회 뒤 outer 재시도를 하지 않아야 합니다")
-
-    def test_recovery_budget_counts_failed_products_across_outer_attempts(self):
-        products = make_products("attempt", 1)
-        with tempfile.TemporaryDirectory() as tmp:
-            page = ScriptedPage(
-                listing_map={1: products},
-                pdp_payloads={"attempt1": None},
-                pdp_plan={"attempt1": ["nodata"]},
-            )
-            h = CrawlHarness(page, use_proxy=True)
-            with patch("app.core.aliexpress_category_crawler.MAX_ATTEMPTS", 5):
-                _, summary = h.crawl(make_cfg(Path(tmp), rotation_batch_size=100))
-
-        self.assertEqual(summary.termination_reason, "blocked")
-        self.assertTrue(summary.rotation_budget_exhausted)
-        self.assertEqual(h.record["launch_count"], 9, "세 번째 outer 시도에서 회선 소모 보호가 발동해야 합니다")
-        self.assertEqual(page.goto_urls.count("https://ko.aliexpress.com/item/attempt1.html"), 9)
+    # 2026-09-29: 회선 소모 예산(교체 횟수 상한) 폐지로 예산 발동 테스트 2건을
+    # 삭제했다. 회선이 많이 나와도 수집은 계속 진행한다(사용자 결정).
 
 
 class TestResumeStoreEmptyStreak(unittest.TestCase):

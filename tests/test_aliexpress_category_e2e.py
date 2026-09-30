@@ -321,6 +321,7 @@ class TestProxyCheckThreeWayDialog(unittest.TestCase):
     def test_proxy_dialog_prompt_when_credentials_missing(self):
         """Decodo 미등록 시 '수집 방식 선택' 대화상자가 노출되는지 검증."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="테스트",
             category_url="https://ko.aliexpress.com/w/wholesale-test.html",
@@ -343,6 +344,7 @@ class TestProxyCheckThreeWayDialog(unittest.TestCase):
     def test_proxy_dialog_copy_text_contains_options(self):
         """대화상자 본문이 사양서의 정확한 카피(① 로컬 회선, ② 설정 탭)를 포함하는지 검증."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="테스트",
             category_url="https://ko.aliexpress.com/w/wholesale-test.html",
@@ -367,6 +369,7 @@ class TestProxyCheckThreeWayDialog(unittest.TestCase):
     def test_proxy_dialog_select_local_safe_crawl(self):
         """[로컬 회선으로 안전 수집] 선택 시 use_proxy=False, delay=3.5s 로 워커가 시작되는지 검증."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="테스트",
             category_url="https://ko.aliexpress.com/w/wholesale-test.html",
@@ -395,6 +398,7 @@ class TestProxyCheckThreeWayDialog(unittest.TestCase):
     def test_proxy_dialog_select_settings_tab(self):
         """[설정 탭으로 이동] 선택 시 워커를 시작하지 않고 설정 탭으로 전환되는지 검증."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="테스트",
             category_url="https://ko.aliexpress.com/w/wholesale-test.html",
@@ -420,6 +424,7 @@ class TestProxyCheckThreeWayDialog(unittest.TestCase):
     def test_proxy_preflight_direct_start_when_credentials_ready(self):
         """Decodo 자격 증명이 유효할 때는 팝업 없이 바로 프록시 모드로 시작되는지 검증."""
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="테스트",
             category_url="https://ko.aliexpress.com/w/wholesale-test.html",
@@ -509,6 +514,7 @@ class TestEmptyCategoryListing(unittest.TestCase):
     def test_empty_listing_returns_zero_items_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="빈카테고리",
                 category_url="https://ko.aliexpress.com/w/empty.html",
@@ -528,6 +534,7 @@ class TestEmptyCategoryListing(unittest.TestCase):
     def test_empty_listing_does_not_execute_phase2(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="빈카테고리",
                 category_url="https://ko.aliexpress.com/w/empty.html",
@@ -547,6 +554,7 @@ class TestEmptyCategoryListing(unittest.TestCase):
         """상품이 0건인 경우 불필요한 빈 CSV 파일을 디스크에 생성하지 않는지 검증."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="빈카테고리",
                 category_url="https://ko.aliexpress.com/w/empty.html",
@@ -565,6 +573,7 @@ class TestEmptyCategoryListing(unittest.TestCase):
     def test_empty_listing_summary_metrics_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="빈카테고리",
                 category_url="https://ko.aliexpress.com/w/empty.html",
@@ -584,6 +593,7 @@ class TestEmptyCategoryListing(unittest.TestCase):
     def test_empty_listing_streak_break(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="빈카테고리",
                 category_url="https://ko.aliexpress.com/w/empty.html",
@@ -623,6 +633,7 @@ class TestUserCancellationAtDialogs(unittest.TestCase):
 
     def test_proxy_dialog_cancel_button_aborts_start(self):
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="테스트",
             category_url="https://ko.aliexpress.com/w/wholesale-test.html",
@@ -646,6 +657,7 @@ class TestUserCancellationAtDialogs(unittest.TestCase):
 
     def test_proxy_dialog_escape_or_close_aborts_start(self):
         cfg = AliexpressCategoryRunConfig(
+            rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
             output_dir=Path("/tmp/ali_test_out"),
             category_name="테스트",
             category_url="https://ko.aliexpress.com/w/wholesale-test.html",
@@ -667,6 +679,7 @@ class TestUserCancellationAtDialogs(unittest.TestCase):
                 store.record_page(1, [{"id": "p1", "url": "u", "title": "t", "price": "p", "orders": "o", "is_top_seller": False}])
 
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="채소",
                 category_url="https://ko.aliexpress.com/category/100/v.html",
@@ -714,6 +727,7 @@ class TestCrossFeatureCombinations(unittest.TestCase):
                 store.record_page(1, [{"id": "t1", "url": "http://item/t1.html", "title": "토마토1", "price": "1000", "orders": "10", "is_top_seller": False}])
 
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="토마토",
                 category_url="https://ko.aliexpress.com/category/555/tomato.html",
@@ -779,6 +793,7 @@ class TestRealWorldApplicationScenarios(unittest.TestCase):
         """전체 수집 흐름(목록 탐색 -> 판매자 상세 -> CSV/JSON 17개 표준 컬럼 저장) 완주 검증."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="유기농채소",
                 category_url="https://ko.aliexpress.com/category/888/organic.html",
@@ -856,6 +871,7 @@ class TestRealWorldApplicationScenarios(unittest.TestCase):
         """2단계 수집 중 네트워크 순단 발생 시 기확보 시드 캐시 재활용 및 중복 호출 방지 검증."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="사과마켓",
                 category_url="https://ko.aliexpress.com/category/999/apples.html",
@@ -886,6 +902,7 @@ class TestRealWorldApplicationScenarios(unittest.TestCase):
         """첫 상품의 상세 참고 값이 캐시되어도 다음 상품의 실제 번호를 반영한다."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="전화번호보강",
                 category_url="https://ko.aliexpress.com/category/1000/phone.html",
@@ -917,6 +934,7 @@ class TestRealWorldApplicationScenarios(unittest.TestCase):
         """캐시된 유효 번호는 다음 상품이 번호를 주지 않아도 유지한다."""
         with tempfile.TemporaryDirectory() as tmp:
             cfg = AliexpressCategoryRunConfig(
+                rotation_min_interval_seconds=0,  # 시뮬레이션 — 실제 스로틀 대기 없음
                 output_dir=Path(tmp),
                 category_name="전화번호보존",
                 category_url="https://ko.aliexpress.com/category/1001/phone.html",
