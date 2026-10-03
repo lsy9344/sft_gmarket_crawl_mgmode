@@ -1,0 +1,640 @@
+"""쿠팡 병렬 카테고리 탭 패널 — 카테고리 가족별 다중 인스턴스 수집 (M3).
+
+'쿠팡 카테고리' 탭을 병렬 인스턴스 패널로 교체한다(2026-10-01). 사용자는
+트리에서 카테고리 최상위 노드 여러 개를 고른다 — 선택된 각 노드(다른 선택
+항목의 하위에 속한 선택은 제외)가 1개 '가족'이 되고, 가족은 그 노드와 모든
+후손(id 중복 첫 1회, categories.flatten_descendants 재사용)으로 구성된다.
+
+시작 요청은 Ali 탭 시그널 스타일을 따른다 — 패널은 실행 설정 dict 만
+emit(start_requested) 하고, preflight·재개 판단·워커 생성은 main_window 가
+맡는다. 패널은 인스턴스 카드 현황·로그·결과 표를 갱신하는 표시 영역이다.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.core.applog import log_line
+from app.core.config import DEFAULT_OUTPUT_DIR
+from app.core.coupang.categories import (
+    CategoryNode,
+    find_node,
+    flatten_descendants,
+)
+from app.core.coupang.parallel_manager import MAX_INSTANCES
+from app.ui.widgets.collection_workspace import collection_workspace
+from app.workers.coupang_parallel_worker import SELLER_DISPLAY_FIELDS
+
+# 결과 표 열 — 기존 CategoryPanel.DISPLAY_COLUMNS 8열과 동일한 규격.
+COLUMN_LABELS = {
+    "vendor_id": "판매자ID",
+    "store_name": "스토어명",
+    "company_name": "상호명",
+    "ceo_name": "대표자",
+    "business_number": "사업자번호",
+    "phone": "전화",
+    "email": "이메일",
+    "power_seller": "파워셀러",
+}
+
+ROLE_ID = 0x0100
+ROLE_NAME = 0x0101
+
+# 인스턴스 상태 문자 → 표시 문구(워커/매니저 상태 문자와 1:1).
+_STATUS_TEXT = {
+    "waiting": "대기",
+    "collecting": "수집중",
+    "blocked": "차단",
+    "complete": "완주",
+    "done": "완료",
+    "error": "오류",
+}
+
+
+def _default_output_dir() -> Path:
+    """기본 출력 폴더 — output/coupang_parallel_{타임스탬프}."""
+    stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    return DEFAULT_OUTPUT_DIR / f"coupang_parallel_{stamp}"
+
+
+def _instance_line_label(number: int) -> str:
+    """인스턴스 회선 표시 — 1번 직접, 2~N번 Decodo 스티키(시작 sid)."""
+    if number <= 1:
+        return "직접"
+    return f"Decodo i{number}"
+
+
+class _InstanceCard(QWidget):
+    """인스턴스 1개 행 카드 — 이름·회선·가족·상태·누적."""
+
+    def __init__(self, number: int, parent=None) -> None:
+        super().__init__(parent)
+        self.number = number
+        self.instance_id = str(number)
+        # 패널이 넣어주는 가족명 조회 콜백(family_index → 표시명).
+        self.family_name_lookup = None
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 6, 2)
+        self.name_label = QLabel(f"인스턴스 {number}")
+        self.line_label = QLabel(_instance_line_label(number))
+        self.family_label = QLabel("—")
+        self.status_label = QLabel("대기")
+        self.totals_label = QLabel("3P 0개 · 판매자 0명")
+        for label, stretch in (
+            (self.name_label, 1),
+            (self.line_label, 1),
+            (self.family_label, 2),
+            (self.status_label, 2),
+            (self.totals_label, 2),
+        ):
+            label.setWordWrap(True)
+            row.addWidget(label, stretch)
+        # 마지막으로 받은 요약 — collecting 처럼 총계가 빠진 이벤트에서도
+        # 직전 누적을 유지한다.
+        self.last_summary: dict = {}
+
+    def update_state(self, state_str: str, summary: dict) -> None:
+        merged = dict(self.last_summary)
+        merged.update(summary or {})
+        self.last_summary = merged
+        family_index = merged.get("family_index")
+        if family_index is None:
+            self.family_label.setText("—")
+        else:
+            self.family_label.setText(self._family_name(family_index))
+        self.status_label.setText(_status_text(state_str, merged))
+        products = merged.get("total_products")
+        sellers = merged.get("total_sellers")
+        if products is not None or sellers is not None:
+            self.totals_label.setText(
+                f"3P {int(products or 0):,}개 · 판매자 {int(sellers or 0):,}명"
+            )
+
+    def _family_name(self, family_index) -> str:
+        if self.family_name_lookup is not None:
+            name = self.family_name_lookup(family_index)
+            if name:
+                return name
+        return f"가족 {int(family_index) + 1}"
+
+
+def _status_text(state_str: str, summary: dict) -> str:
+    """상태 문자 + 요약 → 카드 상태 문구(대기는 다음 세션 시각 포함)."""
+    base = _STATUS_TEXT.get(state_str, state_str or "대기")
+    if state_str == "waiting":
+        next_run_at = summary.get("next_run_at")
+        if isinstance(next_run_at, (int, float)) and next_run_at > 0:
+            stamp = datetime.fromtimestamp(next_run_at).strftime("%H:%M")
+            return f"대기 [다음 {stamp}]"
+    return base
+
+
+class CoupangParallelPanel(QWidget):
+    """'쿠팡 카테고리' 탭 교체용 병렬 수집 패널."""
+
+    start_requested = pyqtSignal(dict)
+    stop_requested = pyqtSignal()
+    refresh_categories_requested = pyqtSignal()
+    open_output_requested = pyqtSignal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._state = "idle"
+        self._external_busy = False
+        self._groups: list[tuple[str, list[CategoryNode]]] = []
+        # 선택에서 확정한 가족(시작 전 미리보기·카드 가족명 표기용).
+        self._families: list[list[tuple[str, str]]] = []
+        self._family_names: list[str] = []
+        self._instance_cards: dict[str, _InstanceCard] = {}
+        self._build_ui()
+        self.set_instance_count_preview(self.spin_instances.value())
+        self._update_decodo_hint()
+        self._apply_state()
+
+    # ── UI 구성 ─────────────────────────────────────────────────────
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        info = QLabel(
+            "카테고리 최상위 노드를 여러 개 선택하세요 — 선택한 각 노드와 모든 "
+            "하위가 1개 '가족'이 되고, 가족들을 인스턴스(직접 회선 1 + Decodo "
+            "스티키 회선 2~N)에 나누어 동시에 수집합니다. 인스턴스별로 세션 "
+            "간격(기본 80분)을 두고 안전 장치가 함께 동작합니다. 정지해도 "
+            "진행 상태가 출력 폴더에 저장되어 같은 폴더로 다시 시작하면 "
+            "이어서 수집됩니다."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        left_column = QWidget()
+        left_layout = QVBoxLayout(left_column)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+
+        # ── 카테고리 트리(다중 선택) ────────────────────────────────
+        tree_panel = QGroupBox("카테고리 선택 (다중)")
+        tree_box = QVBoxLayout(tree_panel)
+        tree_head = QHBoxLayout()
+        self.btn_refresh_categories = QPushButton("카테고리 목록 새로고침")
+        self.btn_refresh_categories.clicked.connect(
+            self.refresh_categories_requested.emit
+        )
+        self.cache_label = QLabel(
+            "카테고리 목록 없음 — 새로고침을 눌러 쿠팡에서 불러오세요"
+        )
+        self.cache_label.setWordWrap(True)
+        tree_head.addWidget(self.btn_refresh_categories)
+        tree_head.addWidget(self.cache_label, stretch=1)
+        tree_box.addLayout(tree_head)
+
+        self.category_tree = QTreeWidget()
+        self.category_tree.setHeaderLabels(["카테고리", "ID"])
+        self.category_tree.setColumnWidth(0, 240)
+        self.category_tree.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.category_tree.itemSelectionChanged.connect(
+            self._on_tree_selection_changed
+        )
+        tree_box.addWidget(self.category_tree, stretch=1)
+        self.selected_label = QLabel("선택: 없음 (최상위 카테고리를 1개 이상 선택)")
+        self.selected_label.setWordWrap(True)
+        tree_box.addWidget(self.selected_label)
+        controls_layout.addWidget(tree_panel, stretch=1)
+
+        # ── 실행 설정 ──────────────────────────────────────────────
+        settings_group = QGroupBox("실행 설정")
+        form = QFormLayout(settings_group)
+
+        self.spin_instances = QSpinBox()
+        self.spin_instances.setRange(1, MAX_INSTANCES)
+        self.spin_instances.setValue(3)
+        self.spin_instances.setToolTip(
+            "동시에 운영할 인스턴스 수(1~5). 1번은 직접 회선, 2~N번은 Decodo\n"
+            "스티키 회선입니다. Decodo 계정이 없으면 1개로 강등됩니다."
+        )
+        self.spin_instances.valueChanged.connect(self._on_instance_count_changed)
+        form.addRow("인스턴스 수:", self.spin_instances)
+
+        dir_row = QHBoxLayout()
+        self.output_dir_edit = QLineEdit(str(_default_output_dir()))
+        self.btn_browse = QPushButton("찾아보기")
+        self.btn_browse.clicked.connect(self._browse_output_dir)
+        dir_row.addWidget(self.output_dir_edit)
+        dir_row.addWidget(self.btn_browse)
+        form.addRow("출력 폴더:", dir_row)
+        controls_layout.addWidget(settings_group)
+
+        # Decodo 미설정 안내 — 시작 전에 강등을 예고한다.
+        self.decodo_hint_label = QLabel("")
+        self.decodo_hint_label.setWordWrap(True)
+        self.decodo_hint_label.setStyleSheet("color: #b45309;")
+        self.decodo_hint_label.setVisible(False)
+        controls_layout.addWidget(self.decodo_hint_label)
+
+        # ── 제어 버튼 ──────────────────────────────────────────────
+        btn_row = QGridLayout()
+        btn_row.setHorizontalSpacing(8)
+        btn_row.setVerticalSpacing(8)
+        self.btn_start = QPushButton("수집 시작")
+        self.btn_start.clicked.connect(self._on_start_clicked)
+        self.btn_stop = QPushButton("정지")
+        self.btn_stop.clicked.connect(self.stop_requested.emit)
+        self.btn_open_result = QPushButton("결과 폴더 열기")
+        self.btn_open_result.clicked.connect(self._on_open_result_clicked)
+        for index, button in enumerate(
+            (self.btn_start, self.btn_stop, self.btn_open_result)
+        ):
+            btn_row.addWidget(button, index // 3, index % 3)
+        for column in range(3):
+            btn_row.setColumnStretch(column, 1)
+        left_layout.addLayout(btn_row)
+
+        # ── 인스턴스 카드 영역 ─────────────────────────────────────
+        instance_group = QGroupBox("인스턴스 현황")
+        self._instance_area = QVBoxLayout(instance_group)
+        self._instance_area.setContentsMargins(4, 4, 4, 4)
+        self._instance_area.setSpacing(2)
+        header = _InstanceCard(0)
+        header.name_label.setText("이름")
+        header.line_label.setText("회선")
+        header.family_label.setText("현재 가족")
+        header.status_label.setText("상태")
+        header.totals_label.setText("누적")
+        for label in (
+            header.name_label,
+            header.line_label,
+            header.family_label,
+            header.status_label,
+            header.totals_label,
+        ):
+            label.setStyleSheet("font-weight: bold; color: #475569;")
+        header.setStyleSheet("QFrame { background: #f1f5f9; }")
+        self._instance_area.addWidget(header)
+        self._instance_cards["header"] = header
+        controls_layout.addWidget(instance_group)
+
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setWidget(controls)
+        left_layout.addWidget(controls_scroll, stretch=1)
+
+        # ── 로그 + 결과 표(collection_workspace 배치 관례) ─────────
+        log_panel = QGroupBox("실시간 로그")
+        log_layout = QVBoxLayout(log_panel)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(2000)
+        log_layout.addWidget(self.log_view)
+
+        results_panel = QGroupBox("수집 결과 (확보 판매자)")
+        results_layout = QVBoxLayout(results_panel)
+        self.result_table = QTableWidget(0, len(SELLER_DISPLAY_FIELDS))
+        self.result_table.setHorizontalHeaderLabels(
+            [COLUMN_LABELS[key] for key in SELLER_DISPLAY_FIELDS]
+        )
+        result_header = self.result_table.horizontalHeader()
+        result_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        result_header.setStretchLastSection(False)
+        result_header.setMinimumSectionSize(110)
+        for column, width in enumerate((130, 150, 170, 130, 150, 150, 220, 110)):
+            self.result_table.setColumnWidth(column, width)
+        self.result_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        results_layout.addWidget(self.result_table)
+
+        layout.addWidget(
+            collection_workspace(left_column, log_panel, results_panel), stretch=1
+        )
+
+    # ── 카테고리 트리 ───────────────────────────────────────────────
+
+    def set_category_groups(
+        self,
+        groups: list[tuple[str, list[CategoryNode]]],
+        fetched_at: str = "",
+        total: int = 0,
+    ) -> None:
+        """트리 채움 — 기존 CategoryPanel.set_category_groups 와 같은 형식."""
+        self._groups = groups
+        self.category_tree.clear()
+        for label, roots in groups:
+            group_item = QTreeWidgetItem([f"▣ {label}", ""])
+            group_item.setFlags(group_item.flags())
+            self.category_tree.addTopLevelItem(group_item)
+            for node in roots:
+                group_item.addChild(self._make_node_item(node))
+            group_item.setExpanded(False)
+        stamp = fetched_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cache_label.setText(f"카테고리 {total}개 · 불러온 시각: {stamp}")
+
+    def _make_node_item(self, node: CategoryNode) -> QTreeWidgetItem:
+        item = QTreeWidgetItem([node.name, node.id])
+        item.setData(0, ROLE_ID, node.id)
+        item.setData(0, ROLE_NAME, node.name)
+        for child in node.children:
+            item.addChild(self._make_node_item(child))
+        return item
+
+    def set_cache_label(self, text: str) -> None:
+        self.cache_label.setText(text)
+
+    def _selected_items(self) -> list[QTreeWidgetItem]:
+        """선택된 항목 중 카테고리 노드(id 보유)만 — 그룹 헤더 제외."""
+        return [
+            item
+            for item in self.category_tree.selectedItems()
+            if item.data(0, ROLE_ID)
+        ]
+
+    def _family_root_items(self) -> list[QTreeWidgetItem]:
+        """가족 루트가 될 선택 항목 — 다른 선택 항목의 하위에 속한 선택 제외.
+
+        예: 부모와 그 자손을 함께 선택해도 부모 1개 가족만 만든다(중복 수집
+        방지). '선택된 최상위 노드 각각 = 1개 가족' 규칙의 다중 선택 해석이다.
+        """
+        selected = self._selected_items()
+        selected_set = set(id(item) for item in selected)
+        roots: list[QTreeWidgetItem] = []
+        for item in selected:
+            parent = item.parent()
+            while parent is not None:
+                if id(parent) in selected_set:
+                    break
+                parent = parent.parent()
+            if parent is None:
+                roots.append(item)
+        return roots
+
+    def _selected_families(self) -> list[list[tuple[str, str]]]:
+        """선택 → 가족 목록. 가족 = 루트 노드 + 모든 후손(id 중복 첫 1회)."""
+        families: list[list[tuple[str, str]]] = []
+        for item in self._family_root_items():
+            node = find_node(self._groups, str(item.data(0, ROLE_ID)))
+            if node is None:
+                continue
+            family: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            for target in (node, *flatten_descendants(node)):
+                if target.id and target.id not in seen:
+                    seen.add(target.id)
+                    family.append((target.id, target.name))
+            if family:
+                families.append(family)
+        return families
+
+    def _on_tree_selection_changed(self) -> None:
+        self._families = self._selected_families()
+        self._family_names = [family[0][1] for family in self._families]
+        if not self._families:
+            self.selected_label.setText(
+                "선택: 없음 (최상위 카테고리를 1개 이상 선택)"
+            )
+            return
+        total_categories = sum(len(family) for family in self._families)
+        self.selected_label.setText(
+            f"선택: 가족 {len(self._families)}개 · 총 카테고리 {total_categories:,}개"
+        )
+
+    # ── 인스턴스 카드 ───────────────────────────────────────────────
+
+    def set_instance_count_preview(self, count: int) -> None:
+        """시작 전 인스턴스 수만큼 카드를 미리 그린다."""
+        self._rebuild_cards(max(1, int(count)))
+
+    def _rebuild_cards(self, count: int) -> None:
+        self._clear_instance_cards()
+        for number in range(1, count + 1):
+            self._make_instance_card(number)
+
+    def _clear_instance_cards(self) -> None:
+        """인스턴스 카드만 제거(헤더 행은 유지)."""
+        for key, card in list(self._instance_cards.items()):
+            if key == "header":
+                continue
+            self._instance_area.removeWidget(card)
+            card.setParent(None)
+            card.deleteLater()
+            del self._instance_cards[key]
+
+    def _make_instance_card(self, number: int) -> _InstanceCard:
+        card = _InstanceCard(number)
+        card.family_name_lookup = self._family_name_for
+        self._instance_area.addWidget(card)
+        self._instance_cards[str(number)] = card
+        return card
+
+    def _family_name_for(self, family_index) -> str:
+        """카드 표기용 가족명 — 확정된 선택이 없으면 빈 문자열(기본 표기)."""
+        index = int(family_index)
+        if 0 <= index < len(self._family_names):
+            return self._family_names[index]
+        return ""
+
+    def update_instance(self, instance_id: str, state_str: str, summary: dict) -> None:
+        """워커 instance_state_changed 수신 — 카드를 만들거나 갱신한다."""
+        key = str(instance_id)
+        card = self._instance_cards.get(key)
+        if card is None:
+            card = self._make_instance_card(int(key) if key.isdigit() else 1)
+        card.update_state(state_str, summary)
+
+    # ── 상태 머신 ───────────────────────────────────────────────────
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self._apply_state()
+
+    def _apply_state(self) -> None:
+        s = self._state
+        startable = s in ("idle", "finished", "failed")
+        self.btn_start.setEnabled(startable)
+        self.btn_stop.setEnabled(s == "running")
+        self.btn_open_result.setEnabled(True)
+        settings_enabled = startable
+        for widget in (self.spin_instances, self.output_dir_edit):
+            widget.setEnabled(settings_enabled)
+        self.btn_browse.setEnabled(settings_enabled)
+        self.category_tree.setEnabled(settings_enabled)
+        self.btn_refresh_categories.setEnabled(
+            settings_enabled and s != "loading_categories"
+        )
+
+    def set_loading_categories(self, loading: bool) -> None:
+        self.btn_refresh_categories.setEnabled(not loading)
+        self.category_tree.setEnabled(not loading)
+        if loading:
+            self.cache_label.setText(
+                "카테고리 목록을 불러오는 중... (쿠팡 접속, 약 30초)"
+            )
+
+    def set_external_busy(self, busy: bool) -> None:
+        """다른 탭 작업 실행 시 조작을 안전하게 잠근다."""
+        self._external_busy = busy
+        if busy:
+            for button in (
+                self.btn_start,
+                self.btn_stop,
+                self.btn_refresh_categories,
+            ):
+                button.setEnabled(False)
+            for widget in (self.spin_instances, self.output_dir_edit):
+                widget.setEnabled(False)
+            self.btn_browse.setEnabled(False)
+            self.category_tree.setEnabled(False)
+        else:
+            self._apply_state()
+
+    # ── 설정/데이터 ────────────────────────────────────────────────
+
+    def output_dir(self) -> str:
+        return self.output_dir_edit.text().strip()
+
+    def build_run_config(
+        self, output_dir: Path | str | None = None, instance_count: int | None = None
+    ):
+        """선택된 가족으로 ParallelRunConfig 를 만든다. 선택 없으면 None+안내."""
+        # 지연 import — 패널 모듈 로드 시 코어 의존을 최소화한다.
+        from app.core.coupang.parallel_manager import ParallelRunConfig
+
+        families = self._selected_families()
+        if not families:
+            self.append_log(
+                "[시작] 카테고리를 선택하세요 — 최상위 노드 각각이 1개 가족입니다."
+            )
+            return None
+        chosen_dir = Path(output_dir) if output_dir else Path(self.output_dir())
+        if not str(chosen_dir) or str(chosen_dir) == ".":
+            self.append_log("[시작] 출력 폴더를 지정하세요.")
+            return None
+        count = (
+            int(instance_count)
+            if instance_count is not None
+            else self.spin_instances.value()
+        )
+        try:
+            return ParallelRunConfig(
+                families=families,
+                output_dir=chosen_dir,
+                instance_count=count,
+            )
+        except ValueError as error:
+            self.append_log(f"[시작] 실행 설정이 올바르지 않습니다: {error}")
+            return None
+
+    # ── 버튼 동작 ───────────────────────────────────────────────────
+
+    def _on_start_clicked(self) -> None:
+        if self._state != "idle":
+            return
+        config = self.build_run_config()
+        if config is None:
+            return  # build_run_config 이 안내 로그를 남겼다
+        # payload 는 직렬화 가능한 값만 — preflight·재개 판단은 main_window.
+        self.start_requested.emit(
+            {
+                "output_dir": str(config.output_dir),
+                "instance_count": config.instance_count,
+                "family_count": len(config.families),
+                "interval_minutes": config.interval_minutes,
+            }
+        )
+
+    def _on_open_result_clicked(self) -> None:
+        folder = self.output_dir()
+        if not folder:
+            self.append_log("[결과 열기] 저장 폴더가 비어 있습니다.")
+            return
+        self.open_output_requested.emit(folder)
+
+    def _browse_output_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "출력 폴더 선택", self.output_dir()
+        )
+        if path:
+            self.output_dir_edit.setText(path)
+
+    # ── Decodo 강등 예고 ────────────────────────────────────────────
+
+    def _on_instance_count_changed(self, count: int) -> None:
+        self.set_instance_count_preview(count)
+        self._update_decodo_hint()
+
+    def _decodo_ready(self) -> bool:
+        try:
+            from app.core import decodo
+        except Exception:  # noqa: BLE001 - 모듈 부재는 미설정과 같다
+            return False
+        try:
+            return bool(decodo.credentials_ready())
+        except Exception:  # noqa: BLE001 - 설정 파일 손상도 미설정과 같다
+            return False
+
+    def _update_decodo_hint(self) -> None:
+        """Decodo 미설정 + 인스턴스 수>1 → 강등 예고 라벨."""
+        needed = self.spin_instances.value() > 1 and not self._decodo_ready()
+        if needed:
+            self.decodo_hint_label.setText(
+                "Decodo 계정이 설정되지 않았습니다 — 시작하면 인스턴스 1개"
+                "(직접 회선)로 강등됩니다. 설정 탭에서 Decodo 계정을 저장하면 "
+                "인스턴스를 늘릴 수 있습니다."
+            )
+            self.decodo_hint_label.setVisible(True)
+        else:
+            self.decodo_hint_label.setVisible(False)
+
+    # ── 로그/표시 ───────────────────────────────────────────────────
+
+    def append_log(self, msg: str) -> None:
+        log_line(f"[병렬] {msg}")
+        timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+        self.log_view.appendPlainText(f"[{timestamp}] {msg}")
+
+    def add_seller_rows(self, rows: list) -> None:
+        """워커 sellers_appended 수신 — 결과 표에 행을 붙인다."""
+        for row in rows:
+            self.add_record(row)
+
+    def add_record(self, record: dict) -> None:
+        row = self.result_table.rowCount()
+        self.result_table.insertRow(row)
+        for col, key in enumerate(SELLER_DISPLAY_FIELDS):
+            value = record.get(key, "")
+            if key == "power_seller":
+                value = "✓" if value else ""
+            self.result_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+    def clear_results(self) -> None:
+        """시작 시 결과 표·로그·인스턴스 카드를 초기화한다(헤더 유지)."""
+        self.result_table.setRowCount(0)
+        self.log_view.clear()
+        self._clear_instance_cards()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QGridLayout,
@@ -32,6 +33,10 @@ from app.core.coupang.categories import (
     count_nodes,
 )
 from app.core.coupang.decodo_run import category_run_dir, completed_category_result
+from app.core.coupang.parallel_manager import (
+    STATE_FILENAME as COUPANG_PARALLEL_STATE_FILENAME,
+)
+from app.core.coupang.parallel_manager import ParallelCoupangManager
 from app.core.coupang.resume_store import peek_resume
 from app.core.crawler import reconcile_leftover_checkpoints
 from app.core.gmarket_categories import (
@@ -49,6 +54,7 @@ from app.models.records import PrescanResult
 from app.ui.aliexpress_category_panel import AliexpressCategoryPanel
 from app.ui.category_panel import CategoryPanel
 from app.ui.coupang_panel import CoupangPanel
+from app.ui.coupang_parallel_panel import CoupangParallelPanel
 from app.ui.foodspring_panel import FoodSpringPanel
 from app.ui.gmarket_category_panel import GmarketCategoryPanel
 from app.ui.widgets.brightdata_panel import BrightDataPanel
@@ -60,6 +66,7 @@ from app.ui.widgets.result_table import ResultTable
 from app.ui.widgets.settings_panel import SettingsPanel
 from app.workers.aliexpress_category_crawl_worker import AliexpressCategoryCrawlWorker
 from app.workers.category_worker import CategoryWorker
+from app.workers.coupang_parallel_worker import CoupangParallelWorker
 from app.workers.coupang_worker import CoupangWorker
 from app.workers.crawl_worker import CrawlWorker
 from app.workers.foodspring_worker import FoodSpringWorker
@@ -119,6 +126,10 @@ class MainWindow(QMainWindow):
         # AliExpress 카테고리 상태
         self.alicat_control: Control | None = None
         self.alicat_worker: AliexpressCategoryCrawlWorker | None = None
+
+        # Coupang 병렬 카테고리 상태(2026-10-01 탭 교체 — 워커/패널은 _build_ui)
+        self.parallel_control: Control | None = None
+        self.parallel_worker: CoupangParallelWorker | None = None
 
         self._build_ui()
         self._set_ui_state("idle")
@@ -210,9 +221,12 @@ class MainWindow(QMainWindow):
         self.foodspring_panel.btn_cancel.clicked.connect(self.on_foodspring_cancel)
         self.foodspring_panel.btn_open_result.clicked.connect(self._on_foodspring_open_result)
 
-        # Coupang 카테고리 탭 (컨셉 전환 2026-08-24: 키워드 검색 → 카테고리 선택)
+        # Coupang 카테고리 탭 — 병렬 인스턴스 패널로 교체(2026-10-01).
+        # 기존 CategoryPanel 인스턴스·핸들러는 파일에 그대로 남긴다(삭제 금지) —
+        # 탭에서만 분리한다. 기존 버튼 연결도 패널이 살아있는 한 무해하다.
         self.category_panel = CategoryPanel()
-        self.tab_widget.addTab(self.category_panel, "Coupang 카테고리")
+        self.coupang_parallel_panel = CoupangParallelPanel()
+        self.tab_widget.addTab(self.coupang_parallel_panel, "Coupang 카테고리")
 
         self.category_panel.btn_refresh_categories.clicked.connect(self.on_categories_refresh)
         self.category_panel.btn_start.clicked.connect(self.on_category_start)
@@ -220,6 +234,15 @@ class MainWindow(QMainWindow):
         self.category_panel.btn_resume.clicked.connect(self.on_category_resume)
         self.category_panel.btn_cancel.clicked.connect(self.on_category_cancel)
         self.category_panel.btn_open_result.clicked.connect(self._on_category_open_result)
+
+        self.coupang_parallel_panel.start_requested.connect(self.on_parallel_start)
+        self.coupang_parallel_panel.stop_requested.connect(self.on_parallel_stop)
+        self.coupang_parallel_panel.refresh_categories_requested.connect(
+            self.on_parallel_categories_refresh
+        )
+        self.coupang_parallel_panel.open_output_requested.connect(
+            self._on_parallel_open_result
+        )
 
         # Gmarket 카테고리 탭 (2026-09-08 신규: 전체 대/중/소 카테고리 선택 수집)
         self.gmarket_category_panel = GmarketCategoryPanel()
@@ -284,6 +307,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(gmarket_busy)
         self.foodspring_panel.set_external_busy(gmarket_busy)
         self.category_panel.set_external_busy(gmarket_busy)
+        self.coupang_parallel_panel.set_external_busy(gmarket_busy)
         self.gmarket_category_panel.set_external_busy(gmarket_busy)
         self.aliexpress_category_panel.set_external_busy(gmarket_busy)
         self.brightdata_panel.set_external_busy(gmarket_busy)
@@ -292,6 +316,7 @@ class MainWindow(QMainWindow):
     def _active_worker(self):
         for worker in (self.crawl_worker, self.prescan_worker, self.coupang_worker,
                        self.foodspring_worker, self.category_worker, self.categories_worker,
+                       self.parallel_worker,
                        self.gmcat_worker,
                        self.gmcat_crawl_worker,
                        self.alicat_worker):
@@ -308,6 +333,8 @@ class MainWindow(QMainWindow):
             return self.category_control
         if self.categories_worker is not None and self.categories_worker.isRunning():
             return self.categories_control
+        if self.parallel_worker is not None and self.parallel_worker.isRunning():
+            return self.parallel_control
         if self.gmcat_worker is not None and self.gmcat_worker.isRunning():
             return self.gmcat_control
         if self.gmcat_crawl_worker is not None and self.gmcat_crawl_worker.isRunning():
@@ -723,6 +750,7 @@ class MainWindow(QMainWindow):
         self._set_gmarket_busy(True)
         self.foodspring_panel.set_external_busy(True)
         self.category_panel.set_external_busy(True)
+        self.coupang_parallel_panel.set_external_busy(True)
         self.gmarket_category_panel.set_external_busy(True)
         self.aliexpress_category_panel.set_external_busy(True)
         self._show_status("Coupang 수집 진행 중...")
@@ -840,6 +868,7 @@ class MainWindow(QMainWindow):
         self._set_gmarket_busy(False)
         self.foodspring_panel.set_external_busy(False)
         self.category_panel.set_external_busy(False)
+        self.coupang_parallel_panel.set_external_busy(False)
         self.gmarket_category_panel.set_external_busy(False)
         self.aliexpress_category_panel.set_external_busy(False)
         self._set_ui_state("prescanned" if self.prescan_results else "idle")
@@ -930,6 +959,7 @@ class MainWindow(QMainWindow):
         self._set_gmarket_busy(True)
         self.coupang_panel.set_external_busy(True)
         self.category_panel.set_external_busy(True)
+        self.coupang_parallel_panel.set_external_busy(True)
         self.gmarket_category_panel.set_external_busy(True)
         self.aliexpress_category_panel.set_external_busy(True)
         self._show_status("Foodspring 수집 진행 중...")
@@ -941,6 +971,7 @@ class MainWindow(QMainWindow):
             self._set_gmarket_busy(False)
             self.coupang_panel.set_external_busy(False)
             self.category_panel.set_external_busy(False)
+            self.coupang_parallel_panel.set_external_busy(False)
             self.gmarket_category_panel.set_external_busy(False)
             self.aliexpress_category_panel.set_external_busy(False)
             self.foodspring_panel.append_log(f"[오류] 워커 시작 실패: {e}")
@@ -1048,6 +1079,7 @@ class MainWindow(QMainWindow):
         self._set_gmarket_busy(False)
         self.coupang_panel.set_external_busy(False)
         self.category_panel.set_external_busy(False)
+        self.coupang_parallel_panel.set_external_busy(False)
         self.gmarket_category_panel.set_external_busy(False)
         self.aliexpress_category_panel.set_external_busy(False)
         summary = self.foodspring_worker.summary if self.foodspring_worker else None
@@ -1253,6 +1285,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(True)
         self.foodspring_panel.set_external_busy(True)
         self.category_panel.set_external_busy(True)
+        self.coupang_parallel_panel.set_external_busy(True)
         self.aliexpress_category_panel.set_external_busy(True)
         self._show_status("Gmarket 카테고리 수집 진행 중...")
         worker.start()
@@ -1341,6 +1374,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(False)
         self.foodspring_panel.set_external_busy(False)
         self.category_panel.set_external_busy(False)
+        self.coupang_parallel_panel.set_external_busy(False)
         self.aliexpress_category_panel.set_external_busy(False)
 
     def _on_gmcat_open_result(self) -> None:
@@ -1444,6 +1478,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(True)
         self.foodspring_panel.set_external_busy(True)
         self.category_panel.set_external_busy(True)
+        self.coupang_parallel_panel.set_external_busy(True)
         self.gmarket_category_panel.set_external_busy(True)
         self._show_status(f"AliExpress 카테고리 수집 진행 중... ({config.category_name})")
         worker.start()
@@ -1536,6 +1571,7 @@ class MainWindow(QMainWindow):
         self.coupang_panel.set_external_busy(False)
         self.foodspring_panel.set_external_busy(False)
         self.category_panel.set_external_busy(False)
+        self.coupang_parallel_panel.set_external_busy(False)
         self.gmarket_category_panel.set_external_busy(False)
 
     def _on_alicat_open_result(self, folder_path: str = "") -> None:
@@ -1562,6 +1598,10 @@ class MainWindow(QMainWindow):
             return
         groups, fetched_at = cached
         self.category_panel.set_category_groups(groups, fetched_at, count_nodes(groups))
+        # 탭 교체(2026-10-01) — 같은 캐시(경로·시드 동일)로 병렬 패널 트리도 채운다.
+        self.coupang_parallel_panel.set_category_groups(
+            groups, fetched_at, count_nodes(groups)
+        )
 
     def on_categories_refresh(self) -> None:
         if self._closing or self._close_prompt_active:
@@ -1948,6 +1988,277 @@ class MainWindow(QMainWindow):
             self.category_panel.set_state("failed")
         else:
             self.category_panel.set_state("finished")
+
+    # ── Coupang 병렬 카테고리 탭 (2026-10-01 탭 교체) ─────────────────
+
+    def on_parallel_categories_refresh(self) -> None:
+        """카테고리 트리 새로고침 — 기존 CategoryWorker+CategoryTreeCache 흐름 이관.
+
+        캐시 인스턴스(self.category_cache, output/coupang_category_tree.json)와
+        워커 슬롯(self.categories_worker)을 기존 탭과 공유한다 — 전역 단일
+        워커 규칙(_active_worker)이 그대로 적용된다.
+        """
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            return
+        self.categories_control = Control()
+        self.coupang_parallel_panel.set_loading_categories(True)
+        self.coupang_parallel_panel.append_log(
+            "[카테고리] 쿠팡에서 전체 카테고리 목록을 불러옵니다 (약 30초)..."
+        )
+        worker = CategoryWorker(self.category_cache, self.categories_control)
+        worker.log_message.connect(self.coupang_parallel_panel.append_log)
+        worker.tree_loaded.connect(self._on_parallel_categories_loaded)
+        worker.error_occurred.connect(self._on_parallel_categories_error)
+        worker.finished.connect(self._on_parallel_categories_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.categories_worker = worker
+        worker.start()
+
+    def _on_parallel_categories_loaded(self, groups, fetched_at: str, total: int) -> None:
+        self.coupang_parallel_panel.set_category_groups(groups, fetched_at, total)
+        self.coupang_parallel_panel.append_log(
+            f"[카테고리] {total}개 카테고리 로드 완료"
+        )
+        self._show_status(f"카테고리 {total}개 로드 완료")
+
+    def _on_parallel_categories_error(self, msg: str) -> None:
+        self.coupang_parallel_panel.append_log(f"[카테고리 오류] {msg}")
+        cached = self.category_cache.load()
+        if cached is not None:
+            groups, fetched_at = cached
+            total = count_nodes(groups)
+            self.coupang_parallel_panel.set_category_groups(groups, fetched_at, total)
+            self.coupang_parallel_panel.append_log(
+                f"[로컬 목록] 새로고침 대신 검증된 카테고리 {total}개를 사용합니다."
+            )
+            self._show_status(f"로컬 카테고리 목록 사용 중 ({total}개)")
+            QMessageBox.warning(
+                self,
+                "카테고리 새로고침 실패",
+                f"{msg}\n\n검증된 로컬 카테고리 {total}개를 대신 사용합니다.",
+            )
+            return
+        self.coupang_parallel_panel.set_cache_label(
+            "카테고리 로드 실패 — 사용 가능한 로컬 목록 없음"
+        )
+        QMessageBox.warning(self, "카테고리 로드 실패", msg)
+
+    def _on_parallel_categories_thread_done(self) -> None:
+        self.categories_worker = None
+        self.coupang_parallel_panel.set_loading_categories(False)
+
+    def on_parallel_start(self, payload: dict) -> None:
+        """병렬 수집 시작 — preflight → 출력 probe → 재개 판단 → 워커 start."""
+        if self._closing or self._close_prompt_active:
+            return
+        if self._active_worker() is not None:
+            QMessageBox.warning(
+                self, "작업 중복 실행 방지", "다른 수집 작업이 이미 실행 중입니다."
+            )
+            return
+
+        config = self.coupang_parallel_panel.build_run_config(
+            Path(str(payload.get("output_dir") or "")),
+            payload.get("instance_count"),
+        )
+        if config is None:
+            QMessageBox.warning(
+                self,
+                "설정 오류",
+                "카테고리(가족)를 최소 1개 선택하고 출력 폴더를 지정하세요.",
+            )
+            return
+
+        # 병렬 파이프라인은 Patchright + 설치된 Chrome → chromium preflight.
+        if not self._coupang_runtime_ready(category=True):
+            return
+
+        try:
+            config.output_dir.mkdir(parents=True, exist_ok=True)
+            import tempfile as _tf
+
+            fd, tmp_path = _tf.mkstemp(dir=str(config.output_dir), prefix=".preflight_")
+            os.close(fd)
+            os.unlink(tmp_path)
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                "출력 경로 오류",
+                f"출력 폴더에 쓸 수 없습니다:\n{config.output_dir}\n\n{e}",
+            )
+            return
+
+        # 재개 판단 — 같은 출력 폴더에 매니저 상태가 남아 있으면 묻는다.
+        state_path = config.output_dir / COUPANG_PARALLEL_STATE_FILENAME
+        saved_state = ParallelCoupangManager.load_state(state_path)
+        start_fresh = False
+        if saved_state is not None:
+            choice = self._ask_resume_mode(config.output_dir, self._parallel_resume_note(saved_state))
+            if choice == "cancel":
+                return
+            start_fresh = choice == "fresh"
+            if start_fresh:
+                # 배분·예정 시각 상태만 버린다(수집 데이터 파일은 사용자 데이터라
+                # 삭제하지 않는다 — 이미 완주한 가족은 짧게 확인하고 건너뛴다).
+                try:
+                    state_path.unlink()
+                except OSError as e:
+                    QMessageBox.critical(
+                        self, "재시작 오류",
+                        f"저장된 병렬 상태 파일을 지우지 못했습니다:\n{state_path}\n\n{e}",
+                    )
+                    return
+                self.coupang_parallel_panel.append_log(
+                    "[재시작] 배분 상태를 초기화합니다. 이미 수집된 가족 폴더 "
+                    "데이터는 유지되며 완주 가족은 건너뜁니다."
+                )
+            else:
+                self.coupang_parallel_panel.append_log(
+                    "[재개] 저장된 병렬 상태를 복원해 이어서 수집합니다 — "
+                    + self._parallel_resume_note(saved_state)
+                )
+
+        # 시작이 수락된 뒤에 결과 화면을 비운다(대화상자 취소 시 결과 보존).
+        self.coupang_parallel_panel.clear_results()
+        self.coupang_parallel_panel.set_instance_count_preview(config.instance_count)
+        control = Control()
+        self.parallel_control = control
+        try:
+            worker = CoupangParallelWorker(config, control)
+        except Exception as e:  # noqa: BLE001 - 워커 준비 실패는 시작 전에 안내
+            self.parallel_control = None
+            self.coupang_parallel_panel.append_log(f"[오류] 병렬 수집 준비 실패: {e}")
+            QMessageBox.critical(self, "병렬 수집 시작 실패", str(e))
+            return
+        worker.log_message.connect(self.coupang_parallel_panel.append_log)
+        worker.instance_state_changed.connect(self.coupang_parallel_panel.update_instance)
+        worker.sellers_appended.connect(self.coupang_parallel_panel.add_seller_rows)
+        worker.warning_message.connect(self._on_parallel_warning)
+        worker.finished_parallel.connect(self._on_parallel_finished)
+        worker.finished.connect(self._on_parallel_thread_done)
+        worker.finished.connect(self._maybe_close_after_worker)
+        self.parallel_worker = worker
+
+        self.coupang_parallel_panel.set_state("running")
+        self._set_gmarket_busy(True)
+        self.coupang_panel.set_external_busy(True)
+        self.foodspring_panel.set_external_busy(True)
+        self.category_panel.set_external_busy(True)
+        self.gmarket_category_panel.set_external_busy(True)
+        self.aliexpress_category_panel.set_external_busy(True)
+        self._show_status("Coupang 병렬 수집 진행 중...")
+        worker.start()
+
+    @staticmethod
+    def _parallel_resume_note(saved_state: dict) -> str:
+        """저장된 매니저 상태 → 재개 대화상자용 요약 문장."""
+        records = [
+            record
+            for record in (saved_state.get("instances") or [])
+            if isinstance(record, dict)
+        ]
+        done = sum(1 for r in records if r.get("status") == "done")
+        stopped = sum(
+            1 for r in records if r.get("status") in ("blocked", "error")
+        )
+        pending = len(saved_state.get("pending_families") or [])
+        return (
+            f"인스턴스 {len(records)}개 (완료 {done}, 차단/오류 {stopped}), "
+            f"대기 가족 {pending}개\n"
+            "이어서 수집하면 가족 배분·다음 세션 예정 시각·누적이 복원됩니다."
+        )
+
+    def on_parallel_stop(self) -> None:
+        if self.parallel_control:
+            self.parallel_control.request_cancel()
+            self.coupang_parallel_panel.set_state("stopping")
+            self.coupang_parallel_panel.append_log(
+                "[제어] 정지 요청 — 진행 중인 세션을 마친 뒤 중단합니다."
+            )
+            self._show_status("Coupang 병렬 수집 정지 중...")
+
+    def _on_parallel_warning(self, msg: str) -> None:
+        self.coupang_parallel_panel.append_log(f"[주의] {msg}")
+
+    def _on_parallel_finished(self, summary: dict) -> None:
+        panel = self.coupang_parallel_panel
+        instances = [
+            record
+            for record in (summary.get("instances") or [])
+            if isinstance(record, dict)
+        ]
+        total_products = int(summary.get("total_products") or 0)
+        total_sellers = int(summary.get("total_sellers") or 0)
+        blocked = [str(i) for i in (summary.get("blocked_instances") or [])]
+        errors = [str(i) for i in (summary.get("error_instances") or [])]
+
+        if summary.get("cancelled"):
+            head = "병렬 수집 정지됨"
+        elif summary.get("error"):
+            head = "병렬 수집 오류 중단"
+        elif blocked or errors:
+            head = "병렬 수집 종료(일부 인스턴스 중단)"
+        else:
+            head = "병렬 수집 완료"
+        panel.append_log(
+            f"[{head}] 3P 상품 {total_products:,}개 · 확보 판매자 {total_sellers:,}명 "
+            f"(인스턴스 {len(instances)}개, 결과 폴더: {summary.get('output_dir')})"
+        )
+        for record in instances:
+            if record.get("status") in ("blocked", "error"):
+                family_index = record.get("family_index")
+                family_text = (
+                    f"가족 {int(family_index) + 1}" if family_index is not None else "가족 없음"
+                )
+                panel.append_log(
+                    f"  인스턴스 {record.get('instance_id')}: "
+                    f"{record.get('status')} — 마지막 {family_text} "
+                    f"(3P {int(record.get('total_products') or 0):,}개 · "
+                    f"판매자 {int(record.get('total_sellers') or 0):,}명)"
+                )
+        if summary.get("error"):
+            QMessageBox.critical(
+                self, "Coupang 병렬 수집 오류 중단", str(summary["error"])
+            )
+        elif blocked:
+            QMessageBox.warning(
+                self,
+                "Coupang 병렬 수집 종료 — 차단 인스턴스 있음",
+                f"차단된 인스턴스: {', '.join(blocked)}\n\n"
+                "충분한 쿨다운 뒤 같은 출력 폴더로 다시 시작하면 저장된 지점부터 "
+                "이어서 수집됩니다.",
+            )
+        self._show_status(f"{head} — 판매자 {total_sellers:,}명")
+
+    def _on_parallel_thread_done(self) -> None:
+        self.parallel_worker = None
+        self._set_gmarket_busy(False)
+        self.coupang_panel.set_external_busy(False)
+        self.foodspring_panel.set_external_busy(False)
+        self.category_panel.set_external_busy(False)
+        self.gmarket_category_panel.set_external_busy(False)
+        self.aliexpress_category_panel.set_external_busy(False)
+        self.coupang_parallel_panel.set_state("idle")
+
+    def _on_parallel_open_result(self, folder_path: str = "") -> None:
+        if not folder_path and hasattr(self, "coupang_parallel_panel"):
+            folder_path = self.coupang_parallel_panel.output_dir()
+        if not folder_path or not os.path.exists(folder_path):
+            self.coupang_parallel_panel.append_log(
+                "[결과 열기] 저장 폴더가 아직 생성되지 않았습니다."
+            )
+            return
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            os.startfile(folder_path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", folder_path], check=False)
+        else:
+            subprocess.run(["xdg-open", folder_path], check=False)
 
     def closeEvent(self, event) -> None:
         if self._closing:
