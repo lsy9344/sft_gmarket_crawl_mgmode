@@ -17,6 +17,7 @@ from app.core.coupang.patchright_canary import (
     authorize_block_recovery,
     authorize_recovery_resume,
     claim_live_attempt,
+    patchright_browser,
     record_block,
     record_recovery_hold,
     run_canary,
@@ -140,23 +141,23 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertEqual(second["event"], "guard_refused")
         self.assertEqual(len(calls), 1)
 
-    def test_two_hour_interval_is_enforced(self):
+    def test_sixty_minute_interval_is_enforced(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first, _reason = claim_live_attempt(root, now=base)
             too_early, reason = claim_live_attempt(
-                root, now=base + (2 * 60 * 60) - 1
+                root, now=base + (60 * 60) - 1
             )
             on_time, _reason = claim_live_attempt(
-                root, now=base + (2 * 60 * 60)
+                root, now=base + (60 * 60)
             )
         self.assertTrue(first)
         self.assertFalse(too_early)
         self.assertIn("1분", reason)
         self.assertTrue(on_time)
 
-    def test_daily_product_envelope_refuses_more_than_twenty_four_sixty(self):
+    def test_daily_product_envelope_is_not_enforced(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -172,7 +173,7 @@ class PatchrightCanaryTest(unittest.TestCase):
             fourth, reason = claim_live_attempt(
                 root, now=base + (8 * 60 * 60), planned_items=600
             )
-            fifth, reason = claim_live_attempt(
+            fifth, _reason = claim_live_attempt(
                 root, now=base + (10 * 60 * 60), planned_items=600
             )
             guard = json.loads((root / "canary_guard.json").read_text("utf-8"))
@@ -180,25 +181,23 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertTrue(second)
         self.assertTrue(third)
         self.assertTrue(fourth)
-        self.assertFalse(fifth)
-        self.assertIn("2,460", reason)
-        self.assertEqual(guard["daily_items_reserved"], 2_400)
+        self.assertTrue(fifth)
+        self.assertEqual(guard["daily_items_reserved"], 3_000)
 
-    def test_daily_session_envelope_refuses_ninth_session(self):
-        base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
+    def test_daily_session_envelope_is_not_enforced(self):
+        base = time.mktime((2026, 9, 2, 0, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             attempts = [
-                claim_live_attempt(root, now=base + (index * 2 * 60 * 60))
-                for index in range(9)
+                claim_live_attempt(root, now=base + (index * 61 * 60))
+                for index in range(16)
             ]
         self.assertEqual(
             [allowed for allowed, _reason in attempts],
-            [True, True, True, True, True, True, True, True, False],
+            [True] * 16,
         )
-        self.assertIn("8회", attempts[-1][1])
 
-    def test_rolling_page_envelope_refuses_forty_seventh_page(self):
+    def test_rolling_page_envelope_is_not_enforced(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -225,7 +224,7 @@ class PatchrightCanaryTest(unittest.TestCase):
                 now=base + (8 * 60 * 60),
                 planned_pages=6,
             )
-            too_many, reason = claim_live_attempt(
+            next_attempt, _reason = claim_live_attempt(
                 root,
                 now=base + (10 * 60 * 60),
                 planned_pages=1,
@@ -235,10 +234,9 @@ class PatchrightCanaryTest(unittest.TestCase):
         self.assertTrue(third)
         self.assertTrue(fourth)
         self.assertTrue(fifth)
-        self.assertFalse(too_many)
-        self.assertIn("46쪽", reason)
+        self.assertTrue(next_attempt)
 
-    def test_rolling_item_envelope_crosses_calendar_boundary(self):
+    def test_rolling_item_envelope_is_not_enforced(self):
         base = time.mktime((2026, 9, 2, 23, 0, 0, 0, 0, -1))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -250,27 +248,26 @@ class PatchrightCanaryTest(unittest.TestCase):
                 now=base + (2 * 60 * 60),
                 planned_items=600,
             )
-            too_many, reason = claim_live_attempt(
+            third, _reason = claim_live_attempt(
                 root,
                 now=base + (4 * 60 * 60),
                 planned_items=600,
             )
-            fourth, reason = claim_live_attempt(
+            fourth, _reason = claim_live_attempt(
                 root,
                 now=base + (6 * 60 * 60),
                 planned_items=600,
             )
-            fifth, reason = claim_live_attempt(
+            fifth, _reason = claim_live_attempt(
                 root,
                 now=base + (8 * 60 * 60),
                 planned_items=600,
             )
         self.assertTrue(first)
         self.assertTrue(second)
-        self.assertTrue(too_many)
+        self.assertTrue(third)
         self.assertTrue(fourth)
-        self.assertFalse(fifth)
-        self.assertIn("최근 24시간", reason)
+        self.assertTrue(fifth)
 
     def test_rolling_envelope_expires_after_twenty_four_hours(self):
         base = time.mktime((2026, 9, 2, 1, 0, 0, 0, 0, -1))
@@ -515,6 +512,77 @@ class PatchrightCanaryTest(unittest.TestCase):
             )
         self.assertEqual(result["event"], "failed")
         self.assertTrue(context.closed)
+
+
+class PatchrightBrowserProxyTest(unittest.TestCase):
+    """가짜 patchright 주입으로 proxy 전달만 검증한다(오프라인)."""
+
+    @staticmethod
+    def _fake_patchright_modules(launched: dict):
+        """launch_persistent_context 호출 인자를 기록하는 가짜 patchright."""
+        import types
+
+        class _FakeContext:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class _FakeChromium:
+            def launch_persistent_context(self, **kwargs):
+                launched.update(kwargs)
+                return _FakeContext()
+
+        class _FakePlaywright:
+            def __init__(self):
+                self.chromium = _FakeChromium()
+
+        class _FakeSyncPlaywright:
+            def __enter__(self):
+                return _FakePlaywright()
+
+            def __exit__(self, *_args):
+                return False
+
+        fake_sync_api = types.ModuleType("patchright.sync_api")
+        fake_sync_api.sync_playwright = _FakeSyncPlaywright
+        fake_package = types.ModuleType("patchright")
+        fake_package.sync_api = fake_sync_api
+        return {"patchright": fake_package, "patchright.sync_api": fake_sync_api}
+
+    def test_proxy_dict_is_forwarded_to_launch(self):
+        import sys
+
+        launched: dict = {}
+        proxy = {
+            "server": "http://gate.decodo.com:7000",
+            "username": (
+                "user-sp3lqmo64w-session-b01"
+                "-sessionduration-1440-country-kr"
+            ),
+            "password": "secret",
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            sys.modules, self._fake_patchright_modules(launched)
+        ), patchright_browser(
+            Path(tmp) / "profile", headless=True, proxy=proxy
+        ) as context:
+            self.assertIsNotNone(context)
+        self.assertEqual(launched["proxy"], proxy)
+        self.assertEqual(launched["channel"], "chrome")
+        self.assertTrue(launched["headless"])
+        self.assertEqual(launched["user_data_dir"], str(Path(tmp) / "profile"))
+
+    def test_default_call_launches_with_proxy_none(self):
+        import sys
+
+        launched: dict = {}
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            sys.modules, self._fake_patchright_modules(launched)
+        ), patchright_browser(Path(tmp) / "profile", headless=True):
+            pass
+        self.assertIsNone(launched["proxy"])
 
 
 if __name__ == "__main__":

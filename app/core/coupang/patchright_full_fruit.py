@@ -58,6 +58,7 @@ PRODUCTS_FILENAME = "fruit_products.csv"
 SELLERS_FILENAME = "fruit_sellers.csv"
 PRODUCT_SELLER_FILENAME = "fruit_product_seller.csv"
 FAILED_SELLERS_FILENAME = "fruit_failed_sellers.json"
+FAILED_MAPPINGS_FILENAME = "fruit_failed_mappings.json"
 SUMMARY_FILENAME = "fruit_collection_summary.json"
 
 MAX_LISTING_ITEMS = 60
@@ -141,6 +142,7 @@ class FullFruitStore:
         self.sellers_path = output_dir / SELLERS_FILENAME
         self.product_seller_path = output_dir / PRODUCT_SELLER_FILENAME
         self.failed_sellers_path = output_dir / FAILED_SELLERS_FILENAME
+        self.failed_mappings_path = output_dir / FAILED_MAPPINGS_FILENAME
         self.summary_path = output_dir / SUMMARY_FILENAME
 
     def ensure_files(self) -> None:
@@ -152,6 +154,8 @@ class FullFruitStore:
             _write_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS, [])
         if not self.failed_sellers_path.exists():
             _write_json(self.failed_sellers_path, [])
+        if not self.failed_mappings_path.exists():
+            _write_json(self.failed_mappings_path, [])
         if not self.summary_path.exists():
             _write_json(
                 self.summary_path,
@@ -179,6 +183,7 @@ class FullFruitStore:
         _read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
         for path, expected_type in (
             (self.failed_sellers_path, list),
+            (self.failed_mappings_path, list),
             (self.summary_path, dict),
         ):
             try:
@@ -247,6 +252,49 @@ class FullFruitStore:
         value["raw_products_seen"] = raw_products_seen
         value["unique_products"] = unique_products
         value["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _write_json(self.summary_path, value)
+
+    def record_failed_seller(self, row: dict) -> None:
+        failures = json.loads(self.failed_sellers_path.read_text(encoding="utf-8"))
+        by_vendor_id = {
+            str(item.get("vendor_id") or ""): item
+            for item in failures
+            if isinstance(item, dict) and item.get("vendor_id")
+        }
+        by_vendor_id.setdefault(str(row["vendor_id"]), dict(row))
+        _write_json(self.failed_sellers_path, list(by_vendor_id.values()))
+
+    def record_failed_mappings(self, rows: list[dict]) -> None:
+        failures = json.loads(self.failed_mappings_path.read_text(encoding="utf-8"))
+        by_vendor_item_id = {
+            str(item.get("vendor_item_id") or ""): item
+            for item in failures
+            if isinstance(item, dict) and item.get("vendor_item_id")
+        }
+        for row in rows:
+            vendor_item_id = str(row.get("vendor_item_id") or "")
+            if vendor_item_id:
+                by_vendor_item_id.setdefault(vendor_item_id, dict(row))
+        _write_json(self.failed_mappings_path, list(by_vendor_item_id.values()))
+
+    def update_seller_summary(self, *, status: str) -> None:
+        sellers = _read_csv(self.sellers_path, SELLER_FIELDS)
+        mappings = _read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
+        failed_mappings = json.loads(
+            self.failed_mappings_path.read_text(encoding="utf-8")
+        )
+        counts = {"saved": 0, "no_public_info": 0, "failed": 0}
+        for seller in sellers:
+            counts[seller["status"]] += 1
+        value = json.loads(self.summary_path.read_text(encoding="utf-8"))
+        value.update(
+            seller_status=status,
+            unique_sellers=len(sellers),
+            mapped_products=len(mappings),
+            failed_product_mappings=len(failed_mappings),
+            seller_status_counts=counts,
+            updated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
         _write_json(self.summary_path, value)
 
 
