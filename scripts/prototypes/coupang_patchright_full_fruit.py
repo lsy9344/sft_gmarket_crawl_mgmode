@@ -63,10 +63,15 @@ def main() -> int:
         type=Path,
         default=Path.home() / "Desktop" / "PatchrightFruit",
     )
+    parser.add_argument(
+        "--state-root",
+        type=Path,
+        help="카테고리와 판매자 단계가 함께 쓰는 안전 기록 폴더",
+    )
     args = parser.parse_args()
     try:
         if args.recovery_probe:
-            allowed, reason = authorize_block_recovery()
+            allowed, reason = authorize_block_recovery(args.state_root)
             if not allowed:
                 result = {"event": "guard_refused", "reason": reason}
             else:
@@ -74,24 +79,28 @@ def main() -> int:
                     output_dir=args.output_dir,
                     limit=8,
                     on_event=_print_state,
+                    state_root=args.state_root,
                 )
-                record_recovery_hold()
+                record_recovery_hold(args.state_root)
         elif args.category:
             result = run_listing_category(
                 output_dir=args.output_dir,
                 on_event=_print_state,
+                state_root=args.state_root,
             )
         elif args.pages == 1:
             result = run_listing_batch(
                 output_dir=args.output_dir,
                 limit=args.limit,
                 on_event=_print_state,
+                state_root=args.state_root,
             )
         else:
             result = run_listing_pages(
                 output_dir=args.output_dir,
                 page_count=args.pages,
                 on_event=_print_state,
+                state_root=args.state_root,
             )
     except ValueError as error:
         parser.error(str(error))

@@ -10,7 +10,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.core.coupang.patchright_canary import (
-    MAX_DAILY_ITEMS,
     _guard_path,
     _read_guard,
 )
@@ -19,6 +18,10 @@ from app.core.coupang.patchright_full_fruit import (
     FullFruitStore,
     run_listing_pages,
 )
+
+# 취소된 2026-09-03 일정이 계산에 쓰던 하루 상한. 공통 안전문에서 이 상한이
+# 제거됐지만 이 모듈은 당시 예약표를 그대로 보존한다.
+MAX_DAILY_ITEMS = 2_460
 
 DAILY_STATE_FILENAME = "patchright_daily_schedule_20260903.json"
 DAILY_LOG_FILENAME = "patchright_daily_schedule_20260903.jsonl"

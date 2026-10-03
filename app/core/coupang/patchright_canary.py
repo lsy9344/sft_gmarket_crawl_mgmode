@@ -17,13 +17,10 @@ from app.core.config import PROJECT_ROOT
 HOME_URL = "https://www.coupang.com/"
 CATEGORY_URL = "https://www.coupang.com/np/categories/{category_id}?page=1"
 MAX_ITEMS = 10
-MIN_LIVE_INTERVAL_SECONDS = 2 * 60 * 60
-MAX_LIVE_SESSIONS_PER_DAY = 8
-MAX_DAILY_ITEMS = 2_460
+MIN_LIVE_INTERVAL_SECONDS = 60 * 60
 MAX_SESSION_ITEMS = 600
 ROLLING_WINDOW_SECONDS = 24 * 60 * 60
 MAX_ROLLING_PAGES = 46
-MAX_ROLLING_ITEMS = 2_460
 RECOVERY_RAMP_LIMITS = (60, 180, 600)
 BLOCK_RECOVERY_INTERVAL_SECONDS = 60 * 60
 BLOCK_STATUSES = {403, 418, 429}
@@ -178,7 +175,7 @@ def claim_live_attempt(
                     not isinstance(attempt, dict)
                     or not isinstance(attempt.get("attempt_ts"), (int, float))
                     or not isinstance(attempt.get("items"), int)
-                    or not 0 <= attempt["items"] <= MAX_ROLLING_ITEMS
+                    or not 0 <= attempt["items"] <= MAX_SESSION_ITEMS
                     or not isinstance(attempt.get("pages"), int)
                     or not 0 <= attempt["pages"] <= MAX_ROLLING_PAGES
                     or not isinstance(attempt.get("settled"), bool)
@@ -227,23 +224,10 @@ def claim_live_attempt(
         for attempt in attempt_history
         if attempt["attempt_ts"] > cutoff
     ]
-    rolling_items = sum(attempt["items"] for attempt in recent_attempts)
-    rolling_pages = sum(attempt["pages"] for attempt in recent_attempts)
-    if rolling_items + planned_items > MAX_ROLLING_ITEMS:
-        return False, f"최근 24시간 상품 상한 {MAX_ROLLING_ITEMS:,}개를 넘습니다."
-    if rolling_pages + planned_pages > MAX_ROLLING_PAGES:
-        return False, f"최근 24시간 페이지 상한 {MAX_ROLLING_PAGES}쪽을 넘습니다."
     current_date = time.strftime("%Y-%m-%d", time.localtime(current))
     if daily_date != current_date:
         daily_sessions = 0
         daily_items_reserved = 0
-    if daily_sessions >= MAX_LIVE_SESSIONS_PER_DAY:
-        return (
-            False,
-            f"오늘 Patchright 세션 상한 {MAX_LIVE_SESSIONS_PER_DAY}회에 도달했습니다.",
-        )
-    if daily_items_reserved + planned_items > MAX_DAILY_ITEMS:
-        return False, f"오늘 예약 상품 상한 {MAX_DAILY_ITEMS:,}개를 넘습니다."
     try:
         recent_attempts.append(
             {
