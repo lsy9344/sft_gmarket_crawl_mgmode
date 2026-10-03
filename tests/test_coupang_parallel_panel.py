@@ -11,6 +11,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from pathlib import Path  # noqa: E402
+
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from app.core.coupang.categories import CategoryNode  # noqa: E402
@@ -107,7 +109,7 @@ class CoupangParallelPanelTest(unittest.TestCase):
             [cid for cid, _ in config.families[0]],
             ["194276", "194373", "194688", "194690"],
         )
-        self.assertEqual(str(config.output_dir), "/tmp/panel_out")
+        self.assertEqual(config.output_dir, Path("/tmp/panel_out"))
 
     def test_invalid_instance_count_is_rejected_with_log(self) -> None:
         self.panel.set_category_groups(_sample_groups())

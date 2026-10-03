@@ -541,7 +541,9 @@ class BuildInstancesTest(unittest.TestCase):
                 root / "local" / "SellerCollector" / "coupang_parallel" / "1",
             )
             # 비Windows — 실제 모듈 상수 기반 경로(cdnary state_dir 패턴).
-            linux = pm._state_root_for("2")
+            # Windows 빌드 머신에서도 posix 분기를 강제로 검증한다.
+            with mock.patch("os.name", "posix"):
+                linux = pm._state_root_for("2")
             self.assertEqual(
                 linux,
                 pm.PROJECT_ROOT

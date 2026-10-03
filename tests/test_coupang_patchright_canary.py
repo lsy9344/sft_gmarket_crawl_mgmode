@@ -725,13 +725,16 @@ class StateDirDefaultTest(unittest.TestCase):
         )
 
     def test_posix_default_uses_project_runtime_profile(self):
-        with patch.dict(os.environ, {}, clear=True):
+        # Windows 개발/빌드 머신에서도 posix 분기를 강제로 검증한다.
+        with patch("os.name", "posix"), patch.dict(os.environ, {}, clear=True):
             self.assertEqual(
                 state_dir(),
                 PROJECT_ROOT / "runtime_profile" / "coupang_parallel_canary",
             )
         # LOCALAPPDATA가 있어도 posix에서는 무시한다.
-        with patch.dict(os.environ, {"LOCALAPPDATA": "/fake/localappdata"}):
+        with patch("os.name", "posix"), patch.dict(
+            os.environ, {"LOCALAPPDATA": "/fake/localappdata"}
+        ):
             self.assertEqual(
                 state_dir(),
                 PROJECT_ROOT / "runtime_profile" / "coupang_parallel_canary",
