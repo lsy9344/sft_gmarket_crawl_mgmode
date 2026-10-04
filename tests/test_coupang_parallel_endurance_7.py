@@ -188,11 +188,11 @@ class ParallelEndurance7Test(unittest.TestCase):
                 for step in range(MAX_STEPS):
                     # 세션 사망 주입 — 특정 시점에 인스턴스 2의 sid 를 죽인다.
                     if step == 8:
-                        dead["i2"] = fake.DecodoError(
+                        dead["i20"] = fake.DecodoError(
                             "회선 확인 응답 오류(HTTP 502).", kind="response"
                         )
                     if step == 40:
-                        dead["i2"] = fake.DecodoError(
+                        dead["i20"] = fake.DecodoError(
                             "다시 사망", kind="response"
                         )
 

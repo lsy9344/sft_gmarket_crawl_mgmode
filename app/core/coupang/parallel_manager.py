@@ -137,7 +137,11 @@ class ParallelInstanceConfig:
     instance_id: str  # "1" ~ "N"
     name: str         # 표시 이름(예: "인스턴스 1")
     line: str         # "direct"(직접 회선) | "decodo"(스티키 프록시)
-    session_id: str   # decodo 시작 sid(예: "i2"). direct 는 빈 문자열.
+    session_id: str   # decodo 시작 sid(예: "i20"). direct 는 빈 문자열.
+    # 인스턴스마다 십진 네임스페이스(i{N}0)를 쓴다 — 세션 자동 교체가
+    # 끝자리를 증가시키므로(i20→i21…) 다른 인스턴스의 sid와 절대 겹치지
+    # 않는다(2026-10-04 7-병렬 실측에서 i2→i3 회전이 인스턴스 3의
+    # 기본 sid와 충돌해 동일 출구 IP를 공유한 사고의 재발 방지).
     state_root: Path  # 가드 장부 + 브라우저 프로필 루트(인스턴스 전용)
     output_root: Path  # 가족별 출력 하위 폴더들의 부모
 
@@ -216,9 +220,9 @@ def build_instances(
                 instance_id=instance_id,
                 name=f"인스턴스 {number}",
                 line=line,
-                # 시작 sid는 인스턴스 번호 기본값(예: "i2"). 실제 세션은
+                # 시작 sid는 인스턴스별 십진 네임스페이스(예: "i20"). 실제 세션은
                 # 가족 출력 폴더의 상태 파일(sid 마지막 성공값)을 우선한다.
-                session_id="" if line == "direct" else f"i{number}",
+                session_id="" if line == "direct" else f"i{number}0",
                 state_root=_state_root_for(instance_id),
                 output_root=config.output_dir,
             )

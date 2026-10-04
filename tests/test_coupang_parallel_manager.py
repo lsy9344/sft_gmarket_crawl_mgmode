@@ -472,10 +472,10 @@ class BuildInstancesTest(unittest.TestCase):
                 [instance.line for instance in instances],
                 ["direct", "decodo", "decodo"],
             )
-            # decodo 시작 sid 는 인스턴스 번호 기본값(예: "i2").
+            # decodo 시작 sid 는 인스턴스별 네임스페이스(예: "i20").
             self.assertEqual(
                 [instance.session_id for instance in instances],
-                ["", "i2", "i3"],
+                ["", "i20", "i30"],
             )
             # state_root 는 인스턴스별 분리, 출력 루트는 실행 설정 공용.
             self.assertEqual(
@@ -770,13 +770,13 @@ class ProxyRoutingTest(unittest.TestCase):
             self.assertEqual(decodo_profile, root / "state_2" / "chrome_profile")
             # 산 sid(i2)로 조립된 스티키 프록시 dict 가 전달된다.
             self.assertEqual(
-                decodo_proxy["username"], "user-sp3lqmo64w-session-i2"
+                decodo_proxy["username"], "user-sp3lqmo64w-session-i20"
             )
             exit_ips = _events_of(events, "exit_ip")
             self.assertEqual(len(exit_ips), 1)
             self.assertEqual(exit_ips[0]["instance"], "2")
             self.assertIs(exit_ips[0]["ok"], True)
-            self.assertEqual(exit_ips[0]["proxy_session_id"], "i2")
+            self.assertEqual(exit_ips[0]["proxy_session_id"], "i20")
             # 가족 출력 폴더가 인스턴스별로 분리된다(출력·장부 격리).
             self.assertTrue(
                 (root / "out" / "family_02" / PROXY_STATE_FILENAME).exists()
@@ -785,7 +785,7 @@ class ProxyRoutingTest(unittest.TestCase):
                 _read_json(root / "out" / "family_02" / PROXY_STATE_FILENAME)[
                     "session_id"
                 ],
-                "i2",
+                "i20",
             )
 
     def test_dead_decodo_session_rotates_sid_in_proxy(self):
@@ -793,7 +793,7 @@ class ProxyRoutingTest(unittest.TestCase):
         calls: list = []
         dead: dict = {}
         fake = _fake_decodo(calls, ready=True, dead_sids=dead)
-        dead["i2"] = fake.DecodoError("HTTP 502 터널 실패", kind="response")
+        dead["i20"] = fake.DecodoError("HTTP 502 터널 실패", kind="response")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             events: list = []
@@ -807,12 +807,12 @@ class ProxyRoutingTest(unittest.TestCase):
             _direct_profile, direct_proxy = factory.captured[0]
             _decodo_profile, decodo_proxy = factory.captured[1]
             self.assertIsNone(direct_proxy)
-            self.assertIn("session-i3", decodo_proxy["username"])
+            self.assertIn("session-i21", decodo_proxy["username"])
             exit_ips = _events_of(events, "exit_ip")
             self.assertIs(exit_ips[0]["rotated"], True)
-            self.assertEqual(exit_ips[0]["tried"], ["i2", "i3"])
+            self.assertEqual(exit_ips[0]["tried"], ["i20", "i21"])
             # 교체된 sid 는 매니저 상태에도 남는다(재시작 seed).
-            self.assertEqual(manager.instances["2"].effective_sid, "i3")
+            self.assertEqual(manager.instances["2"].effective_sid, "i21")
 
     def test_decodo_failure_marks_instance_error_without_browser(self):
         """회선 점검 실패(계정 수준)는 proxy=None 진행 대신 인스턴스 정지."""
@@ -1024,7 +1024,7 @@ class PersistRestoreTest(unittest.TestCase):
                     first.instances[instance_id].next_run_at,
                 )
             self.assertEqual(second.pending_families, [2])
-            self.assertEqual(second.instances["2"].effective_sid, "i2")
+            self.assertEqual(second.instances["2"].effective_sid, "i20")
             self.assertIn("복원", restored_events[-1]["message"])
             # 복원된 예정 시각 이전에는 세션을 돌리지 않는다.
             restored_factory = second.browser_scope_factory
@@ -1239,3 +1239,39 @@ class CancelAndHaltTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SidNamespaceDisjointnessTest(unittest.TestCase):
+    """인스턴스별 sid 네임스페이스 — 회전이 타 인스턴스와 절대 겹치지 않는다.
+
+    2026-10-04 7-병렬 라이브 실측에서 i2→i3 회전이 인스턴스 3의 기본 sid와
+    충돌해 같은 출구 IP를 공유한 사고의 회귀 방지.
+    """
+
+    def test_rotation_stays_within_instance_namespace(self) -> None:
+        from app.core.coupang.parallel_pipeline import next_session_id
+
+        # 8인스턴스 전 기본 sid와, 각 인스턴스가 5번 회전한 모든 sid가 전역 유일.
+        seen: set[str] = set()
+        for number in range(2, 9):
+            sid = f"i{number}0"
+            for _ in range(6):
+                self.assertNotIn(sid, seen, f"sid 충돌: {sid}")
+                seen.add(sid)
+                sid = next_session_id(sid)
+
+    def test_default_sids_are_pairwise_distinct(self) -> None:
+        calls: list = []
+        fake = _fake_decodo(calls, ready=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = ParallelRunConfig(
+                families=_families(8), output_dir=root / "out", instance_count=8
+            )
+            with mock.patch.object(
+                pm, "_state_root_for", lambda i: root / f"state_{i}"
+            ), _decodo(fake):
+                instances = build_instances(config)
+            sids = [i.session_id for i in instances if i.session_id]
+            self.assertEqual(len(sids), len(set(sids)))
+            self.assertEqual(sids, [f"i{n}0" for n in range(2, 9)])
