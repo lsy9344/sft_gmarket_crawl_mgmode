@@ -1,9 +1,12 @@
-# Seller Intelligence Collector
+# Marketplace Seller Research & Workflow Automation
 
-Seller Intelligence Collector is a Windows/Linux desktop application for
+A Windows/Linux desktop application for
 turning authorized public marketplace information into structured business
 data. It covers Gmarket, Coupang, Foodspring, and AliExpress workflows and
 exports normalized seller records as CSV and JSON.
+
+Built as an operator-facing product rather than a single extraction script,
+it connects category planning, background jobs, recovery and data handoff.
 
 The product is built for a research or operations team that needs a repeatable
 collection process. It provides category planning, visible progress, pause and
