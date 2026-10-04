@@ -90,6 +90,8 @@ _CATEGORY_POOL = [
     ("186176", "주방용품/주방소형/조리도구"),
     ("186250", "주방용품/주방소형/도마"),
     ("186320", "주방용품/주방소형/커터"),
+    ("186380", "주방용품/주방소형/제분기"),
+    ("186440", "주방용품/주방소형/계량기"),
 ]
 
 
@@ -1119,12 +1121,12 @@ class CompletePathTest(unittest.TestCase):
 
 
 class RunConfigValidationTest(unittest.TestCase):
-    """ParallelRunConfig 검증 — 인스턴스 수 1~5, 가족/파라미터 형식."""
+    """ParallelRunConfig 검증 — 인스턴스 수 1~8, 가족/파라미터 형식."""
 
     def test_instance_count_out_of_range_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for bad in (0, 6):
+            for bad in (0, 9):
                 with self.subTest(instance_count=bad):
                     with self.assertRaises(ValueError):
                         ParallelRunConfig(
@@ -1136,7 +1138,7 @@ class RunConfigValidationTest(unittest.TestCase):
     def test_instance_count_bounds_are_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for good in (1, 5):
+            for good in (1, 7, 8):
                 with self.subTest(instance_count=good):
                     config = ParallelRunConfig(
                         families=_families(good),

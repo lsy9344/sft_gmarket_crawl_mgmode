@@ -68,7 +68,7 @@ GUARD_LEDGER_FILENAME = "canary_guard.json"
 # final 생성 여부를 판단하게 하는 파일(기본 A 가족이 아닐 때만 만든다).
 FAMILY_DEFINITION_FILENAME = "coupang_family.json"
 
-MAX_INSTANCES = 5
+MAX_INSTANCES = 8  # 7-병렬 실측(10-04) 반영 — 여유 1까지 허용
 
 # 인스턴스 상태 — waiting(다음 세션 대기)/collecting(세션 실행 중)/
 # blocked(차단으로 이 인스턴스 일정 중단)/complete(가족 완주 순간)/
@@ -150,7 +150,7 @@ class ParallelRunConfig:
     # output_dir 을 기본값 있는 필드들보다 앞에 둔다(데이터클래스 제약:
     # 기본값 없는 필드가 뒤에 올 수 없다). 인스턴스 수 등은 뒤의 기본값.
     output_dir: Path
-    instance_count: int = 3    # 1~5
+    instance_count: int = 3    # 1~8
     interval_minutes: int = 80  # 인스턴스별 세션 간격(분)
     listing_pages: int = 8      # 목록 단계 1세션 페이지 수(1~10)
     seller_limit: int = 130     # 판매자 단계 1세션 상품 수 상한
