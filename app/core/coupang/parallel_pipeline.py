@@ -87,9 +87,12 @@ def _choose_action(
     store.ensure_files()
 
     control = read_seller_control(output_dir)
-    if control["status"] in ("halted", "in_progress"):
+    if control["status"] == "halted":
         reason = str(control.get("reason") or "앞선 판매자 작업이 끝나지 않았습니다.")
         return {"action": "halted", "reason": reason}
+    # cancelled(사용자 정지)·in_progress(크래시 잔존)는 끊긴 실행이다 —
+    # 요청 표시만 남은 판매자를 되돌리고 대기열 확인부터 이어서 간다.
+    store.requeue_unconfirmed_sellers()
 
     # 신규 인스턴스는 상품 파일이 없어 판매자 대기열도 비어 있으므로
     # 목록 단계부터 시작한다. 파일이 있을 때만 대기열을 확인한다.
@@ -156,10 +159,13 @@ def _write_proxy_session_state(output_dir: Path, session_id: str) -> None:
 
 
 def next_session_id(session_id: str) -> str:
-    """죽은 sid의 다음 후보 — 끝의 연속 숫자를 +1 한다(b03→b04).
+    """죽은 sid의 다음 후보 — 끝자리 숫자를 +1 하되 자리올림하지 않는다.
 
-    끝이 숫자가 아니면 2를 붙인다(bx→bx2, bx를 1회차로 세는 방식).
-    자릿수는 보존한다(b09→b10처럼 자리가 넘어갈 때만 늘어난다).
+    끝이 숫자가 아니면 2를 붙인다(bx→bx2, bx를 1회차로 세는 방식). 끝자리가
+    9면 0으로 되감는다(i29→i20) — 십진 네임스페이스(i{N}0~i{N}9) 안에서만
+    순환하므로 누적 회전이 인스턴스 수십 회에 걸쳐도 다른 인스턴스의
+    sid와 절대 겹치지 않는다(b09→b10 같은 자리올림이 i29→i30 침범 사고를
+    만들었던 2026-10-04 사건의 재발 방지).
     """
     sid = str(session_id or "").strip()
     index = len(sid)
@@ -167,7 +173,10 @@ def next_session_id(session_id: str) -> str:
         index -= 1
     digits = sid[index:]
     if digits:
-        return sid[:index] + str(int(digits) + 1).zfill(len(digits))
+        last = digits[-1]
+        if last == "9":
+            return sid[:index] + digits[:-1] + "0"
+        return sid[:index] + digits[:-1] + str(int(last) + 1)
     return sid + "2"
 
 

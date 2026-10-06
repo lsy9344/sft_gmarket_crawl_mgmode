@@ -26,13 +26,15 @@ from app.core.coupang.patchright_canary import (
     record_block,
     settle_live_attempt,
 )
-from app.core.coupang.patchright_full_fruit import (
-    _read_csv,
-    _write_csv,
-    _write_json,
-)
 from app.core.coupang.patchright_sample import _checkpoint, _navigate, _wait
 from app.core.coupang.search_parser import parse_href, parse_price
+from app.core.coupang.store_files import (
+    category_item_key,
+    merge_by_key,
+    read_csv,
+    write_csv,
+    write_json,
+)
 
 # 상위 두 카테고리를 먼저 확인한 뒤 각 하위 카테고리를 트리 순서대로
 # 이어서 확인한다. 기존 진행 상태의 카테고리 위치를 그대로 보존한다.
@@ -383,11 +385,11 @@ class TopThousandStore:
 
     def ensure_files(self) -> None:
         if not self.products_path.exists():
-            _write_csv(self.products_path, PRODUCT_FIELDS, [])
+            write_csv(self.products_path, PRODUCT_FIELDS, [])
         if not self.state_path.exists():
-            _write_json(self.state_path, _new_state(self.family))
+            write_json(self.state_path, _new_state(self.family))
         if not self.summary_path.exists():
-            _write_json(
+            write_json(
                 self.summary_path,
                 {
                     "status": "running",
@@ -400,7 +402,7 @@ class TopThousandStore:
             )
 
     def validate(self) -> None:
-        _read_csv(self.products_path, PRODUCT_FIELDS)
+        read_csv(self.products_path, PRODUCT_FIELDS)
         _validate_state(
             json.loads(self.state_path.read_text(encoding="utf-8")), self.family
         )
@@ -418,27 +420,21 @@ class TopThousandStore:
 
         같은 상품이 부모와 하위 카테고리 목록에 모두 나오면 각 카테고리
         데이터셋에 모두 남는다. 카테고리가 다른 행은 서로 덮어쓰지 않는다.
+        새 행은 카테고리·상품 ID 가 모두 있어야 들어가지만, 저장된 행은
+        상품 ID 만으로 인덱싱해 카테고리가 비은 행도 보존한다.
         """
-        existing = _read_csv(self.products_path, PRODUCT_FIELDS)
-        by_key = {
-            (row["category_id"], row["vendor_item_id"]): row
-            for row in existing
-            if row["vendor_item_id"]
-        }
-        before = len(by_key)
-        for row in rows:
-            vendor_item_id = str(row.get("vendor_item_id") or "")
-            category_id = str(row.get("category_id") or "")
-            if vendor_item_id and category_id:
-                by_key.setdefault((category_id, vendor_item_id), row)
-        merged = list(by_key.values())
-        _write_csv(self.products_path, PRODUCT_FIELDS, merged)
-        return len(merged), len(merged) - before
+        return merge_by_key(
+            self.products_path,
+            PRODUCT_FIELDS,
+            rows,
+            key_of=category_item_key,
+            existing_key_of=_existing_product_key,
+        )
 
     def products_for_category(self, category_id: str) -> list[dict]:
         return [
             row
-            for row in _read_csv(self.products_path, PRODUCT_FIELDS)
+            for row in read_csv(self.products_path, PRODUCT_FIELDS)
             if row["category_id"] == category_id
         ]
 
@@ -447,7 +443,7 @@ class TopThousandStore:
         rows = self.products_for_category(category_id)
         rows.sort(key=lambda row: -int(row["review_count"] or 0))
         path = self.output_dir / f"top_1000_{category_id}.csv"
-        _write_csv(path, PRODUCT_FIELDS, rows[:TARGET_CATEGORY_ITEMS])
+        write_csv(path, PRODUCT_FIELDS, rows[:TARGET_CATEGORY_ITEMS])
         return path
 
     def update_summary(self, state: dict, *, extra: dict | None = None) -> None:
@@ -458,13 +454,13 @@ class TopThousandStore:
         }
         if extra:
             value.update(extra)
-        _write_json(self.summary_path, value)
+        write_json(self.summary_path, value)
 
 
 def family_unique_products(store: TopThousandStore, root_category_id: str) -> int:
     """가족(상위+하위 카테고리 전체)에서 중복 제거한 고유 상품 수."""
     family = FINAL_FAMILY_CATEGORIES[root_category_id]
-    rows = _read_csv(store.products_path, PRODUCT_FIELDS)
+    rows = read_csv(store.products_path, PRODUCT_FIELDS)
     return len(
         {
             row["vendor_item_id"]
@@ -485,7 +481,7 @@ def build_final_dataset(
     컷 이전의 고유 상품 수다.
     """
     family = FINAL_FAMILY_CATEGORIES[root_category_id]
-    rows = _read_csv(store.products_path, PRODUCT_FIELDS)
+    rows = read_csv(store.products_path, PRODUCT_FIELDS)
     by_vendor: dict[str, dict] = {}
     matched: dict[str, list[str]] = {}
     for row in rows:
@@ -510,7 +506,7 @@ def build_final_dataset(
     unique_rows.sort(key=lambda row: -int(row["review_count"] or 0))
     unique_count = len(unique_rows)
     path = store.output_dir / f"final_dataset_{root_category_id}.csv"
-    _write_csv(path, FINAL_FIELDS, unique_rows[:TARGET_CATEGORY_ITEMS])
+    write_csv(path, FINAL_FIELDS, unique_rows[:TARGET_CATEGORY_ITEMS])
     return path, unique_count
 
 
@@ -520,7 +516,7 @@ def build_combined_final_dataset(store: TopThousandStore) -> tuple[Path, int]:
     사용자가 최종 산출물로 요청한 형태다. 카테고리 중복은 vendorItemId 기준으로
     제거하고, 그 상품이 나왔던 카테고리는 matched_categories 열에 모두 남긴다.
     """
-    rows = _read_csv(store.products_path, PRODUCT_FIELDS)
+    rows = read_csv(store.products_path, PRODUCT_FIELDS)
     by_vendor: dict[str, dict] = {}
     matched: dict[str, list[str]] = {}
     for row in rows:
@@ -544,7 +540,7 @@ def build_combined_final_dataset(store: TopThousandStore) -> tuple[Path, int]:
     ]
     unique_rows.sort(key=lambda row: -int(row["review_count"] or 0))
     path = store.output_dir / "final_dataset_all.csv"
-    _write_csv(path, FINAL_FIELDS, unique_rows)
+    write_csv(path, FINAL_FIELDS, unique_rows)
     return path, len(unique_rows)
 
 
@@ -595,7 +591,7 @@ def read_state(
 def save_state(output_dir: Path, state: dict) -> str:
     value = dict(state)
     value["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    _write_json(output_dir / STATE_FILENAME, value)
+    write_json(output_dir / STATE_FILENAME, value)
     return str(output_dir / STATE_FILENAME)
 
 
@@ -707,6 +703,13 @@ def _product_row(
         ),
         "collected_at": collected_at,
     }
+
+
+def _existing_product_key(row: dict):
+    """저장된 상품 행의 인덱스 키 — 카테고리가 비어 있어도 상품은 보존한다."""
+    if not row.get("vendor_item_id"):
+        return None
+    return (str(row.get("category_id") or ""), str(row.get("vendor_item_id")))
 
 
 def _cards_from_page(page, limit: int) -> list[dict]:

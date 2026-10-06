@@ -38,6 +38,7 @@ from app.core.coupang.patchright_sample import (
     _navigate,
     _wait,
 )
+from app.core.coupang.store_files import UNCONFIRMED_SELLER_ERROR
 from app.models.coupang_records import RECORD_FIELDS
 
 SELLER_CONTROL_FILENAME = "fruit_seller_control.json"
@@ -225,8 +226,20 @@ def _seller_row(vendor_id: str, vendor: dict, data: dict | None, error: str = ""
     }
 
 
-def _work(store: FullFruitStore, limit: int) -> tuple[list[tuple[str, dict]], list[dict]]:
-    products = _read_csv(store.products_path, PRODUCT_FIELDS)
+def seller_work_queue(
+    store,
+    product_fields: tuple[str, ...],
+    limit: int,
+) -> tuple[list[tuple[str, dict]], list[dict]]:
+    """이번 세션에 처리할 (판매자, 상품) 대기열을 고른다.
+
+    판매자 단계의 공용 규칙이다 — 저장소(FullFruitStore/TopSellerStore)는
+    products_path/product_seller_path/sellers_path/failed_mappings_path 를
+    같은 이름으로 노출하고, 상품 파일 스키마(product_fields)만 다르다.
+    연결된 판매자 중 아직 결과 행이 없는 것을 먼저 고르고, 남은 예산은
+    연결되지 않은 상품에 쓴다.
+    """
+    products = _read_csv(store.products_path, product_fields)
     mappings = _read_csv(store.product_seller_path, PRODUCT_SELLER_FIELDS)
     sellers = _read_csv(store.sellers_path, SELLER_FIELDS)
     failed_mappings = json.loads(store.failed_mappings_path.read_text(encoding="utf-8"))
@@ -260,6 +273,10 @@ def _work(store: FullFruitStore, limit: int) -> tuple[list[tuple[str, dict]], li
         and row["vendor_item_id"] not in failed_mapping_ids
     ][:remaining]
     return pending, unmapped
+
+
+def _work(store: FullFruitStore, limit: int) -> tuple[list[tuple[str, dict]], list[dict]]:
+    return seller_work_queue(store, PRODUCT_FIELDS, limit)
 
 
 def run_seller_batch(
@@ -372,7 +389,7 @@ def run_seller_batch(
                     vendor_id,
                     vendor,
                     None,
-                    "판매자정보 요청 시작; 결과 미확정",
+                    UNCONFIRMED_SELLER_ERROR,
                 )
                 store.merge_sellers([attempted])
                 state["api_calls"] += 1

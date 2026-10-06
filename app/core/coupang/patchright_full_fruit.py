@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import csv
 import json
-import os
-import tempfile
 import time
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -25,6 +22,19 @@ from app.core.coupang.patchright_canary import (
 from app.core.coupang.patchright_fruit import FRUIT_CATEGORIES
 from app.core.coupang.patchright_sample import _checkpoint, _navigate, _wait
 from app.core.coupang.search_parser import parse_extracted
+from app.core.coupang.store_files import (
+    atomic_write_text,
+    item_key,
+    merge_by_key,
+    merge_failed_records,
+    read_csv,
+    saved_supersedes_failed,
+    seller_key,
+    validate_mapping_row,
+    validate_seller_row,
+    write_csv,
+    write_json,
+)
 from app.models.coupang_records import RECORD_FIELDS
 
 PRODUCT_FIELDS = (
@@ -69,68 +79,13 @@ MAX_SESSION_PAGES = 10
 MAX_SESSION_PRODUCTS = MAX_SESSION_PAGES * MAX_LISTING_ITEMS
 
 
-def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding=encoding, newline="") as handle:
-            handle.write(text)
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def _write_json(path: Path, value: object) -> None:
-    _atomic_write_text(
-        path,
-        json.dumps(value, ensure_ascii=False, indent=2),
-    )
-
-
-def _write_csv(path: Path, fields: tuple[str, ...], rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(
-            descriptor, "w", encoding="utf-8-sig", newline=""
-        ) as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(fields))
-            writer.writeheader()
-            writer.writerows(
-                {
-                    field: (
-                        "'" + str(row.get(field, ""))
-                        if str(row.get(field, "")).startswith(
-                            ("=", "+", "-", "@", "\t", "\r", "\n")
-                        )
-                        else row.get(field, "")
-                    )
-                    for field in fields
-                }
-                for row in rows
-            )
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def _read_csv(path: Path, fields: tuple[str, ...]) -> list[dict]:
-    try:
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if tuple(reader.fieldnames or ()) != fields:
-                raise ValueError(f"{path.name} 열 형식이 잘못됐습니다.")
-            return [dict(row) for row in reader]
-    except OSError as error:
-        raise ValueError(f"{path.name}을 읽지 못했습니다: {error}") from error
+# 하위 호환 재수출 — 이 모듈에서 비공개로 쓰던 IO 헬퍼를 import 하던
+# 기존 경로(app 모듈·테스트·프로토타입)를 그대로 유지한다. 새 코드는
+# app.core.coupang.store_files 의 공개 이름을 직접 쓴다.
+_atomic_write_text = atomic_write_text
+_write_json = write_json
+_write_csv = write_csv
+_read_csv = read_csv
 
 
 class FullFruitStore:
@@ -196,56 +151,28 @@ class FullFruitStore:
                 )
 
     def merge_products(self, rows: list[dict]) -> tuple[int, int]:
-        existing = _read_csv(self.products_path, PRODUCT_FIELDS)
-        by_vendor_item_id = {
-            row["vendor_item_id"]: row for row in existing if row["vendor_item_id"]
-        }
-        before = len(by_vendor_item_id)
-        for row in rows:
-            vendor_item_id = str(row.get("vendor_item_id") or "")
-            if vendor_item_id:
-                by_vendor_item_id.setdefault(vendor_item_id, row)
-        merged = list(by_vendor_item_id.values())
-        _write_csv(self.products_path, PRODUCT_FIELDS, merged)
-        return len(merged), len(merged) - before
+        return merge_by_key(
+            self.products_path, PRODUCT_FIELDS, rows, key_of=item_key
+        )
 
     def merge_sellers(self, rows: list[dict]) -> tuple[int, int]:
-        existing = _read_csv(self.sellers_path, SELLER_FIELDS)
-        by_vendor_id = {
-            row["vendor_id"]: row for row in existing if row["vendor_id"]
-        }
-        before = len(by_vendor_id)
-        for row in rows:
-            vendor_id = str(row.get("vendor_id") or "")
-            status = row.get("status")
-            if not vendor_id or status not in ("saved", "no_public_info", "failed"):
-                raise ValueError("판매자 ID 또는 처리 상태가 잘못됐습니다.")
-            previous = by_vendor_id.get(vendor_id)
-            if previous is None or (
-                previous.get("status") == "failed" and status != "failed"
-            ):
-                by_vendor_id[vendor_id] = row
-        merged = list(by_vendor_id.values())
-        _write_csv(self.sellers_path, SELLER_FIELDS, merged)
-        return len(merged), len(merged) - before
+        return merge_by_key(
+            self.sellers_path,
+            SELLER_FIELDS,
+            rows,
+            key_of=seller_key,
+            validate=validate_seller_row,
+            should_replace=saved_supersedes_failed,
+        )
 
     def merge_product_sellers(self, rows: list[dict]) -> tuple[int, int]:
-        existing = _read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
-        by_vendor_item_id = {
-            row["vendor_item_id"]: row
-            for row in existing
-            if row["vendor_item_id"]
-        }
-        before = len(by_vendor_item_id)
-        for row in rows:
-            vendor_item_id = str(row.get("vendor_item_id") or "")
-            vendor_id = str(row.get("vendor_id") or "")
-            if not vendor_item_id or not vendor_id:
-                raise ValueError("상품-판매자 연결 ID가 잘못됐습니다.")
-            by_vendor_item_id.setdefault(vendor_item_id, row)
-        merged = list(by_vendor_item_id.values())
-        _write_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS, merged)
-        return len(merged), len(merged) - before
+        return merge_by_key(
+            self.product_seller_path,
+            PRODUCT_SELLER_FIELDS,
+            rows,
+            key_of=item_key,
+            validate=validate_mapping_row,
+        )
 
     def update_summary(self, *, raw_products_seen: int, unique_products: int) -> None:
         value = json.loads(self.summary_path.read_text(encoding="utf-8"))
@@ -255,27 +182,10 @@ class FullFruitStore:
         _write_json(self.summary_path, value)
 
     def record_failed_seller(self, row: dict) -> None:
-        failures = json.loads(self.failed_sellers_path.read_text(encoding="utf-8"))
-        by_vendor_id = {
-            str(item.get("vendor_id") or ""): item
-            for item in failures
-            if isinstance(item, dict) and item.get("vendor_id")
-        }
-        by_vendor_id.setdefault(str(row["vendor_id"]), dict(row))
-        _write_json(self.failed_sellers_path, list(by_vendor_id.values()))
+        merge_failed_records(self.failed_sellers_path, [row], "vendor_id")
 
     def record_failed_mappings(self, rows: list[dict]) -> None:
-        failures = json.loads(self.failed_mappings_path.read_text(encoding="utf-8"))
-        by_vendor_item_id = {
-            str(item.get("vendor_item_id") or ""): item
-            for item in failures
-            if isinstance(item, dict) and item.get("vendor_item_id")
-        }
-        for row in rows:
-            vendor_item_id = str(row.get("vendor_item_id") or "")
-            if vendor_item_id:
-                by_vendor_item_id.setdefault(vendor_item_id, dict(row))
-        _write_json(self.failed_mappings_path, list(by_vendor_item_id.values()))
+        merge_failed_records(self.failed_mappings_path, rows, "vendor_item_id")
 
     def update_seller_summary(self, *, status: str) -> None:
         sellers = _read_csv(self.sellers_path, SELLER_FIELDS)

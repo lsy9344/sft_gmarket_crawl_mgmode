@@ -345,6 +345,37 @@ def record_block(
     _write_guard(guard, root)
 
 
+def guard_lock_state(root: Path | None = None) -> str:
+    """안전 장치 잠금 종류 — ""(없음)/"blocked"/"recovery_hold"/"invalid".
+
+    매니저의 사전 점검이 거부됐을 때 거부가 일시(간격 미달)인지 영구
+    (차단 잠금)인지 구분하는 용도다. 기록을 읽을 수 없으면 "invalid"
+    (신뢰 불가 — 사람이 확인할 때까지 실접속 없음). 파일이 없으면 빈
+    장부와 같으므로 ""를 돌려준다.
+    """
+    try:
+        guard = _read_guard(root)
+    except CanaryGuardError:
+        return "invalid"
+    if guard.get("blocked") is True:
+        return "blocked"
+    if guard.get("recovery_hold") is True:
+        return "recovery_hold"
+    return ""
+
+
+def guard_ramp_limit(root: Path | None = None) -> int | None:
+    """복구 확대 단계의 현재 허용량(아이템 수) — 확대 중이 아니면 None."""
+    try:
+        guard = _read_guard(root)
+    except CanaryGuardError:
+        return None
+    limit = guard.get("recovery_ramp_limit")
+    if isinstance(limit, int) and limit in RECOVERY_RAMP_LIMITS:
+        return limit
+    return None
+
+
 def authorize_block_recovery(
     root: Path | None = None,
     *,

@@ -39,8 +39,18 @@ from app.core.coupang.parallel_pipeline import (
     check_and_rotate_session,
     choose_action,
 )
-from app.core.coupang.patchright_canary import claim_live_attempt
-from app.core.coupang.patchright_top_sellers import run_top_seller_batch
+from app.core.coupang.patchright_canary import (
+    advance_recovery_ramp,
+    authorize_block_recovery,
+    authorize_recovery_resume,
+    claim_live_attempt,
+    guard_lock_state,
+    guard_ramp_limit,
+)
+from app.core.coupang.patchright_top_sellers import (
+    authorize_http_503_retry,
+    run_top_seller_batch,
+)
 from app.core.coupang.patchright_top_thousand import (
     MAX_LISTING_ITEMS,
     MAX_SESSION_PAGES,
@@ -52,11 +62,13 @@ from app.core.coupang.patchright_top_thousand import (
 __all__ = [
     "FAMILY_DEFINITION_FILENAME",
     "MAX_INSTANCES",
+    "SHARDS_PER_INSTANCE",
+    "STATE_FILENAME",
     "ParallelCoupangManager",
     "ParallelInstanceConfig",
     "ParallelRunConfig",
-    "STATE_FILENAME",
     "build_instances",
+    "split_family_into_shards",
 ]
 
 # 매니저 상태 영속 파일 — 실행 설정(output_dir) 안에 남긴다.
@@ -69,6 +81,10 @@ GUARD_LEDGER_FILENAME = "canary_guard.json"
 FAMILY_DEFINITION_FILENAME = "coupang_family.json"
 
 MAX_INSTANCES = 8  # 7-병렬 실측(10-04) 반영 — 여유 1까지 허용
+# 분할 모드에서 인스턴스 1개당 만들 샤드 수 — 2배로 쪼개면 먼저 끝난
+# 인스턴스가 대기 큐의 남은 샤드를 승계하는 기존 규칙이 그대로
+# 워크 스틸링 밸런서가 된다(느린/빠른 카테고리 불균형 흡수).
+SHARDS_PER_INSTANCE = 2
 
 # 인스턴스 상태 — waiting(다음 세션 대기)/collecting(세션 실행 중)/
 # blocked(차단으로 이 인스턴스 일정 중단)/complete(가족 완주 순간)/
@@ -138,9 +154,10 @@ class ParallelInstanceConfig:
     name: str         # 표시 이름(예: "인스턴스 1")
     line: str         # "direct"(직접 회선) | "decodo"(스티키 프록시)
     session_id: str   # decodo 시작 sid(예: "i20"). direct 는 빈 문자열.
-    # 인스턴스마다 십진 네임스페이스(i{N}0)를 쓴다 — 세션 자동 교체가
-    # 끝자리를 증가시키므로(i20→i21…) 다른 인스턴스의 sid와 절대 겹치지
-    # 않는다(2026-10-04 7-병렬 실측에서 i2→i3 회전이 인스턴스 3의
+    # 인스턴스마다 십진 네임스페이스(i{N}0~i{N}9)를 쓴다 — 세션 자동 교체가
+    # 끝자리만 증가시키고 9에서 0으로 되감아 순환하므로(next_session_id),
+    # 누적 회전이 쌓여도 다른 인스턴스의 sid와 절대 겹치지 않는다
+    # (2026-10-04 7-병렬 실측에서 회전 자리올림(i2→i3)이 인스턴스 3의
     # 기본 sid와 충돌해 동일 출구 IP를 공유한 사고의 재발 방지).
     state_root: Path  # 가드 장부 + 브라우저 프로필 루트(인스턴스 전용)
     output_root: Path  # 가족별 출력 하위 폴더들의 부모
@@ -148,7 +165,13 @@ class ParallelInstanceConfig:
 
 @dataclass
 class ParallelRunConfig:
-    """병렬 수집 실행 설정 — 사용자가 실행 대화상자에서 정하는 값."""
+    """병렬 수집 실행 설정 — 사용자가 실행 대화상자에서 정하는 값.
+
+    families: 가족 = [(카테고리id, 이름), ...]
+    shard_mode 가 True 면 families 는 단일 카테고리를 분할한 샤드 목록이고,
+    작업 폴더 접두사가 family_ 대신 shard_ 가 되며 전 샤드 완주 시
+    finalize() 가 루트 병합을 수행한다.
+    """
 
     families: list[list[tuple[str, str]]]  # 가족 = [(카테고리id, 이름), ...]
     # output_dir 을 기본값 있는 필드들보다 앞에 둔다(데이터클래스 제약:
@@ -158,6 +181,7 @@ class ParallelRunConfig:
     interval_minutes: int = 80  # 인스턴스별 세션 간격(분)
     listing_pages: int = 8      # 목록 단계 1세션 페이지 수(1~10)
     seller_limit: int = 130     # 판매자 단계 1세션 상품 수 상한
+    shard_mode: bool = False    # 단일 카테고리 분할 수집 여부
 
     def __post_init__(self) -> None:
         if not isinstance(self.instance_count, int) or isinstance(
@@ -183,6 +207,31 @@ class ParallelRunConfig:
             raise ValueError(
                 f"seller_limit는 1~{MAX_SESSION_PRODUCTS}이어야 합니다."
             )
+        if not isinstance(self.shard_mode, bool):
+            raise ValueError("shard_mode는 불리언이어야 합니다.")
+
+    def work_dir_name(self, family_index: int) -> str:
+        """작업 단위(가족/샤드) 출력 하위 폴더 이름."""
+        prefix = "shard" if self.shard_mode else "family"
+        return f"{prefix}_{family_index + 1:02d}"
+
+
+def split_family_into_shards(
+    family: list[tuple[str, str]], shard_count: int
+) -> list[list[tuple[str, str]]]:
+    """가족(루트+후손 카테고리)을 겹치지 않는 샤드로 나눈다.
+
+    카테고리 크기는 수집 전에 알 수 없으므로 라운드로빈 교차 분할로
+    편차를 흡수한다(트리 순서대로 index % N 번째 샤드에 하나씩 나눠
+    한쪽 샤드로 몰리지 않게 한다). 빈 샤드는 반환 목록에서 제외해
+    실행 설정 검증(비어 있지 않은 가족)을 그대로 통과하게 한다.
+    """
+    if shard_count < 1:
+        raise ValueError("shard_count는 1 이상이어야 합니다.")
+    shards: list[list[tuple[str, str]]] = [[] for _ in range(shard_count)]
+    for index, pair in enumerate(family):
+        shards[index % shard_count].append(tuple(pair))
+    return [shard for shard in shards if shard]
 
 
 def build_instances(
@@ -450,35 +499,123 @@ class ParallelCoupangManager:
                     return summary
 
             # (3) 가드 사전 점검 — 장부 사본으로 판정만 한다(모듈 docstring
-            # 참조). 거부(간격·차단·복구 잠금)면 세션을 실행하지 않고 연기.
-            allowed, reason = self._guard_probe(state, current)
+            # 참조). 복구 확대 단계(차단 회복 직후 60→180→600 아이템)가
+            # 살아 있으면 이번 세션 규모를 단계 허용량에 맞춰 줄인다.
+            ramp_limit = guard_ramp_limit(instance.state_root)
+            listing_pages, seller_limit = self._ramp_capped_limits(ramp_limit)
+            allowed, reason = self._guard_probe(state, current, listing_pages)
             if not allowed:
-                state.status = STATUS_WAITING
-                state.next_run_at = current + self._interval_seconds
+                lock = guard_lock_state(instance.state_root)
+                if lock in ("blocked", "recovery_hold"):
+                    # 영구 잠금 — 회복 조건(차단 1시간, 복구 확인 다음 날)이
+                    # 지났으면 잠금 해제를 자동 승인하고 다시 점검한다.
+                    approved, _approve_message = self._authorize_guard_recovery(
+                        state, lock, current
+                    )
+                    if approved:
+                        ramp_limit = guard_ramp_limit(instance.state_root)
+                        listing_pages, seller_limit = self._ramp_capped_limits(
+                            ramp_limit
+                        )
+                        allowed, reason = self._guard_probe(
+                            state, current, listing_pages
+                        )
+                if not allowed and guard_lock_state(instance.state_root) in (
+                    "blocked",
+                    "recovery_hold",
+                    "invalid",
+                ):
+                    # 잠금이 그대로면 연기해도 같은 거부가 돌아온다 — 이번
+                    # 실행에서는 인스턴스를 종료 상태로 둔다(무한 연기 방지).
+                    # 재시작하면 _restore_state 가 다시 심사를 맡긴다.
+                    state.status = STATUS_BLOCKED
+                    state.next_run_at = 0.0
+                    blocked_reason = (
+                        "안전 기록이 손상되어 실접속을 계속 거부합니다."
+                        if guard_lock_state(instance.state_root) == "invalid"
+                        else "차단 잠금이 풀리지 않아 이 인스턴스를 중단합니다."
+                        f" (재시작 시 회복 조건을 다시 심사합니다: {reason})"
+                    )
+                    self._emit(
+                        {
+                            "type": "blocked",
+                            "instance": instance.instance_id,
+                            "family_index": state.family_index,
+                            "reason": blocked_reason,
+                            "reference": "",
+                        }
+                    )
+                    self.persist_state()
+                    summary.update(
+                        status=state.status,
+                        result=_RESULT_BLOCKED,
+                        next_run_at=state.next_run_at,
+                    )
+                    return summary
+                if not allowed:
+                    # 잠금 없는 거부는 일시(간격 미달 등) — 다음 예정으로 연기.
+                    state.status = STATUS_WAITING
+                    state.next_run_at = current + self._interval_seconds
+                    self._emit(
+                        {
+                            "type": "log",
+                            "instance": instance.instance_id,
+                            "family_index": state.family_index,
+                            "message": f"안전 장치가 세션을 연기합니다: {reason}",
+                            "reason": reason,
+                            "next_run_at": state.next_run_at,
+                        }
+                    )
+                    self.persist_state()
+                    summary.update(
+                        status=state.status,
+                        result=_RESULT_GUARD_REFUSED,
+                        next_run_at=state.next_run_at,
+                    )
+                    return summary
+
+            # (4) 다음 작업 선택(네트워크 없음). HTTP 503 으로 멈춘 판매자
+            # 작업은 3시간이 지났으면 여기서 다시 열린다(재시도 1회 계약).
+            retried_503, _retry_note = authorize_http_503_retry(
+                output_dir, now=current
+            )
+            if retried_503:
                 self._emit(
                     {
                         "type": "log",
                         "instance": instance.instance_id,
                         "family_index": state.family_index,
-                        "message": f"안전 장치가 세션을 연기합니다: {reason}",
-                        "reason": reason,
-                        "next_run_at": state.next_run_at,
+                        "message": "HTTP 503 재시도 조건이 지나 판매자 작업을 다시 엽니다.",
                     }
                 )
-                self.persist_state()
-                summary.update(
-                    status=state.status,
-                    result=_RESULT_GUARD_REFUSED,
-                    next_run_at=state.next_run_at,
-                )
-                return summary
-
-            # (4) 다음 작업 선택(네트워크 없음).
             decision = choose_action(output_dir, family)
             action = str(decision.get("action") or "")
             summary["action"] = action
             if action == "halted":
                 reason_text = str(decision.get("reason") or "")
+                if "HTTP 503" in reason_text:
+                    # 503 재시도 대기 — 인스턴스를 멈추지 않고 다음 예정에
+                    # 다시 연다(3시간 경과 시 (4)에서 자동 재개).
+                    state.status = STATUS_WAITING
+                    state.next_run_at = current + self._interval_seconds
+                    self._emit(
+                        {
+                            "type": "log",
+                            "instance": instance.instance_id,
+                            "family_index": state.family_index,
+                            "message": (
+                                "HTTP 503 재시도 대기 — 다음 예정 시각에 다시 "
+                                "확인합니다."
+                            ),
+                        }
+                    )
+                    self.persist_state()
+                    summary.update(
+                        status=state.status,
+                        result="http_503_retry_wait",
+                        next_run_at=state.next_run_at,
+                    )
+                    return summary
                 state.status = STATUS_ERROR
                 self._emit(
                     {
@@ -520,10 +657,11 @@ class ParallelCoupangManager:
 
             # (5) 세션 실행 — 다른 인스턴스와 출력 폴더·가드 장부가 분리된다
             # (output_dir 는 가족 전용 하위 폴더, state_root 는 인스턴스 전용).
+            # 복구 확대 단계 중에는 (3)에서 줄인 규모로 실행한다.
             if action == "sellers":
                 result = run_top_seller_batch(
                     output_dir=output_dir,
-                    limit=self.config.seller_limit,
+                    limit=seller_limit,
                     control=self.control,
                     state_root=instance.state_root,
                     browser_profile_root=instance.state_root,
@@ -533,7 +671,7 @@ class ParallelCoupangManager:
             else:
                 result = run_top_pages(
                     output_dir=output_dir,
-                    page_count=self.config.listing_pages,
+                    page_count=listing_pages,
                     control=self.control,
                     on_event=self._runner_bridge(
                         instance.instance_id, state.family_index
@@ -545,8 +683,30 @@ class ParallelCoupangManager:
                 )
             summary["result"] = str(result.get("event") or "")
 
-            # (6) 결과 분류 — 각 인스턴스 상태로 반영.
+            # (6) 결과 분류 — 각 인스턴스 상태로 반영. 확대 단계 중 세션이
+            # 정상 끝났으면 한 단계 올린다(60→180→600→해제).
             self._apply_session_result(state, result, current)
+            if ramp_limit is not None and summary["result"] not in (
+                _RESULT_BLOCKED,
+                _RESULT_CANCELLED,
+                _RESULT_GUARD_REFUSED,
+                *_RESULT_FAILED,
+            ):
+                advanced, _advance_note = advance_recovery_ramp(
+                    ramp_limit, instance.state_root, now=current
+                )
+                if advanced:
+                    self._emit(
+                        {
+                            "type": "log",
+                            "instance": instance.instance_id,
+                            "family_index": state.family_index,
+                            "message": (
+                                f"복구 검증({ramp_limit}개)을 통과해 다음 단계로"
+                                " 확대합니다."
+                            ),
+                        }
+                    )
         except CancelledError:
             # 사용자 취소 — next_run_at 를 그대로 두고 대기로 복귀한다
             # (재개하면 같은 예정 시각에 이어서 진행).
@@ -606,6 +766,46 @@ class ParallelCoupangManager:
             for state in self.instances.values()
         )
 
+    def finalize(self) -> dict | None:
+        """분할 모드 전 샤드 완주 시 루트 병합을 수행한다.
+
+        조건: shard_mode 이고 모든 인스턴스가 done(차단/오류 없이)이며
+        병합 표시 파일(coupang_shard_merge.json)이 아직 없을 때. 그 외엔
+        병합하지 않고 None 을 돌려준다 — 차단/오류로 남은 샤드 데이터를
+        반쪽짜리 완성형으로 굳히지 않는다(재개해 마저 수집하면 된다).
+        워커는 스케줄 루프가 끝난 뒤 이걸 1회 호출한다.
+        """
+        if not self.config.shard_mode:
+            return None
+        if not all(
+            state.status == STATUS_DONE for state in self.instances.values()
+        ):
+            return None
+        from app.core.coupang.parallel_merge import (
+            MERGE_STATE_FILENAME,
+            merge_shard_outputs,
+        )
+
+        if (self.config.output_dir / MERGE_STATE_FILENAME).exists():
+            return None  # 이미 병합된 실행 — 다시 합치지 않는다
+        shard_dirs = [
+            self.config.output_dir / self.config.work_dir_name(index)
+            for index in range(len(self.config.families))
+        ]
+        self._emit(
+            {
+                "type": "log",
+                "instance": "",
+                "message": (
+                    f"전 샤드 완주 — {len(shard_dirs)}개 샤드 출력을 "
+                    "루트에서 병합합니다."
+                ),
+            }
+        )
+        summary = merge_shard_outputs(self.config.output_dir, shard_dirs)
+        self._emit({"type": "merge_complete", "instance": "", **summary})
+        return summary
+
     # ── 상태 영속 ──────────────────────────────────────────────────────
 
     def persist_state(self) -> None:
@@ -618,6 +818,7 @@ class ParallelCoupangManager:
             "version": 1,
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "interval_minutes": self.config.interval_minutes,
+            "shard_mode": self.config.shard_mode,
             "family_count": len(self.config.families),
             "pending_families": list(self.pending_families),
             "instances": [
@@ -699,11 +900,66 @@ class ParallelCoupangManager:
         return bridge
 
     def _family_output_dir(self, state: _InstanceState) -> Path:
-        """가족 전용 출력 폴더 — 가족 인덱스 기준 하위 폴더(인스턴스 공용 부모)."""
-        return state.config.output_root / f"family_{(state.family_index or 0) + 1:02d}"
+        """작업 단위 전용 출력 폴더 — 인덱스 기준 하위 폴더(인스턴스 공용 부모).
+
+        분할 모드(shard_mode)에서는 shard_NN, 가족 모드에서는 family_NN.
+        """
+        index = state.family_index if state.family_index is not None else 0
+        return state.config.output_root / self.config.work_dir_name(index)
+
+    def _ramp_capped_limits(self, ramp_limit: int | None) -> tuple[int, int]:
+        """복구 확대 단계에 맞춘 이번 세션 규모 — (목록 페이지, 판매자 상한).
+
+        확대 중이 아니면 설정값 그대로. 단계 허용량(60/180/600 아이템)을
+        넘지 않게 목록 페이지는 60아이템/쪽 기준으로, 판매자 상한은 아이템
+        수 기준으로 자른다(최소 1).
+        """
+        if ramp_limit is None:
+            return self.config.listing_pages, self.config.seller_limit
+        pages = max(
+            1, min(self.config.listing_pages, ramp_limit // MAX_LISTING_ITEMS)
+        )
+        sellers = max(1, min(self.config.seller_limit, ramp_limit))
+        return pages, sellers
+
+    def _authorize_guard_recovery(
+        self, state: _InstanceState, lock: str, current: float
+    ) -> tuple[bool, str]:
+        """잠긴 안전 장치의 회복 승인을 시도한다(차단 1시간·복구 확인 다음 날).
+
+        승인 조건은 장부 스스로 가린다(authorize_* 가 남은 시간을 검사).
+        승인되면 매니저는 곧바로 사전 점검을 다시 돈다 — 프로토타입의 다단계
+        수동 절차(소량 확인 → 대기 → 확대) 대신, 세션 간격(기본 80분)과 일일
+        상한이 회복 직후 과부하를 이미 막아준다.
+        """
+        instance = state.config
+        if lock == "recovery_hold":
+            approved, message = authorize_recovery_resume(
+                instance.state_root, now=current
+            )
+        else:
+            approved, message = authorize_block_recovery(
+                instance.state_root, now=current
+            )
+        if approved:
+            self._emit(
+                {
+                    "type": "log",
+                    "instance": instance.instance_id,
+                    "family_index": state.family_index,
+                    "message": (
+                        "차단 복구 조건이 지나 안전 장치 잠금을 해제했습니다"
+                        " — 이어서 수집합니다."
+                    ),
+                }
+            )
+        return approved, message
 
     def _guard_probe(
-        self, state: _InstanceState, now: float
+        self,
+        state: _InstanceState,
+        now: float,
+        listing_pages: int | None = None,
     ) -> tuple[bool, str]:
         """실접속 사전 점검 — 장부 사본에서 claim_live_attempt 를 돌려본다.
 
@@ -711,10 +967,10 @@ class ParallelCoupangManager:
         하므로, 매니저는 거부 여부만 판정한다. 예정 규모는 목록 단계 기준
         상한(listing_pages × 60)으로 잡는다 — 판매자 세션은 이보다 작게
         claim 하므로 목록 기준으로 통일해도 안전하다(사본이라 기록 안 남음).
+        pages 는 복구 확대 단계에서 줄인 세션 규모를 반영한다.
         """
-        planned_items = min(
-            self.config.listing_pages * MAX_LISTING_ITEMS, MAX_SESSION_PRODUCTS
-        )
+        pages = self.config.listing_pages if listing_pages is None else listing_pages
+        planned_items = min(pages * MAX_LISTING_ITEMS, MAX_SESSION_PRODUCTS)
         with tempfile.TemporaryDirectory(prefix="coupang-guard-probe-") as tmp:
             probe_root = Path(tmp)
             source = state.config.state_root / GUARD_LEDGER_FILENAME
@@ -724,7 +980,7 @@ class ParallelCoupangManager:
                 probe_root,
                 now=now,
                 planned_items=planned_items,
-                planned_pages=self.config.listing_pages,
+                planned_pages=pages,
             )
 
     def _apply_session_result(
@@ -895,6 +1151,11 @@ class ParallelCoupangManager:
         raw = self.load_state(self.config.output_dir / STATE_FILENAME)
         if raw is None:
             return False
+        # 배분 모드가 바뀌면 작업 폴더 접두사(family_/shard_)도 달라져
+        # 저장된 배분을 그대로 믿을 수 없다 — 새로 배분한다. 진행 데이터는
+        # 폴더 안에 있으므로 새 배분으로 이어서 확인된다.
+        if bool(raw.get("shard_mode")) != bool(self.config.shard_mode):
+            return False
         records = {}
         for record in raw.get("instances") or []:
             if isinstance(record, dict) and record.get("instance_id"):
@@ -903,11 +1164,19 @@ class ParallelCoupangManager:
             # 인스턴스 구성이 바뀌었다(강등 등) — 저장 상태를 믿을 수 없다.
             return False
         assigned: set[int] = set()
+        requeued_blocked = 0
         for instance in built:
             record = records[instance.instance_id]
             state = _InstanceState(config=instance)
             status = str(record.get("status") or "")
             state.status = status if status in _PERSIST_STATUSES else STATUS_WAITING
+            if state.status == STATUS_BLOCKED:
+                # 재시작하면 차단 인스턴스도 다시 심사받는다 — 회복 조건은
+                # 안전 장치 장부가 가린다(차단 1시간 잠금). 재시작 예약이
+                # 차단 상태로 굳어 아무것도 하지 않고 끝나는 일을 막는다.
+                state.status = STATUS_WAITING
+                state.next_run_at = 0.0
+                requeued_blocked += 1
             family_index = record.get("family_index")
             if (
                 isinstance(family_index, int)
@@ -934,14 +1203,13 @@ class ParallelCoupangManager:
             and 0 <= index < len(self.config.families)
             and index not in assigned
         ]
-        self._emit(
-            {
-                "type": "log",
-                "instance": "",
-                "message": (
-                    "저장된 병렬 상태를 찾아 가족 배분과 예정 시각을 "
-                    "복원했습니다."
-                ),
-            }
+        restored_note = (
+            "저장된 병렬 상태를 찾아 가족 배분과 예정 시각을 복원했습니다."
         )
+        if requeued_blocked:
+            restored_note += (
+                f" 차단 인스턴스 {requeued_blocked}개를 다시 심사합니다"
+                "(안전 장치가 회복 조건을 판정합니다)."
+            )
+        self._emit({"type": "log", "instance": "", "message": restored_note})
         return True

@@ -18,6 +18,7 @@ from pathlib import Path
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -45,7 +46,17 @@ from app.core.coupang.categories import (
     find_node,
     flatten_descendants,
 )
-from app.core.coupang.parallel_manager import MAX_INSTANCES
+from app.core.coupang.parallel_manager import (
+    MAX_INSTANCES,
+    SHARDS_PER_INSTANCE,
+    STATUS_BLOCKED,
+    STATUS_COLLECTING,
+    STATUS_COMPLETE,
+    STATUS_DONE,
+    STATUS_ERROR,
+    STATUS_WAITING,
+    split_family_into_shards,
+)
 from app.ui.widgets.collection_workspace import collection_workspace
 from app.workers.coupang_parallel_worker import SELLER_DISPLAY_FIELDS
 
@@ -64,14 +75,14 @@ COLUMN_LABELS = {
 ROLE_ID = 0x0100
 ROLE_NAME = 0x0101
 
-# 인스턴스 상태 문자 → 표시 문구(워커/매니저 상태 문자와 1:1).
+# 인스턴스 상태 문자 → 표시 문구(매니저 STATUS_* 상수와 1:1).
 _STATUS_TEXT = {
-    "waiting": "대기",
-    "collecting": "수집중",
-    "blocked": "차단",
-    "complete": "완주",
-    "done": "완료",
-    "error": "오류",
+    STATUS_WAITING: "대기",
+    STATUS_COLLECTING: "수집중",
+    STATUS_BLOCKED: "차단",
+    STATUS_COMPLETE: "완주",
+    STATUS_DONE: "완료",
+    STATUS_ERROR: "오류",
 }
 
 
@@ -86,6 +97,16 @@ def _instance_line_label(number: int) -> str:
     if number <= 1:
         return "직접"
     return f"Decodo i{number}"
+
+
+# 배분 방식 — 가족 모드(선택한 최상위 각각 = 1개 작업)와 분할 모드
+# (선택 1개 카테고리를 인스턴스 수만큼 샤드로 나눔). 콤보 인덱스와 1:1.
+MODE_FAMILY = "family"
+MODE_SHARD = "shard"
+_MODE_LABELS = (
+    ("가족별 배분 (선택한 최상위 각각 = 1개 작업)", MODE_FAMILY),
+    ("단일 카테고리 분할 (선택 1개를 인스턴스에 균등 분할)", MODE_SHARD),
+)
 
 
 class _InstanceCard(QWidget):
@@ -145,7 +166,7 @@ class _InstanceCard(QWidget):
 def _status_text(state_str: str, summary: dict) -> str:
     """상태 문자 + 요약 → 카드 상태 문구(대기는 다음 세션 시각 포함)."""
     base = _STATUS_TEXT.get(state_str, state_str or "대기")
-    if state_str == "waiting":
+    if state_str == STATUS_WAITING:
         next_run_at = summary.get("next_run_at")
         if isinstance(next_run_at, (int, float)) and next_run_at > 0:
             stamp = datetime.fromtimestamp(next_run_at).strftime("%H:%M")
@@ -181,12 +202,17 @@ class CoupangParallelPanel(QWidget):
         layout = QVBoxLayout(self)
 
         info = QLabel(
-            "카테고리 최상위 노드를 여러 개 선택하세요 — 선택한 각 노드와 모든 "
-            "하위가 1개 '가족'이 되고, 가족들을 인스턴스(직접 회선 1 + Decodo "
-            "스티키 회선 2~N)에 나누어 동시에 수집합니다. 인스턴스별로 세션 "
-            "간격(기본 80분)을 두고 안전 장치가 함께 동작합니다. 정지해도 "
-            "진행 상태가 출력 폴더에 저장되어 같은 폴더로 다시 시작하면 "
-            "이어서 수집됩니다."
+            "카테고리 최상위 노드를 여러 개 선택하세요 — '가족별 배분'이면 선택한 "
+            "각 노드와 모든 하위가 1개 '가족'이 되고, 가족들을 인스턴스(직접 "
+            "회선 1 + Decodo 스티키 회선 2~N)에 나누어 교대로 수집합니다(세션은 "
+            "순차 실행 — 한 시점에 브라우저 1개, 인스턴스별 간격으로 엇갈려 "
+            "돌아갑니다). '단일 카테고리 분할'이면 선택 1개 가족의 카테고리를 "
+            "인스턴스 수의 2배 샤드로 나눠 교대로 수집하고, 전 샤드 완주 시 "
+            "루트에서 하나로 병합해 최종 파일을 만듭니다. 인스턴스별로 세션 "
+            "간격(기본 80분)을 두고 안전 장치가 함께 동작합니다. 정지·비정상 "
+            "종료 후에도 진행 상태가 출력 폴더에 저장되어 같은 폴더로 다시 "
+            "시작하면 이어서 수집되고, 차단 인스턴스는 차단 1시간 뒤 재시작 시 "
+            "안전 장치가 복구를 자동 승인합니다."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -233,6 +259,12 @@ class CoupangParallelPanel(QWidget):
         # ── 실행 설정 ──────────────────────────────────────────────
         settings_group = QGroupBox("실행 설정")
         form = QFormLayout(settings_group)
+
+        self.mode_combo = QComboBox()
+        for label, _mode in _MODE_LABELS:
+            self.mode_combo.addItem(label)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        form.addRow("배분 방식:", self.mode_combo)
 
         self.spin_instances = QSpinBox()
         self.spin_instances.setRange(1, MAX_INSTANCES)
@@ -413,6 +445,50 @@ class CoupangParallelPanel(QWidget):
         return families
 
     def _on_tree_selection_changed(self) -> None:
+        self._refresh_selection_preview()
+
+    def _mode(self) -> str:
+        """현재 배분 방식 — 콤보 인덱스 → 모드 문자."""
+        index = self.mode_combo.currentIndex()
+        if 0 <= index < len(_MODE_LABELS):
+            return _MODE_LABELS[index][1]
+        return MODE_FAMILY
+
+    def _on_mode_changed(self) -> None:
+        self._refresh_selection_preview()
+
+    def _refresh_selection_preview(self) -> None:
+        """선택 → 선택 라벨·카드 가족명 갱신(모드별 안내)."""
+        if self._mode() == MODE_SHARD:
+            family = self._single_split_family()
+            if family is None:
+                self.selected_label.setText(
+                    "선택: 없음 (분할할 카테고리 최상위 1개를 선택)"
+                )
+                self._families = []
+                self._family_names = []
+                return
+            instance_count = self.spin_instances.value()
+            shard_count = self._shard_count_for(len(family), instance_count)
+            self._families = split_family_into_shards(family, shard_count)
+            self._family_names = [
+                f"샤드 {index + 1} (카테고리 {len(shard)}개)"
+                for index, shard in enumerate(self._families)
+            ]
+            if shard_count > len(self._families):
+                note = f" — 카테고리 {len(family)}개라 {len(self._families)}샤드로 축소"
+            elif len(family) < instance_count:
+                note = (
+                    f" — 카테고리 {len(family)}개라 최대 {len(family)} 인스턴스만"
+                    " 병렬로 동작합니다"
+                )
+            else:
+                note = ""
+            self.selected_label.setText(
+                f"선택: {family[0][1]} — 카테고리 {len(family):,}개를 "
+                f"{len(self._families)}개 샤드로 분할{note}"
+            )
+            return
         self._families = self._selected_families()
         self._family_names = [family[0][1] for family in self._families]
         if not self._families:
@@ -424,6 +500,31 @@ class CoupangParallelPanel(QWidget):
         self.selected_label.setText(
             f"선택: 가족 {len(self._families)}개 · 총 카테고리 {total_categories:,}개"
         )
+
+    def _single_split_family(self) -> list[tuple[str, str]] | None:
+        """분할 모드용 단일 가족 — 선택한 최상위 루트 1개 + 모든 후손.
+
+        루트가 여러 개 선택돼 있으면 첫 번째만 본다(나머지는 무시하고
+        라벨로 안내하는 대신, 시작 검증에서 다시 안내한다).
+        """
+        roots = self._family_root_items()
+        if not roots:
+            return None
+        item = roots[0]
+        node = find_node(self._groups, str(item.data(0, ROLE_ID)))
+        if node is None:
+            return None
+        family: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for target in (node, *flatten_descendants(node)):
+            if target.id and target.id not in seen:
+                seen.add(target.id)
+                family.append((target.id, target.name))
+        return family or None
+
+    def _shard_count_for(self, category_count: int, instance_count: int) -> int:
+        """분할 모드 샤드 수 — 인스턴스당 2배, 카테고리 수 이하로 자름."""
+        return max(1, min(category_count, instance_count * SHARDS_PER_INSTANCE))
 
     # ── 인스턴스 카드 ───────────────────────────────────────────────
 
@@ -481,7 +582,11 @@ class CoupangParallelPanel(QWidget):
         self.btn_stop.setEnabled(s == "running")
         self.btn_open_result.setEnabled(True)
         settings_enabled = startable
-        for widget in (self.spin_instances, self.output_dir_edit):
+        for widget in (
+            self.spin_instances,
+            self.output_dir_edit,
+            self.mode_combo,
+        ):
             widget.setEnabled(settings_enabled)
         self.btn_browse.setEnabled(settings_enabled)
         self.category_tree.setEnabled(settings_enabled)
@@ -507,7 +612,7 @@ class CoupangParallelPanel(QWidget):
                 self.btn_refresh_categories,
             ):
                 button.setEnabled(False)
-            for widget in (self.spin_instances, self.output_dir_edit):
+            for widget in (self.spin_instances, self.output_dir_edit, self.mode_combo):
                 widget.setEnabled(False)
             self.btn_browse.setEnabled(False)
             self.category_tree.setEnabled(False)
@@ -522,30 +627,54 @@ class CoupangParallelPanel(QWidget):
     def build_run_config(
         self, output_dir: Path | str | None = None, instance_count: int | None = None
     ):
-        """선택된 가족으로 ParallelRunConfig 를 만든다. 선택 없으면 None+안내."""
+        """선택된 가족/샤드로 ParallelRunConfig 를 만든다. 선택 없으면 None+안내."""
         # 지연 import — 패널 모듈 로드 시 코어 의존을 최소화한다.
         from app.core.coupang.parallel_manager import ParallelRunConfig
 
-        families = self._selected_families()
-        if not families:
-            self.append_log(
-                "[시작] 카테고리를 선택하세요 — 최상위 노드 각각이 1개 가족입니다."
+        shard_mode = self._mode() == MODE_SHARD
+        if shard_mode:
+            family = self._single_split_family()
+            if family is None:
+                self.append_log(
+                    "[시작] 분할 모드에서는 카테고리 최상위 노드 1개를 선택하세요."
+                )
+                return None
+            count = (
+                int(instance_count)
+                if instance_count is not None
+                else self.spin_instances.value()
             )
-            return None
+            shard_count = self._shard_count_for(len(family), count)
+            families = split_family_into_shards(family, shard_count)
+            if len(families) < count:
+                self.append_log(
+                    f"[시작] 카테고리 {len(family)}개라 인스턴스 {len(families)}개로"
+                    " 축소합니다 — 카테고리 단위 분할의 한계입니다(리프 카테고리는"
+                    " 더 나눌 수 없습니다)."
+                )
+                count = len(families)
+        else:
+            families = self._selected_families()
+            if not families:
+                self.append_log(
+                    "[시작] 카테고리를 선택하세요 — 최상위 노드 각각이 1개 가족입니다."
+                )
+                return None
+            count = (
+                int(instance_count)
+                if instance_count is not None
+                else self.spin_instances.value()
+            )
         chosen_dir = Path(output_dir) if output_dir else Path(self.output_dir())
         if not str(chosen_dir) or str(chosen_dir) == ".":
             self.append_log("[시작] 출력 폴더를 지정하세요.")
             return None
-        count = (
-            int(instance_count)
-            if instance_count is not None
-            else self.spin_instances.value()
-        )
         try:
             return ParallelRunConfig(
                 families=families,
                 output_dir=chosen_dir,
                 instance_count=count,
+                shard_mode=shard_mode,
             )
         except ValueError as error:
             self.append_log(f"[시작] 실행 설정이 올바르지 않습니다: {error}")
@@ -566,6 +695,7 @@ class CoupangParallelPanel(QWidget):
                 "instance_count": config.instance_count,
                 "family_count": len(config.families),
                 "interval_minutes": config.interval_minutes,
+                "shard_mode": config.shard_mode,
             }
         )
 
@@ -587,6 +717,7 @@ class CoupangParallelPanel(QWidget):
 
     def _on_instance_count_changed(self, count: int) -> None:
         self.set_instance_count_preview(count)
+        self._refresh_selection_preview()  # 샤드 수 미리보기 갱신
         self._update_decodo_hint()
 
     def _decodo_ready(self) -> bool:

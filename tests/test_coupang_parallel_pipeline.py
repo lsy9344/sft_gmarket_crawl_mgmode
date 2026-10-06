@@ -416,6 +416,94 @@ class ChooseActionHaltTest(unittest.TestCase):
             self.assertEqual(decision["action"], "halted")
             self.assertIn("ValueError", decision["reason"])
 
+
+class ChooseActionResumeTest(unittest.TestCase):
+    """끊긴 실행(control cancelled/in_progress)은 이어서 수집한다.
+
+    2026-10-06 검토 반영 — 사용자 정지(halt→cancelled)와 크래시 잔존
+    (in_progress)이 예약을 영구 멈추던 halted 브릭을 고정한다. halted 는
+    데이터 사유(실패 매핑·503·검증 실패)만 남긴다.
+    """
+
+    def _write_control(self, output_dir: Path, status: str) -> None:
+        (output_dir / "top_seller_control.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "status": status,
+                    "updated_at": "2026-10-06 09:00:00",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_cancelled_control_resumes_sellers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            self._write_control(output_dir, "cancelled")
+            decision = choose_action(output_dir)
+            self.assertEqual(decision["action"], "sellers")
+
+    def test_stale_in_progress_control_resumes_sellers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            self._write_control(output_dir, "in_progress")
+            decision = choose_action(output_dir)
+            self.assertEqual(decision["action"], "sellers")
+
+    def test_unconfirmed_marker_row_is_requeued_before_decision(self):
+        """요청 표시만 남은 판매자는 대기열로 되돌아가 다시 수집 대상이 된다.
+
+        크래시 직전 판매자의 결과 행이 '요청 시작' 표시뿐이면, 표시를
+        되돌리지 않으면 completed 로 오판해 그 판매자를 영구 유실한다.
+        """
+        from app.core.coupang.patchright_full_sellers import _seller_row
+        from app.core.coupang.store_files import UNCONFIRMED_SELLER_ERROR
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            # 크래시 직전 상태 — 매핑은 저장됐고 결과 행은 요청 표시만 있다.
+            store = TopSellerStore(output_dir)
+            store.merge_product_sellers(
+                [
+                    {
+                        "product_id": "10",
+                        "item_id": "20",
+                        "vendor_item_id": "viid-1",
+                        "vendor_id": "A00001",
+                        "mapped_at": "2026-10-06 09:00:00",
+                    }
+                ]
+            )
+            store.merge_sellers(
+                [
+                    _seller_row(
+                        "A00001",
+                        {
+                            "vendorId": "A00001",
+                            "displayName": "스토어",
+                            "productId": "10",
+                            "itemId": "20",
+                            "vendorItemId": "viid-1",
+                        },
+                        None,
+                        UNCONFIRMED_SELLER_ERROR,
+                    )
+                ]
+            )
+            decision = choose_action(output_dir)
+            self.assertEqual(decision["action"], "sellers")
+            # 표시 행은 실제로 대기열로 되돌아갔다(파일에서 사라졌다).
+            with (output_dir / "top_sellers.csv").open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [])
+
     def test_family_state_with_categories_continues_or_completes(self):
         """같은 B 상태라도 가족을 함께 넘기면 정상 동작한다."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -532,14 +620,31 @@ class ReadProxySessionStateTest(unittest.TestCase):
 
 
 class NextSessionIdTest(unittest.TestCase):
-    """sid 교체 규칙 — 끝의 연속 숫자 +1, 자릿수 보존, 숫자 없으면 2."""
+    """sid 교체 규칙 — 끝자리 +1, 9에서 0으로 순환(자리올림 금지).
+
+    자리올림(i29→i30)이 인스턴스 네임스페이스를 침범해 2026-10-04
+    7-병렬 실측에서 동일 출구 IP 충돌을 일으켰다 — 교체는 십진
+    네임스페이스(i{N}0~i{N}9) 안에서만 순환한다.
+    """
 
     def test_numeric_tail_increments(self):
         self.assertEqual(next_session_id("b03"), "b04")
+        self.assertEqual(next_session_id("i20"), "i21")
 
-    def test_digit_width_is_preserved(self):
-        self.assertEqual(next_session_id("b09"), "b10")
-        self.assertEqual(next_session_id("c99"), "c100")
+    def test_trailing_nine_wraps_without_carry(self):
+        self.assertEqual(next_session_id("b09"), "b00")
+        self.assertEqual(next_session_id("i29"), "i20")
+        self.assertEqual(next_session_id("c99"), "c90")
+
+    def test_wrap_keeps_rotation_inside_namespace(self):
+        """누적 회전이 아무리 쌓여도 인스턴스 2의 sid는 i2x 에 머문다."""
+        sid = "i20"
+        seen = {sid}
+        for _ in range(30):
+            sid = next_session_id(sid)
+            seen.add(sid)
+        self.assertTrue(seen <= {f"i2{digit}" for digit in range(10)})
+        self.assertEqual(len(seen), 10)
 
     def test_non_numeric_tail_appends_two(self):
         self.assertEqual(next_session_id("bx"), "bx2")

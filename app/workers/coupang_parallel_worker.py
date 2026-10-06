@@ -99,6 +99,8 @@ class CoupangParallelWorker(QThread):
     def run(self) -> None:
         cancelled = False
         error_text: str | None = None
+        merge_summary: dict | None = None
+        merge_error: str | None = None
         try:
             if self.manager is None:
                 self.manager = ParallelCoupangManager(
@@ -127,6 +129,17 @@ class CoupangParallelWorker(QThread):
                         wait_seconds, poll_interval=_SLEEP_POLL_SECONDS
                     )
                 self.manager.run_due(time.time())
+            # 스케줄 루프 정상 종료 — 분할 모드면 전 샤드 병합(1회).
+            # 취소/오류 종료는 병합하지 않는다(데이터가 반쪽이라 재개 대상).
+            if not cancelled and error_text is None:
+                try:
+                    merge_summary = self.manager.finalize()
+                except Exception as error:  # noqa: BLE001 - 병합 실패는 요약에
+                    merge_error = f"{type(error).__name__}: {error}"
+                    self.log_message.emit(traceback.format_exc())
+                    self.warning_message.emit(
+                        f"샤드 출력 병합에 실패했습니다: {merge_error}"
+                    )
         except CancelledError:
             cancelled = True
             self.log_message.emit(
@@ -141,7 +154,12 @@ class CoupangParallelWorker(QThread):
             )
         finally:
             self.finished_parallel.emit(
-                self._final_summary(cancelled=cancelled, error=error_text)
+                self._final_summary(
+                    cancelled=cancelled,
+                    error=error_text,
+                    merge=merge_summary,
+                    merge_error=merge_error,
+                )
             )
 
     def _seconds_until_next_due(self, now: float) -> float:
@@ -216,7 +234,19 @@ class CoupangParallelWorker(QThread):
             self.warning_message.emit(
                 str(event.get("message") or "인스턴스 구성이 강등되었습니다.")
             )
+        elif event_type == "merge_complete":
+            self._on_merge_complete_event(event)
         # all_done 등 나머지 — 스케줄 루프가 종료 조건으로 처리한다.
+
+    def _on_merge_complete_event(self, event: dict) -> None:
+        """분할 모드 병합 완료 — 최종 산출 파일 안내."""
+        finals = event.get("finals") or {}
+        finals_text = ", ".join(str(path) for path in finals.values())
+        self.log_message.emit(
+            f"샤드 병합 완료 — 상품 {int(event.get('products') or 0):,}개, "
+            f"판매자 {int(event.get('sellers') or 0):,}명. "
+            f"최종 파일: {finals_text}"
+        )
 
     def _on_progress_event(self, instance_id: str, event: dict) -> None:
         """진행 이벤트 — 세션 요약(result 있음)만 상태 갱신·판매자 조사."""
@@ -301,10 +331,10 @@ class CoupangParallelWorker(QThread):
             self._emit_new_sellers(family_index)
 
     def _emit_new_sellers(self, family_index: int) -> None:
-        """가족 폴더의 top_sellers.csv 에서 아직 방출하지 않은 saved 행만 보낸다."""
+        """작업 폴더의 top_sellers.csv 에서 아직 방출하지 않은 saved 행만 보낸다."""
         path = (
             self.run_config.output_dir
-            / f"family_{family_index + 1:02d}"
+            / self.run_config.work_dir_name(family_index)
             / _SELLERS_FILENAME
         )
         try:
@@ -329,7 +359,14 @@ class CoupangParallelWorker(QThread):
 
     # ── 최종 요약 ───────────────────────────────────────────────────
 
-    def _final_summary(self, *, cancelled: bool, error: str | None) -> dict:
+    def _final_summary(
+        self,
+        *,
+        cancelled: bool,
+        error: str | None,
+        merge: dict | None = None,
+        merge_error: str | None = None,
+    ) -> dict:
         """인스턴스별 최종 상태·누적을 모은 요약 dict — 종료 코드 의존 없음."""
         instances: list[dict] = []
         blocked: list[str] = []
@@ -364,6 +401,9 @@ class CoupangParallelWorker(QThread):
             "output_dir": str(self.run_config.output_dir),
             "family_count": len(self.run_config.families),
             "instance_count": self.run_config.instance_count,
+            "shard_mode": bool(self.run_config.shard_mode),
+            "merge": merge,
+            "merge_error": merge_error,
             "instances": instances,
             "blocked_instances": blocked,
             "error_instances": errors,

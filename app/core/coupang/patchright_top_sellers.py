@@ -27,9 +27,6 @@ from app.core.coupang.patchright_canary import (
 from app.core.coupang.patchright_full_fruit import (
     PRODUCT_SELLER_FIELDS,
     SELLER_FIELDS,
-    _read_csv,
-    _write_csv,
-    _write_json,
 )
 from app.core.coupang.patchright_full_sellers import (
     MAPPING_BATCH_SIZE,
@@ -38,7 +35,7 @@ from app.core.coupang.patchright_full_sellers import (
     SELLER_DELAY_MS,
     _mapping_rows,
     _seller_row,
-    _vendor_from_saved_mapping,
+    seller_work_queue,
 )
 from app.core.coupang.patchright_sample import (
     FETCH_STORE_REVIEW_JS,
@@ -53,6 +50,20 @@ from app.core.coupang.patchright_sample import (
 from app.core.coupang.patchright_top_thousand import (
     PRODUCT_FIELDS,
     TopThousandStore,
+)
+from app.core.coupang.store_files import (
+    UNCONFIRMED_SELLER_ERROR,
+    clear_unconfirmed_sellers,
+    item_key,
+    merge_by_key,
+    merge_failed_records,
+    read_csv,
+    saved_supersedes_failed,
+    seller_key,
+    validate_mapping_row,
+    validate_seller_row,
+    write_csv,
+    write_json,
 )
 
 TOP_SELLER_CONTROL_FILENAME = "top_seller_control.json"
@@ -77,90 +88,62 @@ class TopSellerStore:
 
     def ensure_files(self) -> None:
         if not self.sellers_path.exists():
-            _write_csv(self.sellers_path, SELLER_FIELDS, [])
+            write_csv(self.sellers_path, SELLER_FIELDS, [])
         if not self.product_seller_path.exists():
-            _write_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS, [])
+            write_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS, [])
         if not self.failed_sellers_path.exists():
-            _write_json(self.failed_sellers_path, [])
+            write_json(self.failed_sellers_path, [])
         if not self.failed_mappings_path.exists():
-            _write_json(self.failed_mappings_path, [])
+            write_json(self.failed_mappings_path, [])
 
     def validate(self) -> None:
-        sellers = _read_csv(self.sellers_path, SELLER_FIELDS)
+        sellers = read_csv(self.sellers_path, SELLER_FIELDS)
         if any(
             row.get("status") not in ("saved", "no_public_info", "failed")
             for row in sellers
         ):
             raise ValueError(f"{self.sellers_path.name} 판매자 상태가 잘못됐습니다.")
-        _read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
+        read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
         for path in (self.failed_sellers_path, self.failed_mappings_path):
             try:
                 value = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as error:
-                raise ValueError(  # noqa: TRY004 - 저장 파일 형식 오류 계약
+                raise ValueError(
                     f"{path.name}을 읽지 못했습니다: {error}"
                 ) from error
             if not isinstance(value, list):
-                raise ValueError(f"{path.name} 형식이 잘못됐습니다.")
+                raise ValueError(  # noqa: TRY004 - 저장 파일 형식 오류 계약
+                    f"{path.name} 형식이 잘못됐습니다."
+                )
 
     def merge_sellers(self, rows: list[dict]) -> tuple[int, int]:
-        existing = _read_csv(self.sellers_path, SELLER_FIELDS)
-        by_vendor_id = {row["vendor_id"]: row for row in existing if row["vendor_id"]}
-        before = len(by_vendor_id)
-        for row in rows:
-            vendor_id = str(row.get("vendor_id") or "")
-            status = row.get("status")
-            if not vendor_id or status not in ("saved", "no_public_info", "failed"):
-                raise ValueError("판매자 ID 또는 처리 상태가 잘못됐습니다.")
-            previous = by_vendor_id.get(vendor_id)
-            if previous is None or (
-                previous.get("status") == "failed" and status != "failed"
-            ):
-                by_vendor_id[vendor_id] = row
-        merged = list(by_vendor_id.values())
-        _write_csv(self.sellers_path, SELLER_FIELDS, merged)
-        return len(merged), len(merged) - before
+        return merge_by_key(
+            self.sellers_path,
+            SELLER_FIELDS,
+            rows,
+            key_of=seller_key,
+            validate=validate_seller_row,
+            should_replace=saved_supersedes_failed,
+        )
 
     def merge_product_sellers(self, rows: list[dict]) -> tuple[int, int]:
-        existing = _read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
-        by_vendor_item_id = {
-            row["vendor_item_id"]: row
-            for row in existing
-            if row["vendor_item_id"]
-        }
-        before = len(by_vendor_item_id)
-        for row in rows:
-            vendor_item_id = str(row.get("vendor_item_id") or "")
-            vendor_id = str(row.get("vendor_id") or "")
-            if not vendor_item_id or not vendor_id:
-                raise ValueError("상품-판매자 연결 ID가 잘못됐습니다.")
-            by_vendor_item_id.setdefault(vendor_item_id, row)
-        merged = list(by_vendor_item_id.values())
-        _write_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS, merged)
-        return len(merged), len(merged) - before
+        return merge_by_key(
+            self.product_seller_path,
+            PRODUCT_SELLER_FIELDS,
+            rows,
+            key_of=item_key,
+            validate=validate_mapping_row,
+        )
 
     def record_failed_seller(self, row: dict) -> None:
-        failures = json.loads(self.failed_sellers_path.read_text(encoding="utf-8"))
-        by_vendor_id = {
-            str(item.get("vendor_id") or ""): item
-            for item in failures
-            if isinstance(item, dict) and item.get("vendor_id")
-        }
-        by_vendor_id.setdefault(str(row["vendor_id"]), dict(row))
-        _write_json(self.failed_sellers_path, list(by_vendor_id.values()))
+        merge_failed_records(self.failed_sellers_path, [row], "vendor_id")
 
     def record_failed_mappings(self, rows: list[dict]) -> None:
-        failures = json.loads(self.failed_mappings_path.read_text(encoding="utf-8"))
-        by_vendor_item_id = {
-            str(item.get("vendor_item_id") or ""): item
-            for item in failures
-            if isinstance(item, dict) and item.get("vendor_item_id")
-        }
-        for row in rows:
-            vendor_item_id = str(row.get("vendor_item_id") or "")
-            if vendor_item_id:
-                by_vendor_item_id.setdefault(vendor_item_id, dict(row))
-        _write_json(self.failed_mappings_path, list(by_vendor_item_id.values()))
+        merge_failed_records(self.failed_mappings_path, rows, "vendor_item_id")
+
+    def requeue_unconfirmed_sellers(self) -> int:
+        """요청 표시만 남은 판매자 행을 대기열로 되돌린다(반환: 되돌린 수)."""
+        return clear_unconfirmed_sellers(self.sellers_path, SELLER_FIELDS)
 
 
 def _control_path(output_dir: Path) -> Path:
@@ -168,45 +151,8 @@ def _control_path(output_dir: Path) -> Path:
 
 
 def _work(store: TopSellerStore, limit: int) -> tuple[list[tuple[str, dict]], list[dict]]:
-    """이번 세션에 처리할 (판매자, 상품) 대기열을 고른다.
-
-    과일 단계의 _work와 같은 규칙이지만 상품 파일이 12열(top_products.csv)
-    스키마라서 여기서 다시 읽는다.
-    """
-    products = _read_csv(store.products_path, PRODUCT_FIELDS)
-    mappings = _read_csv(store.product_seller_path, PRODUCT_SELLER_FIELDS)
-    sellers = _read_csv(store.sellers_path, SELLER_FIELDS)
-    failed_mappings = json.loads(store.failed_mappings_path.read_text(encoding="utf-8"))
-    products_by_id = {row["vendor_item_id"]: row for row in products}
-    completed_vendors = {row["vendor_id"] for row in sellers if row["vendor_id"]}
-    failed_mapping_ids = {
-        str(row.get("vendor_item_id") or "")
-        for row in failed_mappings
-        if isinstance(row, dict)
-    }
-
-    pending: list[tuple[str, dict]] = []
-    pending_ids: set[str] = set()
-    for mapping in mappings:
-        vendor_id = mapping["vendor_id"]
-        if vendor_id in completed_vendors or vendor_id in pending_ids:
-            continue
-        pending.append(
-            (vendor_id, _vendor_from_saved_mapping(mapping, products_by_id))
-        )
-        pending_ids.add(vendor_id)
-        if len(pending) == limit:
-            return pending, []
-
-    mapped_item_ids = {row["vendor_item_id"] for row in mappings}
-    remaining = limit - len(pending)
-    unmapped = [
-        row
-        for row in products
-        if row["vendor_item_id"] not in mapped_item_ids
-        and row["vendor_item_id"] not in failed_mapping_ids
-    ][:remaining]
-    return pending, unmapped
+    """이번 세션에 처리할 (판매자, 상품) 대기열 — 공용 규칙의 상품 스키마만 다른 래퍼."""
+    return seller_work_queue(store, PRODUCT_FIELDS, limit)
 
 
 def read_seller_control(output_dir: Path) -> dict:
@@ -216,10 +162,13 @@ def read_seller_control(output_dir: Path) -> dict:
         return {"version": 1, "status": "ready"}
     except (OSError, ValueError) as error:
         raise ValueError(f"판매자 실행 기록을 읽지 못했습니다: {error}") from error
+    # cancelled/in_progress 는 끊긴 실행의 흔적이다 — 다음 실행이 이어서
+    # 수집한다(자동 재개). halted 만 데이터 사유로 예약을 멈춘다.
     if (
         not isinstance(value, dict)
         or value.get("version") != 1
-        or value.get("status") not in ("ready", "in_progress", "halted", "completed")
+        or value.get("status")
+        not in ("ready", "in_progress", "cancelled", "halted", "completed")
     ):
         raise ValueError("판매자 실행 기록 형식이 잘못됐습니다.")
     return value
@@ -227,7 +176,7 @@ def read_seller_control(output_dir: Path) -> dict:
 
 def _save_control(output_dir: Path, status: str, **changes: object) -> None:
     value = {"version": 1, "status": status, "updated_at": _now_text(), **changes}
-    _write_json(_control_path(output_dir), value)
+    write_json(_control_path(output_dir), value)
 
 
 def authorize_http_503_retry(
@@ -303,8 +252,8 @@ def build_seller_final(output_dir: Path) -> Path:
     카테고리 상품으로 연결됐는지 소속 카테고리 목록과 상품 수를 함께 남긴다.
     """
     store = TopSellerStore(output_dir)
-    products = _read_csv(store.products_path, PRODUCT_FIELDS)
-    mappings = _read_csv(store.product_seller_path, PRODUCT_SELLER_FIELDS)
+    products = read_csv(store.products_path, PRODUCT_FIELDS)
+    mappings = read_csv(store.product_seller_path, PRODUCT_SELLER_FIELDS)
     products_by_item = {row["vendor_item_id"]: row for row in products}
     categories: dict[str, list[str]] = {}
     product_counts: dict[str, int] = {}
@@ -318,7 +267,7 @@ def build_seller_final(output_dir: Path) -> Path:
         product_counts[vendor_id] = product_counts.get(vendor_id, 0) + 1
 
     rows = []
-    for seller in _read_csv(store.sellers_path, SELLER_FIELDS):
+    for seller in read_csv(store.sellers_path, SELLER_FIELDS):
         if seller.get("status") != "saved":
             continue
         row = {
@@ -333,7 +282,7 @@ def build_seller_final(output_dir: Path) -> Path:
         rows.append(row)
     rows.sort(key=lambda row: -int(row["평가수"] or 0))
     path = output_dir / f"coupang_판매자_{len(rows)}명.csv"
-    _write_csv(path, FINAL_SELLER_FIELDS, rows)
+    write_csv(path, FINAL_SELLER_FIELDS, rows)
     return path
 
 
@@ -357,12 +306,18 @@ def run_top_seller_batch(
     store.ensure_files()
     store.validate()
     current_control = read_seller_control(output_dir)
-    if current_control["status"] in ("in_progress", "halted"):
+    if current_control["status"] == "halted":
+        # 데이터 사유(실패 매핑·503·검증 실패 등)로 남은 중단만 막는다.
+        # cancelled/in_progress 는 끊긴 실행 — 아래에서 마커를 되돌리고 이어서.
         return {
             "event": "seller_halted",
             "reason": current_control.get("reason")
             or "앞선 판매자 작업이 완료되지 않았습니다.",
         }
+
+    # 끊긴 실행의 흔적(in_progress/cancelled)이면 요청 표시만 남은 판매자를
+    # 대기열로 되돌린다 — 그래야 이어하기가 그 판매자를 다시 수집한다.
+    requeued = store.requeue_unconfirmed_sellers()
 
     pending, unmapped = _work(store, limit)
     planned_items = len(pending) + len(unmapped)
@@ -395,7 +350,7 @@ def run_top_seller_batch(
     factory = browser_scope_factory or patchright_browser
     processed_vendors = {
         row["vendor_id"]
-        for row in _read_csv(store.sellers_path, SELLER_FIELDS)
+        for row in read_csv(store.sellers_path, SELLER_FIELDS)
         if row["vendor_id"]
     }
     mapped_products = 0
@@ -407,6 +362,9 @@ def run_top_seller_batch(
         if on_event is not None:
             on_event(snapshot)
         return snapshot
+
+    if requeued:
+        emit("sellers_requeued", requeued_sellers=requeued)
 
     def halt(event: str, reason_text: str, **changes: object) -> dict:
         _save_control(output_dir, "halted", reason=reason_text, event=event)
@@ -455,12 +413,13 @@ def run_top_seller_batch(
                     return None
                 _checkpoint(control)
                 # 요청 직전에 먼저 표시한다. 응답과 저장 사이에 프로세스가 꺼져도
-                # 다음 실행은 같은 판매자에게 다시 요청하지 않는다.
+                # 다음 실행은 같은 판매자에게 다시 요청하지 않는다(세션 시작
+                # 시 표시 행을 대기열로 되돌리므로 끊긴 판매자는 다시 수집).
                 attempted = _seller_row(
                     vendor_id,
                     vendor,
                     None,
-                    "판매자정보 요청 시작; 결과 미확정",
+                    UNCONFIRMED_SELLER_ERROR,
                 )
                 store.merge_sellers([attempted])
                 state["api_calls"] += 1
@@ -578,6 +537,14 @@ def run_top_seller_batch(
             failed_at="business_info",
         )
     except CancelledError:
-        return halt("cancelled", "사용자가 판매자 작업을 취소했습니다.")
+        # 사용자 정지 — control 을 cancelled 로 남겨 다음 실행이 이어서
+        # 수집하게 한다(halted 가 아니므로 예약이 멈추지 않는다).
+        _save_control(
+            output_dir,
+            "cancelled",
+            reason="사용자가 판매자 작업을 취소했습니다.",
+            event="cancelled",
+        )
+        return emit("cancelled", reason="사용자가 판매자 작업을 취소했습니다.")
     except Exception as error:  # noqa: BLE001 - 브라우저 경계 실패는 저장 후 중단
         return halt("failed", f"{type(error).__name__}: {error}")

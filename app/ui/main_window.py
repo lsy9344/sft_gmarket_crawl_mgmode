@@ -2164,10 +2164,11 @@ class MainWindow(QMainWindow):
             1 for r in records if r.get("status") in ("blocked", "error")
         )
         pending = len(saved_state.get("pending_families") or [])
+        unit = "샤드" if saved_state.get("shard_mode") else "가족"
         return (
             f"인스턴스 {len(records)}개 (완료 {done}, 차단/오류 {stopped}), "
-            f"대기 가족 {pending}개\n"
-            "이어서 수집하면 가족 배분·다음 세션 예정 시각·누적이 복원됩니다."
+            f"대기 {unit} {pending}개\n"
+            f"이어서 수집하면 {unit} 배분·다음 세션 예정 시각·누적이 복원됩니다."
         )
 
     def on_parallel_stop(self) -> None:
@@ -2206,11 +2207,22 @@ class MainWindow(QMainWindow):
             f"[{head}] 3P 상품 {total_products:,}개 · 확보 판매자 {total_sellers:,}명 "
             f"(인스턴스 {len(instances)}개, 결과 폴더: {summary.get('output_dir')})"
         )
+        merge = summary.get("merge") if isinstance(summary.get("merge"), dict) else None
+        if merge:
+            panel.append_log(
+                f"[샤드 병합] 상품 {int(merge.get('products') or 0):,}개 · "
+                f"판매자 {int(merge.get('sellers') or 0):,}명 · "
+                f"샤드 {int(merge.get('shard_count') or 0)}개 — 최종 파일: "
+                + ", ".join(str(path) for path in (merge.get("finals") or {}).values())
+            )
+        elif summary.get("merge_error"):
+            panel.append_log(f"[샤드 병합 실패] {summary['merge_error']}")
         for record in instances:
             if record.get("status") in ("blocked", "error"):
                 family_index = record.get("family_index")
+                unit = "샤드" if summary.get("shard_mode") else "가족"
                 family_text = (
-                    f"가족 {int(family_index) + 1}" if family_index is not None else "가족 없음"
+                    f"{unit} {int(family_index) + 1}" if family_index is not None else f"{unit} 없음"
                 )
                 panel.append_log(
                     f"  인스턴스 {record.get('instance_id')}: "
@@ -2227,8 +2239,9 @@ class MainWindow(QMainWindow):
                 self,
                 "Coupang 병렬 수집 종료 — 차단 인스턴스 있음",
                 f"차단된 인스턴스: {', '.join(blocked)}\n\n"
-                "충분한 쿨다운 뒤 같은 출력 폴더로 다시 시작하면 저장된 지점부터 "
-                "이어서 수집됩니다.",
+                "차단 후 1시간이 지나 같은 출력 폴더로 다시 시작하면 안전 장치가"
+                " 복구를 자동 승인해 이어서 수집합니다(1시간 전이면 재시작 시 "
+                "곧바로 차단 상태로 끝납니다).",
             )
         self._show_status(f"{head} — 판매자 {total_sellers:,}명")
 

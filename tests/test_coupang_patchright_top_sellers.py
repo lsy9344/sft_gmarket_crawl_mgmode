@@ -16,6 +16,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 
+from app.core.base import CancelledError, Control
 from app.core.coupang.parallel_pipeline import choose_action
 from app.core.coupang.patchright_sample import (
     FETCH_STORE_REVIEW_JS,
@@ -320,6 +321,89 @@ class TopSellersTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["판매자ID"], "A00001")
             self.assertEqual(path.name, "coupang_판매자_1명.csv")
+
+
+class CancelResumeTest(unittest.TestCase):
+    """사용자 정지·크래시 이후 이어하기 — 2026-10-06 검토 반영.
+
+    정지는 control 을 cancelled 로 남긴다(halted 아님) — 같은 출력 폴더의
+    다음 실행이 멈추지 않고 이어서 수집한다.
+    """
+
+    def _age_guard(self, state_root: Path) -> None:
+        """취소 직전 세션이 남긴 가드 예약을 2시간 전으로 되돌린다."""
+        path = state_root / "canary_guard.json"
+        guard = json.loads(path.read_text(encoding="utf-8"))
+        guard["last_attempt_ts"] = time.time() - 2 * 60 * 60
+        path.write_text(json.dumps(guard), encoding="utf-8")
+
+    def test_cancel_leaves_resumable_control_and_next_run_completes(self):
+        page = _Page(
+            vendors_by_item={"viid-1": "A00001"},
+            sellers_by_id={"A00001": _seller_payload()},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            control = Control()
+            control.request_cancel()
+            result = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                control=control,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page),
+            )
+            self.assertEqual(result["event"], "cancelled")
+            control_data = json.loads(
+                (output_dir / "top_seller_control.json").read_text("utf-8")
+            )
+            self.assertEqual(control_data["status"], "cancelled")
+            # 다음 실행은 halted 가 아니므로 멈추지 않고 완주한다.
+            self.assertEqual(choose_action(output_dir)["action"], "sellers")
+            self._age_guard(root / "guard")
+            resumed = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page),
+            )
+            self.assertEqual(resumed["event"], "seller_collection_complete")
+            sellers = _read_rows(output_dir / "top_sellers.csv")
+            self.assertEqual(
+                [(row["vendor_id"], row["status"]) for row in sellers],
+                [("A00001", "saved")],
+            )
+
+    def test_stale_in_progress_control_does_not_block_next_run(self):
+        """크래시가 남긴 in_progress 도 다음 실행을 막지 않는다."""
+        page = _Page(
+            vendors_by_item={"viid-1": "A00001"},
+            sellers_by_id={"A00001": _seller_payload()},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            (output_dir / "top_seller_control.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "status": "in_progress",
+                        "updated_at": "2026-10-06 09:00:00",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            result = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page),
+            )
+            self.assertEqual(result["event"], "seller_collection_complete")
 
 
 class PipelineChooseTest(unittest.TestCase):

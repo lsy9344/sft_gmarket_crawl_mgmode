@@ -36,7 +36,7 @@ from app.core.coupang.parallel_pipeline import (
     PROXY_STATE_FILENAME,
     RUN_LOG_FILENAME,
 )
-from app.core.coupang.patchright_canary import claim_live_attempt
+from app.core.coupang.patchright_canary import claim_live_attempt, record_block
 from app.core.coupang.patchright_sample import (
     FETCH_STORE_REVIEW_JS,
     FETCH_VENDORS_JS,
@@ -982,6 +982,152 @@ class GuardProbeTest(unittest.TestCase):
             # 세션 1회의 예약만 남고(프로브가 기록하지 않는다) 정상 반납됐다.
             self.assertEqual(len(guard["attempt_history"]), 1)
             self.assertIs(guard["attempt_history"][0]["settled"], True)
+
+
+class GuardRecoveryTest(unittest.TestCase):
+    """차단 잠금 인스턴스 — 무한 연기 대신 종료, 1시간 뒤 자동 복구.
+
+    2026-10-06 검토 반영 — 차단 장부가 남은 인스턴스가 연기만 반복하며
+    실행이 끝나지 않던 경로와, 복구 승인 API(authorize_block_recovery)
+    이 어디서도 호출되지 않던 경로를 함께 고정한다.
+    """
+
+    def _block_instance(self, root: Path, *, block_age_seconds: float) -> None:
+        """실제 경로처럼 장부를 만든다 — 세션 claim 뒤 차단 기록 남기기.
+
+        claim 없이 차단만 남기면 장부 검증(last_attempt_ts 결측)에 걸려
+        실제로는 불가능한 상태가 되므로, 2시간 전 claim + 차단을 남긴다.
+        """
+        state_root = root / "state_1"
+        allowed, reason = claim_live_attempt(
+            state_root,
+            now=T0 - 2 * 60 * 60,
+            planned_items=60,
+            planned_pages=1,
+        )
+        self.assertTrue(allowed, reason)
+        record_block(state_root, now=T0 - block_age_seconds)
+
+    def test_recent_block_terminates_instance_as_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            factory = _RoutingFactory()
+            manager = _make_manager(root, _families(1), events, factory=factory)
+            self._block_instance(root, block_age_seconds=10 * 60)  # 10분 전 차단
+            self.assertTrue(manager.run_due(T0))
+            state = manager.instances["1"]
+            self.assertEqual(state.status, "blocked")
+            self.assertEqual(len(factory.captured), 0)  # 세션은 실행하지 않는다
+            blocked_events = _events_of(events, "blocked")
+            self.assertEqual(len(blocked_events), 1)
+            self.assertIn("차단 잠금", blocked_events[0]["reason"])
+            # 일정은 무한 연기 없이 끝난다.
+            self.assertTrue(manager.all_done())
+
+    def test_aged_block_auto_authorizes_recovery_and_collects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            factory = _RoutingFactory()
+            manager = _make_manager(root, _families(1), events, factory=factory)
+            self._block_instance(root, block_age_seconds=2 * 60 * 60)  # 2시간 전
+            self.assertTrue(manager.run_due(T0))
+            # 잠금 해제가 자동 승인되어 세션이 실행됐다.
+            self.assertEqual(len(factory.captured), 1)
+            state = manager.instances["1"]
+            self.assertNotEqual(state.status, "blocked")
+            logs = " ".join(
+                str(event.get("message") or "")
+                for event in _events_of(events, "log")
+            )
+            self.assertIn("잠금을 해제했습니다", logs)
+
+    def test_restore_requeues_blocked_instances_for_retrial(self):
+        """재시작하면 차단 인스턴스도 다시 심사받는다(종료 상태로 굳지 않는다)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            factory = _RoutingFactory()
+            manager = _make_manager(root, _families(1), events, factory=factory)
+            self._block_instance(root, block_age_seconds=10 * 60)
+            manager.run_due(T0)
+            self.assertEqual(manager.instances["1"].status, "blocked")
+            events2: list = []
+            manager2 = _make_manager(root, _families(1), events2, factory=factory)
+            self.assertEqual(manager2.instances["1"].status, "waiting")
+            logs = " ".join(
+                str(event.get("message") or "")
+                for event in _events_of(events2, "log")
+            )
+            self.assertIn("다시 심사", logs)
+
+
+class Http503DeferTest(unittest.TestCase):
+    """HTTP 503 으로 멈춘 판매자 작업 — 3시간 뒤 자동 재개, 그 전에는 연기.
+
+    2026-10-06 검토 반영 — authorize_http_503_retry 가 누구도 호출하지 않아
+    503 중단이 인스턴스 error 로 굳던 경로를 고정한다.
+    """
+
+    _REASON = "HTTP 503: 판매자 A00001 사업자정보 응답 실패"
+
+    def _family_dir(self, root: Path) -> Path:
+        family_dir = root / "out" / "family_01"  # work_dir_name: {prefix}_{NN:02d}
+        family_dir.mkdir(parents=True, exist_ok=True)
+        return family_dir
+
+    def _write_control(self, family_dir: Path, updated_at: str) -> None:
+        (family_dir / "top_seller_control.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "status": "halted",
+                    "reason": self._REASON,
+                    "updated_at": updated_at,
+                    "event": "failed",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_recent_503_halt_defers_instead_of_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            factory = _RoutingFactory()
+            manager = _make_manager(root, _families(1), events, factory=factory)
+            self._write_control(
+                self._family_dir(root),
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(T0)),
+            )
+            self.assertTrue(manager.run_due(T0))
+            state = manager.instances["1"]
+            self.assertEqual(state.status, "waiting")
+            self.assertEqual(state.next_run_at, T0 + INTERVAL_SECONDS)
+            self.assertEqual(len(factory.captured), 0)
+            self.assertEqual(_events_of(events, "error"), [])
+
+    def test_aged_503_halt_reopens_and_collects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            factory = _RoutingFactory()
+            manager = _make_manager(root, _families(1), events, factory=factory)
+            self._write_control(
+                self._family_dir(root),
+                time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(T0 - 4 * 60 * 60)
+                ),
+            )
+            self.assertTrue(manager.run_due(T0))
+            self.assertEqual(len(factory.captured), 1)
+            logs = " ".join(
+                str(event.get("message") or "")
+                for event in _events_of(events, "log")
+            )
+            self.assertIn("다시 엽니다", logs)
 
 
 # ── 7. 상태 영속/복원 ─────────────────────────────────────────────────

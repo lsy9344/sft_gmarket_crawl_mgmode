@@ -637,7 +637,7 @@ class RunTopPagesTest(unittest.TestCase):
                 ),
             ]
             with mock.patch(
-                "app.core.coupang.patchright_top_thousand._read_csv",
+                "app.core.coupang.patchright_top_thousand.read_csv",
                 return_value=rows,
             ):
                 path, count = build_final_dataset(store, "194373")
@@ -668,7 +668,7 @@ class RunTopPagesTest(unittest.TestCase):
                 _row("194376", "c", review="500", name="식품/견과/건과/땅콩/호두"),
             ]
             with mock.patch(
-                "app.core.coupang.patchright_top_thousand._read_csv",
+                "app.core.coupang.patchright_top_thousand.read_csv",
                 return_value=rows,
             ):
                 path, count = build_combined_final_dataset(store)
