@@ -270,7 +270,7 @@ class CoupangParallelPanel(QWidget):
         self.spin_instances.setRange(1, MAX_INSTANCES)
         self.spin_instances.setValue(3)
         self.spin_instances.setToolTip(
-            "동시에 운영할 인스턴스 수(1~8). 1번은 직접 회선, 2~N번은 Decodo\n"
+            "동시에 운영할 인스턴스 수(1~20). 1번은 직접 회선, 2~N번은 Decodo\n"
             "스티키 회선입니다. Decodo 계정이 없으면 1개로 강등됩니다."
         )
         self.spin_instances.valueChanged.connect(self._on_instance_count_changed)

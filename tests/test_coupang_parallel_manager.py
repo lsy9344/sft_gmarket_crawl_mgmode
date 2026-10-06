@@ -27,6 +27,7 @@ from unittest import mock
 from app.core.base import Control
 from app.core.coupang import parallel_manager as pm
 from app.core.coupang.parallel_manager import (
+    MAX_INSTANCES,
     ParallelCoupangManager,
     ParallelRunConfig,
     STATE_FILENAME,
@@ -96,8 +97,15 @@ _CATEGORY_POOL = [
 
 
 def _families(count: int) -> list[list[tuple[str, str]]]:
-    """가족 count개 — 각각 카테고리 1개짜리 소형 가족(트리 선택 순서 고정)."""
-    return [[_CATEGORY_POOL[index]] for index in range(count)]
+    """가족 count개 — 각각 카테고리 1개짜리 소형 가족(트리 선택 순서 고정).
+
+    상한(20)이 풀 크기보다 커도 순환해 채운다 — 검증 대상은 개수·형식이지
+    카테고리 식별자의 유일성이 아니므로 중복 아이디로도 무방하다.
+    """
+    return [
+        [_CATEGORY_POOL[index % len(_CATEGORY_POOL)]]
+        for index in range(count)
+    ]
 
 
 # ── 가짜 decodo 모듈 ──────────────────────────────────────────────────
@@ -1306,12 +1314,12 @@ class CompletePathTest(unittest.TestCase):
 
 
 class RunConfigValidationTest(unittest.TestCase):
-    """ParallelRunConfig 검증 — 인스턴스 수 1~8, 가족/파라미터 형식."""
+    """ParallelRunConfig 검증 — 인스턴스 수 1~MAX_INSTANCES(20), 가족/파라미터 형식."""
 
     def test_instance_count_out_of_range_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for bad in (0, 9):
+            for bad in (0, MAX_INSTANCES + 1):
                 with self.subTest(instance_count=bad):
                     with self.assertRaises(ValueError):
                         ParallelRunConfig(
@@ -1323,7 +1331,7 @@ class RunConfigValidationTest(unittest.TestCase):
     def test_instance_count_bounds_are_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for good in (1, 7, 8):
+            for good in (1, 7, 8, MAX_INSTANCES):
                 with self.subTest(instance_count=good):
                     config = ParallelRunConfig(
                         families=_families(good),
@@ -1436,11 +1444,14 @@ class SidNamespaceDisjointnessTest(unittest.TestCase):
     def test_rotation_stays_within_instance_namespace(self) -> None:
         from app.core.coupang.parallel_pipeline import next_session_id
 
-        # 8인스턴스 전 기본 sid와, 각 인스턴스가 5번 회전한 모든 sid가 전역 유일.
+        # 상한(20)인스턴스 전 기본 sid와, 각 인스턴스가 네임스페이스 전체
+        # (10슬롯)를 한 번 순회한 모든 sid가 전역 유일 — 두 자리 인스턴스
+        # (i100~) 네임스페이스 포함. 10회를 넘으면 iN0로 되감아 겹치는 게
+        # 정상(네임스페이스 내 순환이 설계)이므로 10회까지만 검사한다.
         seen: set[str] = set()
-        for number in range(2, 9):
+        for number in range(2, MAX_INSTANCES + 1):
             sid = f"i{number}0"
-            for _ in range(6):
+            for _ in range(10):
                 self.assertNotIn(sid, seen, f"sid 충돌: {sid}")
                 seen.add(sid)
                 sid = next_session_id(sid)
@@ -1451,7 +1462,9 @@ class SidNamespaceDisjointnessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = ParallelRunConfig(
-                families=_families(8), output_dir=root / "out", instance_count=8
+                families=_families(MAX_INSTANCES),
+                output_dir=root / "out",
+                instance_count=MAX_INSTANCES,
             )
             with mock.patch.object(
                 pm, "_state_root_for", lambda i: root / f"state_{i}"
@@ -1459,4 +1472,6 @@ class SidNamespaceDisjointnessTest(unittest.TestCase):
                 instances = build_instances(config)
             sids = [i.session_id for i in instances if i.session_id]
             self.assertEqual(len(sids), len(set(sids)))
-            self.assertEqual(sids, [f"i{n}0" for n in range(2, 9)])
+            self.assertEqual(
+                sids, [f"i{n}0" for n in range(2, MAX_INSTANCES + 1)]
+            )

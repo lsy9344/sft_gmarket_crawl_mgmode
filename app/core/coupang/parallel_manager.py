@@ -80,7 +80,7 @@ GUARD_LEDGER_FILENAME = "canary_guard.json"
 # final 생성 여부를 판단하게 하는 파일(기본 A 가족이 아닐 때만 만든다).
 FAMILY_DEFINITION_FILENAME = "coupang_family.json"
 
-MAX_INSTANCES = 8  # 7-병렬 실측(10-04) 반영 — 여유 1까지 허용
+MAX_INSTANCES = 20  # 20-병렬 확장(2026-10-06 사용자 결정) — 십진 sid 네임스페이스는 임의 인스턴스 수까지 자연 확장(i90, i100, …)
 # 분할 모드에서 인스턴스 1개당 만들 샤드 수 — 2배로 쪼개면 먼저 끝난
 # 인스턴스가 대기 큐의 남은 샤드를 승계하는 기존 규칙이 그대로
 # 워크 스틸링 밸런서가 된다(느린/빠른 카테고리 불균형 흡수).
@@ -177,7 +177,7 @@ class ParallelRunConfig:
     # output_dir 을 기본값 있는 필드들보다 앞에 둔다(데이터클래스 제약:
     # 기본값 없는 필드가 뒤에 올 수 없다). 인스턴스 수 등은 뒤의 기본값.
     output_dir: Path
-    instance_count: int = 3    # 1~8
+    instance_count: int = 3    # 1~MAX_INSTANCES(20)
     interval_minutes: int = 80  # 인스턴스별 세션 간격(분)
     listing_pages: int = 8      # 목록 단계 1세션 페이지 수(1~10)
     seller_limit: int = 130     # 판매자 단계 1세션 상품 수 상한
