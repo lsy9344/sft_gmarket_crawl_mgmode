@@ -39,6 +39,7 @@ from app.core.coupang.patchright_sample import (
     _wait,
 )
 from app.core.coupang.store_files import UNCONFIRMED_SELLER_ERROR
+from app.core.coupang.work_plan import seller_slice_index
 from app.models.coupang_records import RECORD_FIELDS
 
 SELLER_CONTROL_FILENAME = "fruit_seller_control.json"
@@ -230,6 +231,10 @@ def seller_work_queue(
     store,
     product_fields: tuple[str, ...],
     limit: int,
+    *,
+    products_paths: list[Path] | None = None,
+    slice_index: int | None = None,
+    slice_count: int = 1,
 ) -> tuple[list[tuple[str, dict]], list[dict]]:
     """이번 세션에 처리할 (판매자, 상품) 대기열을 고른다.
 
@@ -238,8 +243,26 @@ def seller_work_queue(
     같은 이름으로 노출하고, 상품 파일 스키마(product_fields)만 다르다.
     연결된 판매자 중 아직 결과 행이 없는 것을 먼저 고르고, 남은 예산은
     연결되지 않은 상품에 쓴다.
+
+    products_paths/slice_index/slice_count 는 판매자 조각(볼륨 인지 분할
+    §5.2)용 확장이다 — 상품을 여러 목록 조각 폴더에서 모아 읽고,
+    vendor_item_id 해시 슬라이스에 속한 상품만 이 조각의 일감으로 삼는다.
+    슬라이스는 서로소이므로 같은 상품을 두 조각이 요청하지 않는다(병합
+    dedupe가 넘치는 매핑을 흡수).
     """
-    products = _read_csv(store.products_path, product_fields)
+    if products_paths is None:
+        products = _read_csv(store.products_path, product_fields)
+    else:
+        products = []
+        for path in products_paths:
+            products.extend(_read_csv(path, product_fields))
+    if slice_count > 1 and slice_index is not None:
+        products = [
+            row
+            for row in products
+            if seller_slice_index(row["vendor_item_id"], slice_count)
+            == slice_index
+        ]
     mappings = _read_csv(store.product_seller_path, PRODUCT_SELLER_FIELDS)
     sellers = _read_csv(store.sellers_path, SELLER_FIELDS)
     failed_mappings = json.loads(store.failed_mappings_path.read_text(encoding="utf-8"))

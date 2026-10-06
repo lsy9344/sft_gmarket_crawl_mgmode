@@ -290,8 +290,18 @@ def _pending_record(name: str) -> dict:
 
 def _new_state(
     family: tuple[tuple[str, str], ...] = TOP_CATEGORIES,
+    *,
+    page_from: int | None = None,
+    page_to: int | None = None,
 ) -> dict:
-    return {
+    """새 상태. page_from/page_to 가 있으면 목록 조각(볼륨 인지 분할 §5.2).
+
+    조각 상태는 지정 구간만 훑는다 — 시작 페이지가 page_from 이고 카테고리
+    완주 판정(1000개·빈 페이지 관용)은 구간 종료 페이지(page_to)를
+    MAX_CATEGORY_PAGES 대신 쓴다. 범위는 상태 파일에 남아 이어하기·검증이
+    같은 구간을 보게 한다.
+    """
+    state = {
         "version": 1,
         "status": "running",
         "category_index": 0,
@@ -302,6 +312,14 @@ def _new_state(
             for category_id, name in family
         },
     }
+    if page_to is not None:
+        if page_from is None:
+            page_from = 1
+        if not 1 <= page_from <= page_to <= MAX_CATEGORY_PAGES:
+            raise ValueError("목록 조각의 페이지 범위가 잘못됐습니다.")
+        state["page_number"] = page_from
+        state["page_range"] = {"from": page_from, "to": page_to}
+    return state
 
 
 _CATEGORY_STATUSES = (
@@ -342,6 +360,18 @@ def _validate_state(
             or stop_when["target"] <= 0
         ):
             raise ValueError("완성형 중단 기준이 잘못됐습니다.")
+    page_range = value.get("page_range")
+    if page_range is not None:
+        if (
+            not isinstance(page_range, dict)
+            or set(page_range) != {"from", "to"}
+            or not isinstance(page_range.get("from"), int)
+            or isinstance(page_range.get("from"), bool)
+            or not isinstance(page_range.get("to"), int)
+            or isinstance(page_range.get("to"), bool)
+            or not 1 <= page_range["from"] <= page_range["to"] <= MAX_CATEGORY_PAGES
+        ):
+            raise ValueError("목록 조각 페이지 범위가 잘못됐습니다.")
     categories = value.get("categories")
     known_ids = set(_category_id_list(family))
     if (
@@ -374,11 +404,17 @@ class TopThousandStore:
         self,
         output_dir: Path,
         categories: list[tuple[str, str]] | None = None,
+        *,
+        page_from: int | None = None,
+        page_to: int | None = None,
     ) -> None:
         self.output_dir = output_dir
         # 이 인스턴스가 수집할 카테고리 가족(병렬 확장 설계 §3.1). 주입이
-        # 없으면 기본 A 가족을 그대로 쓴다.
+        # 없으면 기본 A 가족을 그대로 쓴다. page_from/page_to 는 목록 조각
+        # (볼륨 인지 분할 §5.2) — 상태 파일을 처음 만들 때 구간이 새겨진다.
         self.family = _resolve_categories(categories)
+        self.page_from = page_from
+        self.page_to = page_to
         self.products_path = output_dir / PRODUCTS_FILENAME
         self.state_path = output_dir / STATE_FILENAME
         self.summary_path = output_dir / SUMMARY_FILENAME
@@ -387,7 +423,14 @@ class TopThousandStore:
         if not self.products_path.exists():
             write_csv(self.products_path, PRODUCT_FIELDS, [])
         if not self.state_path.exists():
-            write_json(self.state_path, _new_state(self.family))
+            write_json(
+                self.state_path,
+                _new_state(
+                    self.family,
+                    page_from=self.page_from,
+                    page_to=self.page_to,
+                ),
+            )
         if not self.summary_path.exists():
             write_json(
                 self.summary_path,
@@ -576,13 +619,18 @@ def _migrate_state(
 def read_state(
     output_dir: Path,
     categories: list[tuple[str, str]] | None = None,
+    page_from: int | None = None,
+    page_to: int | None = None,
 ) -> dict:
+    """상태 읽기. 파일이 없으면 새 상태를 만든다 — page_from/page_to 가
+    지정돼 있으면 목록 조각 상태로 시작한다(볼륨 인지 분할 §5.2). 파일이
+    이미 있으면 파일이 기록한 구간을 그대로 믿는다(처음 쓴 값이 이긴다)."""
     family = _resolve_categories(categories)
     path = output_dir / STATE_FILENAME
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _new_state(family)
+        return _new_state(family, page_from=page_from, page_to=page_to)
     except (OSError, ValueError) as error:
         raise ValueError(f"상위 수집 상태를 읽지 못했습니다: {error}") from error
     return _migrate_state(_validate_state(value, family), family)
@@ -641,6 +689,14 @@ def _apply_total_stop(
     state["consecutive_empty_pages"] = 0
 
 
+def _page_limit(state: dict) -> int:
+    """이 상태의 목록 종료 페이지 — 조각이면 구간 종료, 아니면 전역 상한."""
+    page_range = state.get("page_range")
+    if isinstance(page_range, dict) and isinstance(page_range.get("to"), int):
+        return int(page_range["to"])
+    return MAX_CATEGORY_PAGES
+
+
 def _advance_state(
     state: dict,
     *,
@@ -670,7 +726,7 @@ def _advance_state(
     if record["tp_collected"] >= TARGET_CATEGORY_ITEMS:
         _finish_category(state, category_id, "target_reached", family)
         return
-    if state["page_number"] > MAX_CATEGORY_PAGES:
+    if state["page_number"] > _page_limit(state):
         _finish_category(state, category_id, "incomplete_limit_reached", family)
 
 
@@ -729,19 +785,25 @@ def run_top_pages(
     browser_scope_factory: Callable | None = None,
     proxy: dict | None = None,
     categories: list[tuple[str, str]] | None = None,
+    page_from: int | None = None,
+    page_to: int | None = None,
 ) -> dict:
     """현재 카테고리 위치에서 3P 상품만 page_count쪽까지 확인하고 저장한다.
 
     categories에 다른 인스턴스의 카테고리 가족 목록을 주면 그 목록만
     수집한다(병렬 확장 설계 §3.1). None이면 기본 A 가족을 쓴다.
+    page_from/page_to 는 목록 조각(단일 카테고리의 구간) 수집 — 상태
+    파일이 처음 만들어질 때 구간이 새겨진다(볼륨 인지 분할 §5.2).
     """
     if not 1 <= page_count <= MAX_SESSION_PAGES:
         raise ValueError(f"page_count는 1~{MAX_SESSION_PAGES}이어야 합니다.")
     output_dir.mkdir(parents=True, exist_ok=True)
     family = _resolve_categories(categories)
-    store = TopThousandStore(output_dir, categories)
+    store = TopThousandStore(
+        output_dir, categories, page_from=page_from, page_to=page_to
+    )
     store.ensure_files()
-    state = read_state(output_dir, categories)
+    state = read_state(output_dir, categories, page_from=page_from, page_to=page_to)
     store.validate()
     if state["status"] != "running":
         return {"event": "top_collection_complete", "status": state["status"]}

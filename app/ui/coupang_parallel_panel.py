@@ -48,14 +48,18 @@ from app.core.coupang.categories import (
 )
 from app.core.coupang.parallel_manager import (
     MAX_INSTANCES,
-    SHARDS_PER_INSTANCE,
     STATUS_BLOCKED,
     STATUS_COLLECTING,
     STATUS_COMPLETE,
     STATUS_DONE,
     STATUS_ERROR,
     STATUS_WAITING,
-    split_family_into_shards,
+)
+from app.core.coupang.work_plan import (
+    WORK_KIND_WHOLE,
+    plan_summary,
+    plan_work_units,
+    unit_to_dict,
 )
 from app.ui.widgets.collection_workspace import collection_workspace
 from app.workers.coupang_parallel_worker import SELLER_DISPLAY_FIELDS
@@ -206,12 +210,16 @@ class CoupangParallelPanel(QWidget):
             "각 노드와 모든 하위가 1개 '가족'이 되고, 가족들을 인스턴스(직접 "
             "회선 1 + Decodo 스티키 회선 2~N)에 나누어 교대로 수집합니다(세션은 "
             "순차 실행 — 한 시점에 브라우저 1개, 인스턴스별 간격으로 엇갈려 "
-            "돌아갑니다). '단일 카테고리 분할'이면 선택 1개 가족의 카테고리를 "
-            "인스턴스 수의 2배 샤드로 나눠 교대로 수집하고, 전 샤드 완주 시 "
-            "루트에서 하나로 병합해 최종 파일을 만듭니다. 인스턴스별로 세션 "
-            "간격(기본 80분)을 두고 안전 장치가 함께 동작합니다. 정지·비정상 "
-            "종료 후에도 진행 상태가 출력 폴더에 저장되어 같은 폴더로 다시 "
-            "시작하면 이어서 수집되고, 차단 인스턴스는 차단 1시간 뒤 재시작 시 "
+            "돌아갑니다). '단일 카테고리 분할'이면 선택 1개 가족을 작업 단위 "
+            "인스턴스 수의 2배로 나눠 교대로 수집하고, 전 단위 완주 시 루트에서 "
+            "하나로 병합해 최종 파일을 만듭니다. 카테고리 물량(productCount)을 "
+            "알면 큰 카테고리를 목록 페이지 범위·판매자 슬라이스 조각으로 더 "
+            "잘게 쪼개 모든 회선이 일감을 갖게 하고, 목록이 끝난 카테고리의 "
+            "판매자 조각은 곧바로 대기 큐에 배출돼 아무 회선이나 이어받습니다. "
+            "인스턴스별로 세션 간격(기본 80분)을 두고 안전 장치가 함께 "
+            "동작합니다. 정지·비정상 종료 후에도 진행 상태가 출력 폴더에 "
+            "저장되어 같은 폴더로 다시 시작하면 이어서 수집되고(구버전 배분은 "
+            "이전 규약으로 그대로 재개), 차단 인스턴스는 차단 1시간 뒤 재시작 시 "
             "안전 장치가 복구를 자동 승인합니다."
         )
         info.setWordWrap(True)
@@ -460,27 +468,49 @@ class CoupangParallelPanel(QWidget):
     def _refresh_selection_preview(self) -> None:
         """선택 → 선택 라벨·카드 가족명 갱신(모드별 안내)."""
         if self._mode() == MODE_SHARD:
-            family = self._single_split_family()
-            if family is None:
+            selection = self._split_selection()
+            if selection is None:
                 self.selected_label.setText(
                     "선택: 없음 (분할할 카테고리 최상위 1개를 선택)"
                 )
                 self._families = []
                 self._family_names = []
                 return
+            family, volumes = selection
             instance_count = self.spin_instances.value()
-            shard_count = self._shard_count_for(len(family), instance_count)
-            self._families = split_family_into_shards(family, shard_count)
+            units = plan_work_units(family, volumes, instance_count)
+            summary = plan_summary(family, volumes, units)
+            self._families = [list(unit.categories) for unit in units]
+            # 통짜 샤드는 종전 표기(샤드 N)를 유지하고 조각만 단위 라벨로.
             self._family_names = [
-                f"샤드 {index + 1} (카테고리 {len(shard)}개)"
-                for index, shard in enumerate(self._families)
+                f"샤드 {index + 1} (카테고리 {len(unit.categories)}개)"
+                if unit.kind == WORK_KIND_WHOLE
+                else unit.label
+                for index, unit in enumerate(units)
             ]
-            if shard_count > len(self._families):
-                note = f" — 카테고리 {len(family)}개라 {len(self._families)}샤드로 축소"
-            elif len(family) < instance_count:
+            if summary["volume_known"]:
+                # §6 미리보기 — 사용자가 계획을 검증하는 정찰 철학.
+                volume_note = (
+                    f" — 총 물량 {summary['total_volume']:,}개 → 인스턴스 "
+                    f"{instance_count} × 1단위 약 "
+                    f"{max(1, summary['total_volume'] // summary['unit_count']):,}개"
+                )
+                if summary["split_category_count"]:
+                    volume_note += (
+                        f", 큰 카테고리 {summary['split_category_count']}개를"
+                        " 조각 분할(목록 페이지 범위·판매자 슬라이스)"
+                    )
+                self.selected_label.setText(
+                    f"선택: {family[0][1]} — 카테고리 {len(family):,}개를 "
+                    f"작업 단위 {summary['unit_count']}개로 분할{volume_note}"
+                )
+                return
+            # 물량 미지(productCount 없음) — 라운드로빈 균등 분할 안내(현행).
+            if len(self._families) < instance_count:
                 note = (
-                    f" — 카테고리 {len(family)}개라 최대 {len(family)} 인스턴스만"
-                    " 병렬로 동작합니다"
+                    f" — 카테고리 {len(family)}개라 최대 {len(self._families)}"
+                    " 인스턴스만 병렬로 동작합니다"
+                    "(카테고리 새로고침 후 물량 정보가 오면 조각 분할)"
                 )
             else:
                 note = ""
@@ -501,11 +531,12 @@ class CoupangParallelPanel(QWidget):
             f"선택: 가족 {len(self._families)}개 · 총 카테고리 {total_categories:,}개"
         )
 
-    def _single_split_family(self) -> list[tuple[str, str]] | None:
-        """분할 모드용 단일 가족 — 선택한 최상위 루트 1개 + 모든 후손.
+    def _split_selection(self) -> tuple[list[tuple[str, str]], dict[str, int]] | None:
+        """분할 모드용 단일 가족 + 카테고리별 물량(productCount, §4).
 
         루트가 여러 개 선택돼 있으면 첫 번째만 본다(나머지는 무시하고
-        라벨로 안내하는 대신, 시작 검증에서 다시 안내한다).
+        시작 검증에서 다시 안내한다). volumes 는 productCount 가 붙은
+        카테고리만 담는 — 없으면 빈 사전(계획은 라운드로빈 폴백).
         """
         roots = self._family_root_items()
         if not roots:
@@ -515,16 +546,20 @@ class CoupangParallelPanel(QWidget):
         if node is None:
             return None
         family: list[tuple[str, str]] = []
+        volumes: dict[str, int] = {}
         seen: set[str] = set()
         for target in (node, *flatten_descendants(node)):
             if target.id and target.id not in seen:
                 seen.add(target.id)
                 family.append((target.id, target.name))
-        return family or None
+                if target.product_count > 0:
+                    volumes[target.id] = int(target.product_count)
+        return (family, volumes) if family else None
 
-    def _shard_count_for(self, category_count: int, instance_count: int) -> int:
-        """분할 모드 샤드 수 — 인스턴스당 2배, 카테고리 수 이하로 자름."""
-        return max(1, min(category_count, instance_count * SHARDS_PER_INSTANCE))
+    def _single_split_family(self) -> list[tuple[str, str]] | None:
+        """분할 모드용 단일 가족 목록(호환 래퍼) — 물량은 함께 읽지 않는다."""
+        selection = self._split_selection()
+        return selection[0] if selection is not None else None
 
     # ── 인스턴스 카드 ───────────────────────────────────────────────
 
@@ -632,25 +667,33 @@ class CoupangParallelPanel(QWidget):
         from app.core.coupang.parallel_manager import ParallelRunConfig
 
         shard_mode = self._mode() == MODE_SHARD
+        unit_specs: list[dict] | None = None
+        root_family: list[tuple[str, str]] | None = None
         if shard_mode:
-            family = self._single_split_family()
-            if family is None:
+            selection = self._split_selection()
+            if selection is None:
                 self.append_log(
                     "[시작] 분할 모드에서는 카테고리 최상위 노드 1개를 선택하세요."
                 )
                 return None
+            family, volumes = selection
             count = (
                 int(instance_count)
                 if instance_count is not None
                 else self.spin_instances.value()
             )
-            shard_count = self._shard_count_for(len(family), count)
-            families = split_family_into_shards(family, shard_count)
+            # 물량 가중 작업 단위(§5) — productCount 유무에 따라 조각 분할이
+            # 결정된다. 미지면 라운드로빈 whole 유닛(현행과 동일 결과).
+            units = plan_work_units(family, volumes, count)
+            families = [list(unit.categories) for unit in units]
+            unit_specs = [unit_to_dict(unit) for unit in units]
+            root_family = [tuple(pair) for pair in family]
             if len(families) < count:
                 self.append_log(
-                    f"[시작] 카테고리 {len(family)}개라 인스턴스 {len(families)}개로"
-                    " 축소합니다 — 카테고리 단위 분할의 한계입니다(리프 카테고리는"
-                    " 더 나눌 수 없습니다)."
+                    f"[시작] 작업 단위 {len(families)}개라 인스턴스 "
+                    f"{len(families)}개로 축소합니다 — 물량을 알아도 이 가족은"
+                    " 더 잘게 쪼갤 만큼 크지 않습니다(카테고리 새로고침으로"
+                    " productCount 를 받아오면 조각 분할이 가능해집니다)."
                 )
                 count = len(families)
         else:
@@ -675,6 +718,8 @@ class CoupangParallelPanel(QWidget):
                 output_dir=chosen_dir,
                 instance_count=count,
                 shard_mode=shard_mode,
+                unit_specs=unit_specs,
+                root_family=root_family,
             )
         except ValueError as error:
             self.append_log(f"[시작] 실행 설정이 올바르지 않습니다: {error}")

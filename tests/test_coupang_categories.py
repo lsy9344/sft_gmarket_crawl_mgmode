@@ -128,6 +128,84 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(back.children[0].name, "자식")
 
 
+class ProductCountTest(unittest.TestCase):
+    """productCount 보존(볼륨 인지 분할 설계 §4 1순위) — 파싱·직렬화·캐시."""
+
+    def test_parse_preserves_product_count(self):
+        raw = {
+            "id": 1, "name": "채소", "linkCode": "194432",
+            "linkUri": "/np/categories/194432",
+            "productCount": 377000,
+            "visibleChildren": [],
+        }
+        node = parse_category_node(raw)
+        self.assertEqual(node.product_count, 377000)
+
+    def test_missing_or_invalid_product_count_is_unknown_zero(self):
+        for bad in (None, "377", -5, 1.5, True, {}):
+            with self.subTest(bad=bad):
+                raw = {
+                    "id": 1, "name": "채소", "linkCode": "194432",
+                    "linkUri": "/np/categories/194432",
+                    "productCount": bad,
+                    "visibleChildren": [],
+                }
+                self.assertEqual(parse_category_node(raw).product_count, 0)
+        raw = {
+            "id": 1, "name": "채소", "linkCode": "194432",
+            "linkUri": "/np/categories/194432",
+            "visibleChildren": [],
+        }
+        self.assertEqual(parse_category_node(raw).product_count, 0)
+
+    def test_float_integer_product_count_is_accepted(self):
+        raw = {
+            "id": 1, "name": "채소", "linkCode": "194432",
+            "linkUri": "/np/categories/194432",
+            "productCount": 120.0,
+            "visibleChildren": [],
+        }
+        self.assertEqual(parse_category_node(raw).product_count, 120)
+
+    def test_node_serialization_keeps_product_count(self):
+        node = CategoryNode(
+            id="194432", name="채소", uri="/np/categories/194432",
+            product_count=377000,
+        )
+        raw = json.loads(json.dumps(node.to_dict()))
+        self.assertEqual(raw["productCount"], 377000)
+        self.assertEqual(CategoryNode.from_dict(raw).product_count, 377000)
+        # 옛 형식(키 없음)도 0(미지)으로 읽힌다.
+        raw.pop("productCount")
+        self.assertEqual(CategoryNode.from_dict(raw).product_count, 0)
+
+    def test_cache_roundtrip_preserves_product_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = CategoryTreeCache(Path(tmp) / "tree.json")
+            payload = _payload()
+            payload["data"]["gnb"]["shoppingComponent"][0]["productCount"] = 98765
+            cache.save(parse_category_groups(payload))
+            groups, _stamp = cache.load()
+            node = find_node(groups, "200")
+            self.assertEqual(node.product_count, 98765)
+            # 키가 없는 옛 캐시도 그대로 읽힌다(0=미지).
+            node2 = find_node(groups, "201")
+            self.assertEqual(node2.product_count, 0)
+
+    def test_cache_rejects_wrong_product_count_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tree.json"
+            payload = _payload()
+            groups = parse_category_groups(payload)
+            CategoryTreeCache(path).save(groups)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw["groups"][0][1][0]["productCount"] = "many"
+            path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            # 형식이 틀린 캐시는 버려진다(시드 폴백과 같은 경로).
+            loaded = CategoryTreeCache(path).load()
+            self.assertIsNone(loaded)
+
+
 class CacheTest(unittest.TestCase):
     def test_save_load_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:

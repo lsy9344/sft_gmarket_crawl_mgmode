@@ -112,12 +112,22 @@ class CoupangParallelPanelTest(unittest.TestCase):
         self.assertEqual(config.output_dir, Path("/tmp/panel_out"))
 
     def test_invalid_instance_count_is_rejected_with_log(self) -> None:
+        # 상한(MAX_INSTANCES)보다 큰 값 — 2026-10-06 커밋 f098d37 이 상한을
+        # 8→20으로 올리며 하드코딩된 9가 유효 값이 돼 실패했던 것의 재발 방지.
+        from app.core.coupang.parallel_manager import MAX_INSTANCES
+
         self.panel.set_category_groups(_sample_groups())
         self._select_root(0)
         config = self.panel.build_run_config(
-            output_dir="/tmp/panel_out", instance_count=9
+            output_dir="/tmp/panel_out", instance_count=MAX_INSTANCES + 1
         )
         self.assertIsNone(config)
+        self.assertTrue(
+            any(
+                "올바르지 않습니다" in line
+                for line in self.panel.log_view.toPlainText().splitlines()
+            )
+        )
 
     # ── 인스턴스 카드 ───────────────────────────────────────────────
 

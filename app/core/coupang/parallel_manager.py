@@ -56,7 +56,20 @@ from app.core.coupang.patchright_top_thousand import (
     MAX_SESSION_PAGES,
     MAX_SESSION_PRODUCTS,
     TOP_CATEGORIES,
+    read_state,
     run_top_pages,
+)
+from app.core.coupang.work_plan import (
+    PLAN_VERSION,
+    WORK_KIND_PAGES,
+    WORK_KIND_SELLERS,
+    WORK_KIND_WHOLE,
+    WorkUnit,
+    build_seller_units,
+    count_product_rows,
+    round_robin_shards,
+    unit_from_dict,
+    unit_to_dict,
 )
 
 __all__ = [
@@ -171,6 +184,13 @@ class ParallelRunConfig:
     shard_mode 가 True 면 families 는 단일 카테고리를 분할한 샤드 목록이고,
     작업 폴더 접두사가 family_ 대신 shard_ 가 되며 전 샤드 완주 시
     finalize() 가 루트 병합을 수행한다.
+
+    unit_specs/root_family 는 볼륨 인지 분할(2026-10-06 설계 §5) 확장이다.
+    unit_specs 는 families 와 1:1인 작업 단위 사양(work_plan.unit_to_dict
+    형식) — 있으면 매니저가 조각(work pages/sellers) 규약으로 운영하고,
+    없으면 현행 통짜 샤드 규약 그대로다. root_family 는 분할 모드에서
+    원본 가족 전체 — 구버전 상태를 이전 규약으로 재개할 때 라운드로빈
+    재분할의 입력으로 쓴다(§5.5).
     """
 
     families: list[list[tuple[str, str]]]  # 가족 = [(카테고리id, 이름), ...]
@@ -182,6 +202,8 @@ class ParallelRunConfig:
     listing_pages: int = 8      # 목록 단계 1세션 페이지 수(1~10)
     seller_limit: int = 130     # 판매자 단계 1세션 상품 수 상한
     shard_mode: bool = False    # 단일 카테고리 분할 수집 여부
+    unit_specs: list[dict] | None = None   # 작업 단위 사양(없으면 통짜 규약)
+    root_family: list[tuple[str, str]] | None = None  # 분할 모드 원본 가족
 
     def __post_init__(self) -> None:
         if not isinstance(self.instance_count, int) or isinstance(
@@ -209,6 +231,39 @@ class ParallelRunConfig:
             )
         if not isinstance(self.shard_mode, bool):
             raise ValueError("shard_mode는 불리언이어야 합니다.")
+        self._validate_unit_specs()
+        self._validate_root_family()
+
+    def _validate_unit_specs(self) -> None:
+        """unit_specs 형식 검증 — families 와 1:1·단위 카테고리 일치."""
+        if self.unit_specs is None:
+            return
+        if not isinstance(self.unit_specs, list) or len(self.unit_specs) != len(
+            self.families
+        ):
+            raise ValueError("unit_specs는 families와 같은 길이의 목록이어야 합니다.")
+        for index, spec in enumerate(self.unit_specs):
+            try:
+                unit = unit_from_dict(spec)
+            except ValueError as error:
+                raise ValueError(
+                    f"작업 단위 사양({index + 1}번째)이 올바르지 않습니다: {error}"
+                ) from error
+            if list(unit.categories) != [
+                tuple(pair) for pair in self.families[index]
+            ]:
+                raise ValueError(
+                    f"작업 단위 사양({index + 1}번째)이 가족 목록과 일치하지 않습니다."
+                )
+
+    def _validate_root_family(self) -> None:
+        if self.root_family is None:
+            return
+        if not isinstance(self.root_family, list) or not self.root_family:
+            raise ValueError("root_family는 비어 있지 않은 카테고리 목록이어야 합니다.")
+        for pair in self.root_family:
+            if not isinstance(pair, tuple) or len(pair) != 2:
+                raise ValueError("root_family 항목은 (id, 이름) 튜플이어야 합니다.")
 
     def work_dir_name(self, family_index: int) -> str:
         """작업 단위(가족/샤드) 출력 하위 폴더 이름."""
@@ -230,13 +285,11 @@ def split_family_into_shards(
     편차를 흡수한다(트리 순서대로 index % N 번째 샤드에 하나씩 나눠
     한쪽 샤드로 몰리지 않게 한다). 빈 샤드는 반환 목록에서 제외해
     실행 설정 검증(비어 있지 않은 가족)을 그대로 통과하게 한다.
+
+    구현은 work_plan.round_robin_shards — 물량 미지 폴백(§4 3순위)과
+    같은 함수를 공유한다.
     """
-    if shard_count < 1:
-        raise ValueError("shard_count는 1 이상이어야 합니다.")
-    shards: list[list[tuple[str, str]]] = [[] for _ in range(shard_count)]
-    for index, pair in enumerate(family):
-        shards[index % shard_count].append(tuple(pair))
-    return [shard for shard in shards if shard]
+    return round_robin_shards(family, shard_count)
 
 
 def build_instances(
@@ -336,6 +389,11 @@ class ParallelCoupangManager:
         self.pending_families: list[int] = []
         self._interval_seconds = config.interval_minutes * 60
         self._all_done_emitted = False
+        # 작업 단위 — 신규 실행이면 실행 설정의 사양(unit_specs)에서,
+        # 재시작이면 상태 파일에서 복원한다(_restore_state 가 덮어쓴다).
+        self.units: list[WorkUnit] = []
+        self.plan_version = 1
+        self._normalize_units()
         built = build_instances(config, on_event=on_event)
         if not self._restore_state(built):
             for instance in built:
@@ -345,6 +403,25 @@ class ParallelCoupangManager:
             self.plan()
 
     # ── 배분 ───────────────────────────────────────────────────────────
+
+    def _normalize_units(self) -> None:
+        """실행 설정(families/unit_specs)에서 작업 단위 목록을 만든다.
+
+        unit_specs 이 있으면 조각 규약(plan_version 2), 없으면 families
+        그대로 통짜(work) 단위 — 현행 규약과 완전히 같은 동작이다.
+        """
+        if self.config.unit_specs is not None:
+            self.units = [unit_from_dict(spec) for spec in self.config.unit_specs]
+            self.plan_version = PLAN_VERSION
+            return
+        self.units = [
+            WorkUnit(
+                kind=WORK_KIND_WHOLE,
+                categories=tuple(tuple(pair) for pair in family),
+            )
+            for family in self.config.families
+        ]
+        self.plan_version = 1
 
     def plan(self) -> None:
         """가족 초기 배분 — 인스턴스 수만큼 앞에서부터 1개씩, 나머지는 대기 큐.
@@ -584,8 +661,11 @@ class ParallelCoupangManager:
                     )
                     return summary
 
-            # (4) 다음 작업 선택(네트워크 없음). HTTP 503 으로 멈춘 판매자
-            # 작업은 3시간이 지났으면 여기서 다시 열린다(재시도 1회 계약).
+            # (4) 다음 작업 선택(네트워크 없음) — 단계 판단은 작업 단위
+            # 종류를 따른다(§5.3 혼합 큐): whole 은 폴더 안 목록→판매자
+            # 고정 순서, pages 는 목록만, sellers 는 매핑 대기열만 본다.
+            # HTTP 503 으로 멈춘 판매자 작업은 3시간이 지났으면 여기서
+            # 다시 열린다(재시도 1회 계약).
             retried_503, _retry_note = authorize_http_503_retry(
                 output_dir, now=current
             )
@@ -598,7 +678,8 @@ class ParallelCoupangManager:
                         "message": "HTTP 503 재시도 조건이 지나 판매자 작업을 다시 엽니다.",
                     }
                 )
-            decision = choose_action(output_dir, family)
+            unit = self.units[state.family_index]
+            decision = self._choose_action_for_unit(unit, output_dir, family)
             action = str(decision.get("action") or "")
             summary["action"] = action
             if action == "halted":
@@ -677,6 +758,15 @@ class ParallelCoupangManager:
                     browser_profile_root=instance.state_root,
                     browser_scope_factory=self.browser_scope_factory,
                     proxy=proxy,
+                    products_paths=self._seller_source_paths(unit),
+                    slice_index=(
+                        unit.slice_index
+                        if unit.kind == WORK_KIND_SELLERS
+                        else None
+                    ),
+                    slice_count=(
+                        unit.slice_count if unit.kind == WORK_KIND_SELLERS else 1
+                    ),
                 )
             else:
                 result = run_top_pages(
@@ -690,6 +780,10 @@ class ParallelCoupangManager:
                     categories=family,
                     browser_scope_factory=self.browser_scope_factory,
                     proxy=proxy,
+                    page_from=(
+                        unit.page_from if unit.kind == WORK_KIND_PAGES else None
+                    ),
+                    page_to=(unit.page_to if unit.kind == WORK_KIND_PAGES else None),
                 )
             summary["result"] = str(result.get("event") or "")
 
@@ -826,6 +920,7 @@ class ParallelCoupangManager:
         """
         payload = {
             "version": 1,
+            "plan_version": self.plan_version,
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "interval_minutes": self.config.interval_minutes,
             "shard_mode": self.config.shard_mode,
@@ -849,6 +944,11 @@ class ParallelCoupangManager:
                 for state in self._ordered_instances()
             ],
         }
+        # 조각 규약(plan v2)에서만 단위 사양을 남긴다 — 실행 중 배출된
+        # 판매자 조각까지 포함해 재시작이 같은 단위 목록을 복원한다.
+        # v1 파일은 종전 형식 그대로(구버전 코드도 읽을 수 있게).
+        if self.plan_version == PLAN_VERSION:
+            payload["units"] = [unit_to_dict(unit) for unit in self.units]
         path = self.config.output_dir / STATE_FILENAME
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f"{path.name}.tmp")
@@ -916,6 +1016,119 @@ class ParallelCoupangManager:
         """
         index = state.family_index if state.family_index is not None else 0
         return state.config.output_root / self.config.work_dir_name(index)
+
+    def _choose_action_for_unit(
+        self, unit: WorkUnit, output_dir: Path, family: list[tuple[str, str]]
+    ) -> dict:
+        """작업 단위 종류에 맞는 다음 작업 판정(§5.3 — 단계 판단 이관)."""
+        if unit.kind == WORK_KIND_PAGES:
+            return choose_action(
+                output_dir,
+                family,
+                page_from=unit.page_from,
+                page_to=unit.page_to,
+            )
+        if unit.kind == WORK_KIND_SELLERS:
+            return choose_action(
+                output_dir,
+                family,
+                products_paths=self._seller_source_paths(unit),
+                slice_index=unit.slice_index,
+                slice_count=unit.slice_count,
+            )
+        return choose_action(output_dir, family)
+
+    def _seller_source_paths(self, unit: WorkUnit) -> list[Path] | None:
+        """판매자 조각이 상품을 읽을 경로들 — 목록 조각 폴더의 top_products.csv.
+
+        product_sources 는 작업 폴더 이름(shard_NN)이므로 실행 루트를 붙여
+        경로로 만든다. 통짜 단위는 None(자기 폴더의 상품 파일을 쓰는 현행 규약).
+        """
+        if unit.kind != WORK_KIND_SELLERS or not unit.product_sources:
+            return None
+        return [
+            self.config.output_dir / name / "top_products.csv"
+            for name in unit.product_sources
+        ]
+
+    def _listing_complete_on_disk(self, unit_index: int) -> bool:
+        """목록 조각의 완주 여부를 폴더 상태 파일(top_state.json)로 판정한다.
+
+        배출 규칙의 사실 근원 — 실행 중 배출과 재시작 복원 배출이 같은
+        판정을 내도록 디스크를 본다(메모리 상태와 무관). 조각이 아직
+        시작 전이면 상태가 없어 running 으로 간주한다.
+        """
+        unit = self.units[unit_index]
+        output_dir = (
+            self.config.output_dir / self.config.work_dir_name(unit_index)
+        )
+        try:
+            state = read_state(
+                output_dir,
+                list(unit.categories),
+                page_from=unit.page_from,
+                page_to=unit.page_to,
+            )
+        except Exception:  # noqa: BLE001 - 읽을 수 없으면 미완료로 본다
+            return False
+        return state["status"] != "running"
+
+    def _sweep_emit_seller_units(self) -> int:
+        """배출 규칙(§5.3) — 목록이 전부 완료된 카테고리의 판매자 조각을
+        대기 큐에 내보낸다. 이미 이 카테고리의 판매자 조각이 있으면 건너뛴다
+        (멱등 — 완주 시마다·재시작 복원 시마다 불러도 중복 배출이 없다).
+
+        K(슬라이스 수)는 목록 조각 폴더들의 상품 행 수로 정한다 — 세션 1개
+        분량(seller_limit)보다 작은 조각은 병렬 이득이 없어 만들지 않고,
+        인스턴스 수를 상한으로 한다(work_plan.seller_slice_count_for).
+        """
+        pages_indices: dict[str, list[int]] = {}
+        for index, unit in enumerate(self.units):
+            if unit.kind == WORK_KIND_PAGES:
+                pages_indices.setdefault(unit.category_id, []).append(index)
+        seller_categories = {
+            unit.category_id
+            for unit in self.units
+            if unit.kind == WORK_KIND_SELLERS
+        }
+        emitted = 0
+        for category_id, indices in pages_indices.items():
+            if category_id in seller_categories:
+                continue
+            if not all(
+                self._listing_complete_on_disk(index) for index in indices
+            ):
+                continue
+            category = self.units[indices[0]].categories[0]
+            sources = [self.config.work_dir_name(index) for index in indices]
+            row_count = count_product_rows(self.config.output_dir, sources)
+            new_units = build_seller_units(
+                category,
+                sources,
+                row_count,
+                len(self.instances),
+                seller_limit=self.config.seller_limit,
+            )
+            first_index = len(self.units)
+            for offset, unit in enumerate(new_units):
+                self.units.append(unit)
+                self.config.families.append(list(unit.categories))
+                self.pending_families.append(first_index + offset)
+            emitted += len(new_units)
+            self._emit(
+                {
+                    "type": "log",
+                    "instance": "",
+                    "message": (
+                        f"{category[1]} 목록 완료 — 판매자 조각 "
+                        f"{len(new_units)}개를 대기 큐에 배출합니다"
+                        f"(상품 {row_count:,}개 · 소스 {len(sources)}폴더)."
+                    ),
+                }
+            )
+        if emitted:
+            self.persist_state()
+        return emitted
 
     def _ramp_capped_limits(self, ramp_limit: int | None) -> tuple[int, int]:
         """복구 확대 단계에 맞춘 이번 세션 규모 — (목록 페이지, 판매자 상한).
@@ -1057,7 +1270,13 @@ class ParallelCoupangManager:
             state.next_run_at = current + self._interval_seconds
 
     def _complete_family(self, state: _InstanceState, current: float) -> str:
-        """완주한 가족의 완성형 파일을 만들고 승계/종료를 처리한다."""
+        """완주한 가족의 완성형 파일을 만들고 승계/종료를 처리한다.
+
+        완주 단위가 목록 조각(pages)이면 승계 전에 배출 규칙(§5.3)을 돈다 —
+        그 카테고리의 목록 전 조각이 완료됐으면 판매자 조각을 대기 큐에
+        배출해 다음 도래한 아무 인스턴스나 가져가게 한다. 이 인스턴스가
+        곧바로 승계할 수도 있다(emit 이 take 보다 먼저).
+        """
         instance_id = state.config.instance_id
         finished_index = state.family_index
         family = [tuple(pair) for pair in self.config.families[finished_index]]
@@ -1081,6 +1300,8 @@ class ParallelCoupangManager:
                 "finals": finals,
             },
         )
+        if self.units[finished_index].kind == WORK_KIND_PAGES:
+            self._sweep_emit_seller_units()
         if self._take_next_family(state, current):
             event["inherited_family"] = state.family_index
             event["next_run_at"] = state.next_run_at
@@ -1158,7 +1379,14 @@ class ParallelCoupangManager:
         )
 
     def _restore_state(self, built: list[ParallelInstanceConfig]) -> bool:
-        """같은 출력 폴더의 저장 상태로 재개한다. 복원 실패 시 False."""
+        """같은 출력 폴더의 저장 상태로 재개한다. 복원 실패 시 False.
+
+        plan_version 복원 규약(§5.5): v2 상태는 상태 파일의 단위 목록이
+        사실 근원이다(실행 중 배출된 판매자 조각 포함). 구버전 상태는
+        이전 규약(통짜 샤드)으로 그대로 재개한다 — 새 계획(unit_specs)으로
+        시작했어도 root_family 라운드로빈 재분할로 되돌려 같은 폴더 이어받기
+        를 보장한다. 신규 실행만 새 배분을 받는다.
+        """
         raw = self.load_state(self.config.output_dir / STATE_FILENAME)
         if raw is None:
             return False
@@ -1166,6 +1394,8 @@ class ParallelCoupangManager:
         # 저장된 배분을 그대로 믿을 수 없다 — 새로 배분한다. 진행 데이터는
         # 폴더 안에 있으므로 새 배분으로 이어서 확인된다.
         if bool(raw.get("shard_mode")) != bool(self.config.shard_mode):
+            return False
+        if not self._restore_units(raw):
             return False
         records = {}
         for record in raw.get("instances") or []:
@@ -1227,4 +1457,68 @@ class ParallelCoupangManager:
                 "(안전 장치와 세션 절차가 회복 조건을 판정합니다)."
             )
         self._emit({"type": "log", "instance": "", "message": restored_note})
+        if self.plan_version == PLAN_VERSION:
+            # 종료 직전 완주한 목록 조각의 판매자 조각을 놓치지 않게
+            # 복원 직후 배출 규칙을 한 번 더 돈다(멱등 — 중복 배출 없음).
+            self._sweep_emit_seller_units()
         return True
+
+    def _restore_units(self, raw: dict) -> bool:
+        """상태 파일의 plan_version 에 맞춰 작업 단위를 복원한다(§5.5)."""
+        plan_version = raw.get("plan_version", 1)
+        if isinstance(plan_version, bool) or not isinstance(plan_version, int):
+            plan_version = 1
+        if plan_version == PLAN_VERSION:
+            specs = raw.get("units")
+            if not isinstance(specs, list) or not specs:
+                return False  # 깨진 v2 상태 — 새 배분으로 돌아간다
+            try:
+                units = [unit_from_dict(spec) for spec in specs]
+            except (ValueError, TypeError):
+                return False
+            self.units = units
+            self.plan_version = PLAN_VERSION
+            # 실행 중 배출된 판매자 조각까지 상태 파일의 목록이 사실 근원 —
+            # 실행 설정의 families/unit_specs 를 여기에 맞춰 덮어쓴다.
+            self.config.families = [list(unit.categories) for unit in units]
+            self.config.unit_specs = [unit_to_dict(unit) for unit in units]
+            return True
+        # 구버전(통짜 샤드) 상태를 새 계획(unit_specs)으로 시작한 폴더에서
+        # 만났으면 이전 규약 분할로 되돌려 재개한다. root_family 가 없으면
+        # 재구성할 수 없으므로 새 배분(현행 폴백)으로 돌아간다.
+        if self.config.unit_specs is not None:
+            legacy = self._legacy_families_for(raw)
+            if legacy is None:
+                return False
+            self.config.families = legacy
+            self.config.unit_specs = None
+            self._normalize_units()
+            self._emit(
+                {
+                    "type": "log",
+                    "instance": "",
+                    "message": (
+                        "구버전 배분 상태를 찾았습니다 — 이전 규약(통짜 샤드)"
+                        " 분할로 그대로 이어서 재개합니다. 새 볼륨 인지 배분은"
+                        " 새 출력 폴더에서 시작할 때 적용됩니다."
+                    ),
+                }
+            )
+        return True
+
+    def _legacy_families_for(
+        self, raw: dict
+    ) -> list[list[tuple[str, str]]] | None:
+        """구버전 상태의 통짜 샤드 목록 재구성 — 라운드로빈은 결정적이므로
+        같은 카테고리·샤드 수를 넣으면 항상 같은 분할을 낸다."""
+        family_count = raw.get("family_count")
+        if isinstance(family_count, bool) or not isinstance(family_count, int):
+            return None
+        if family_count < 1:
+            return None
+        root = self.config.root_family
+        if not root:
+            return None
+        return split_family_into_shards(
+            [tuple(pair) for pair in root], family_count
+        )

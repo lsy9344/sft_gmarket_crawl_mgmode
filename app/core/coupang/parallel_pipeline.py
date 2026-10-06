@@ -57,8 +57,14 @@ ROTATABLE_ERROR_KINDS = frozenset({"response", "connection", "timeout", "other"}
 def choose_action(
     output_dir: Path,
     categories: list[tuple[str, str]] | None = None,
+    *,
+    page_from: int | None = None,
+    page_to: int | None = None,
+    products_paths: list[Path] | None = None,
+    slice_index: int | None = None,
+    slice_count: int = 1,
 ) -> dict:
-    """네트워크 요청 없이 다음 예약 작업을 고른다. 판매자가 항상 우선이다.
+    """네트워크 요청 없이 다음 예약 작업을 고른다.
 
     반환은 {"action": …, "reason": …} 이고 action 은 sellers/category/
     complete/halted 중 하나다. 프로토타입 실행기의 예외 경계(main 의
@@ -67,14 +73,91 @@ def choose_action(
 
     categories는 이 인스턴스의 카테고리 가족(병렬 확장 설계 §3.1). 다른
     가족 상태 파일을 기본 목록으로 읽으면 검증이 실패하므로 함께 받는다.
+
+    단계 판정은 작업 단위 종류를 따른다(볼륨 인지 분할 §5.3 — 단계 혼합
+    큐). page_to 를 주면 목록 조각(목록만 확인, 판매자는 이 폴더에서 안
+    돈다), products_paths/slice_* 를 주면 판매자 조각(매핑 대기열만 확인),
+    둘 다 없으면 현행 통짜 규약(가족 안에서 목록→판매자 순서 고정).
     """
     try:
+        if page_to is not None:
+            return _choose_pages_action(
+                output_dir, categories, page_from, page_to
+            )
+        if products_paths is not None or slice_count > 1:
+            return _choose_sellers_action(
+                output_dir, products_paths, slice_index, slice_count
+            )
         return _choose_action(output_dir, categories)
     except Exception as error:  # noqa: BLE001 - 예약 경계에서 안전하게 중단
         return {
             "action": "halted",
             "reason": f"{type(error).__name__}: {error}",
         }
+
+
+def _choose_pages_action(
+    output_dir: Path,
+    categories: list[tuple[str, str]] | None,
+    page_from: int | None,
+    page_to: int,
+) -> dict:
+    """목록 조각(work pages)의 다음 작업 — 목록만 보고 판정한다.
+
+    판매자는 이 카테고리의 목록 전 조각이 완료된 뒤 별도 판매자 조각으로
+    배출되므로(§5.3 배출 규칙), 이 폴더에서는 상품 목록 상태만 본다.
+    완주 판정 시점에 판매자 저장소 파일이 없으면 매니저의 완성형 생성
+    (build_all_finals)이 실패하므로 여기서 빈 파일을 만들어 둔다.
+    """
+    from app.core.coupang.patchright_top_sellers import TopSellerStore
+    from app.core.coupang.patchright_top_thousand import read_state
+
+    TopSellerStore(output_dir).ensure_files()
+    state = read_state(output_dir, categories, page_from=page_from, page_to=page_to)
+    if state["status"] == "running":
+        return {"action": "category", "reason": "이어서 상품 목록을 확인합니다."}
+    return {"action": "complete", "reason": "목록 조각 구간을 모두 확인했습니다."}
+
+
+def _choose_sellers_action(
+    output_dir: Path,
+    products_paths: list[Path] | None,
+    slice_index: int | None,
+    slice_count: int,
+) -> dict:
+    """판매자 조각(work sellers)의 다음 작업 — 매핑 대기열만 판정한다."""
+    from app.core.coupang.patchright_top_sellers import TopSellerStore, _work
+
+    store = TopSellerStore(output_dir)
+    store.ensure_files()
+
+    control = read_seller_control(output_dir)
+    if control["status"] == "halted":
+        reason = str(control.get("reason") or "앞선 판매자 작업이 끝나지 않았습니다.")
+        return {"action": "halted", "reason": reason}
+    store.requeue_unconfirmed_sellers()
+
+    pending, unmapped = _work(
+        store,
+        1,
+        products_paths=products_paths,
+        slice_index=slice_index,
+        slice_count=slice_count,
+    )
+    if pending or unmapped:
+        return {
+            "action": "sellers",
+            "reason": "남은 상품의 판매자 사업자정보를 수집합니다.",
+        }
+    failed_mappings = json.loads(
+        store.failed_mappings_path.read_text(encoding="utf-8")
+    )
+    if failed_mappings:
+        return {
+            "action": "halted",
+            "reason": "판매자를 연결하지 못한 상품이 있어 자동 진행을 멈춥니다.",
+        }
+    return {"action": "complete", "reason": "이 조각의 판매자 수집이 끝났습니다."}
 
 
 def _choose_action(
