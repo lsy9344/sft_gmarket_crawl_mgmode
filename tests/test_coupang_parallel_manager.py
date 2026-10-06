@@ -1062,6 +1062,45 @@ class GuardRecoveryTest(unittest.TestCase):
             )
             self.assertIn("다시 심사", logs)
 
+    def test_restore_requeues_error_instances_for_reexamination(self):
+        """재시작하면 error 인스턴스도 재심사받아 세션을 다시 돈다.
+
+        2026-10-06 검토 반영 — proxy_error(일시적 Decodo 장애) 등으로 error
+        로 끝난 인스턴스가 재시작으로 영영 회복되지 않고 맡은 작업이 고아가
+        되던 경로를 막는다. 오류 사유가 남아 있으면 세션 절차가 곧바로 같은
+        오류로 수렴시키므로 되돌리는 것은 안전하다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            manager = _make_manager(root, _families(2), events)
+            # 인스턴스가 error 로 끝난 상태를 저장한다(배분 그대로).
+            manager.instances["1"].status = "error"
+            manager.instances["1"].family_index = 0
+            manager.persist_state()
+            saved = json.loads(
+                (root / "out" / STATE_FILENAME).read_text(encoding="utf-8")
+            )
+            self.assertEqual(saved["instances"][0]["status"], "error")
+
+            events2: list = []
+            factory2 = _RoutingFactory()
+            manager2 = _make_manager(
+                root, _families(2), events2, factory=factory2
+            )
+            # error 는 waiting 으로 되돌아가 즉시 재심사 대상이 된다.
+            self.assertEqual(manager2.instances["1"].status, "waiting")
+            self.assertEqual(manager2.instances["1"].next_run_at, 0.0)
+            self.assertEqual(manager2.instances["1"].family_index, 0)
+            logs = " ".join(
+                str(event.get("message") or "")
+                for event in _events_of(events2, "log")
+            )
+            self.assertIn("다시 심사", logs)
+            # 재심사 인스턴스는 곧바로 세션을 실행한다 — 고아 가족이 없다.
+            self.assertTrue(manager2.run_due(time.time()))
+            self.assertEqual(len(factory2.captured), 1)
+
 
 class Http503DeferTest(unittest.TestCase):
     """HTTP 503 으로 멈춘 판매자 작업 — 3시간 뒤 자동 재개, 그 전에는 연기.

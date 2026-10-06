@@ -335,6 +335,13 @@ class ManagerShardModeTest(unittest.TestCase):
             self.assertTrue((root / "out" / "shard_01").exists())
             self.assertTrue(manager.run_due(T0 + INTERVAL_SECONDS))
             self.assertEqual(manager.instances["1"].status, "done")
+            # 샤드 모드의 안내 문구는 작업 단위(샤드)로 말한다.
+            logs = " ".join(
+                str(event.get("message") or "")
+                for event in _events_of(events, "log")
+            )
+            self.assertIn("샤드 2개를 인스턴스 1개에 배분했습니다", logs)
+            self.assertIn("샤드 2을(를) 승계해", logs)
 
             # finalize — 루트 병합 1회.
             summary = manager.finalize()
@@ -348,6 +355,32 @@ class ManagerShardModeTest(unittest.TestCase):
 
             # 두 번째 호출은 이미 병합됐다는 표시로 아무 것도 하지 않는다.
             self.assertIsNone(manager.finalize())
+
+    def test_error_instance_recovered_on_restart_then_finalize_merges(self):
+        """error 로 끊긴 샤드 실행도 재시작 재심사로 완주·병합된다.
+
+        2026-10-06 검토 반영 — error 인스턴스가 재시작으로 회복되지 않으면
+        맡은 샤드가 고아가 되어 루트 병합이 영원히 일어나지 않았다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            shards = self._two_complete_shards(root)
+            manager = _make_manager(root, shards, events, instance_count=1)
+            # 첫 세션 직전에 오류로 끊긴 상황을 저장한다(샤드 1 배분·샤드 2 대기).
+            manager.instances["1"].status = "error"
+            manager.persist_state()
+
+            events2: list = []
+            restarted = _make_manager(root, shards, events2, instance_count=1)
+            self.assertEqual(restarted.instances["1"].status, "waiting")
+            self.assertTrue(restarted.run_due(T0))  # 샤드 1 완주 → 샤드 2 승계
+            self.assertTrue(restarted.run_due(T0 + INTERVAL_SECONDS))  # 샤드 2 완주
+            self.assertEqual(restarted.instances["1"].status, "done")
+            summary = restarted.finalize()
+            self.assertIsNotNone(summary)
+            self.assertEqual(summary["shard_count"], 2)
+            self.assertTrue((root / "out" / MERGE_STATE_FILENAME).exists())
 
     def test_finalize_skipped_for_family_mode_or_incomplete_run(self):
         with tempfile.TemporaryDirectory() as tmp:

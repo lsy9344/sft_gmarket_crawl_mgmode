@@ -110,7 +110,8 @@ class CoupangParallelWorker(QThread):
                     browser_scope_factory=self.browser_scope_factory,
                 )
             self.log_message.emit(
-                f"병렬 수집 시작 — 가족 {len(self.run_config.families)}개, "
+                f"병렬 수집 시작 — {self.run_config.work_unit_label} "
+                f"{len(self.run_config.families)}개, "
                 f"인스턴스 {self.run_config.instance_count}개, "
                 f"세션 간격 {self.run_config.interval_minutes}분"
             )

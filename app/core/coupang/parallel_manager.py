@@ -215,6 +215,11 @@ class ParallelRunConfig:
         prefix = "shard" if self.shard_mode else "family"
         return f"{prefix}_{family_index + 1:02d}"
 
+    @property
+    def work_unit_label(self) -> str:
+        """작업 단위 표시어 — 로그·안내 문구에 쓴다(가족/샤드)."""
+        return "샤드" if self.shard_mode else "가족"
+
 
 def split_family_into_shards(
     family: list[tuple[str, str]], shard_count: int
@@ -365,7 +370,8 @@ class ParallelCoupangManager:
                 "type": "log",
                 "instance": "",
                 "message": (
-                    f"가족 {len(self.config.families)}개를 인스턴스 "
+                    f"{self.config.work_unit_label} "
+                    f"{len(self.config.families)}개를 인스턴스 "
                     f"{len(self.instances)}개에 배분했습니다"
                     + (
                         f"(대기 {len(self.pending_families)}개)."
@@ -443,7 +449,11 @@ class ParallelCoupangManager:
                             "type": "status",
                             "instance": instance.instance_id,
                             "status": STATUS_DONE,
-                            "message": "담당할 가족이 더 없습니다.",
+                            "message": (
+                                "담당할 "
+                                + self.config.work_unit_label
+                                + "이(가) 더 없습니다."
+                            ),
                         }
                     )
                     self.persist_state()
@@ -1097,7 +1107,8 @@ class ParallelCoupangManager:
                 "type": "log",
                 "instance": state.config.instance_id,
                 "message": (
-                    f"가족 {next_index + 1}을(를) 승계해 이어서 수집합니다."
+                    f"{self.config.work_unit_label} {next_index + 1}을(를)"
+                    " 승계해 이어서 수집합니다."
                 ),
                 "family_index": next_index,
                 "next_run_at": state.next_run_at,
@@ -1164,19 +1175,22 @@ class ParallelCoupangManager:
             # 인스턴스 구성이 바뀌었다(강등 등) — 저장 상태를 믿을 수 없다.
             return False
         assigned: set[int] = set()
-        requeued_blocked = 0
+        requeued_stopped = 0
         for instance in built:
             record = records[instance.instance_id]
             state = _InstanceState(config=instance)
             status = str(record.get("status") or "")
             state.status = status if status in _PERSIST_STATUSES else STATUS_WAITING
-            if state.status == STATUS_BLOCKED:
-                # 재시작하면 차단 인스턴스도 다시 심사받는다 — 회복 조건은
-                # 안전 장치 장부가 가린다(차단 1시간 잠금). 재시작 예약이
-                # 차단 상태로 굳어 아무것도 하지 않고 끝나는 일을 막는다.
+            if state.status in (STATUS_BLOCKED, STATUS_ERROR):
+                # 재시작하면 차단/오류 인스턴스도 다시 심사받는다 — 회복
+                # 조건은 안전 장치 장부(차단 1시간 잠금)와 세션 절차가
+                # 가린다. 오류 사유가 남아 있으면(halted 등) 곧바로 같은
+                # 오류로 수렴하므로 되돌려도 안전하다. 재시작 예약이 종료
+                # 상태로 굳어 아무것도 하지 않고 끝나는 일(맡은 작업이
+                # 고아가 되는 일)을 막는다.
                 state.status = STATUS_WAITING
                 state.next_run_at = 0.0
-                requeued_blocked += 1
+                requeued_stopped += 1
             family_index = record.get("family_index")
             if (
                 isinstance(family_index, int)
@@ -1204,12 +1218,13 @@ class ParallelCoupangManager:
             and index not in assigned
         ]
         restored_note = (
-            "저장된 병렬 상태를 찾아 가족 배분과 예정 시각을 복원했습니다."
+            "저장된 병렬 상태를 찾아 "
+            f"{self.config.work_unit_label} 배분과 예정 시각을 복원했습니다."
         )
-        if requeued_blocked:
+        if requeued_stopped:
             restored_note += (
-                f" 차단 인스턴스 {requeued_blocked}개를 다시 심사합니다"
-                "(안전 장치가 회복 조건을 판정합니다)."
+                f" 차단/오류 인스턴스 {requeued_stopped}개를 다시 심사합니다"
+                "(안전 장치와 세션 절차가 회복 조건을 판정합니다)."
             )
         self._emit({"type": "log", "instance": "", "message": restored_note})
         return True
