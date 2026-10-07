@@ -649,5 +649,136 @@ class PanelShardModeTest(unittest.TestCase):
         )
 
 
+class PanelVolumeAwareSplitTest(unittest.TestCase):
+    """볼륨 인지 분할 미리보기·실행 설정(2026-10-06 설계 §5-§6)."""
+
+    def setUp(self) -> None:
+        from PyQt6.QtWidgets import QApplication
+
+        from app.core.coupang.categories import CategoryNode
+        from app.ui.coupang_parallel_panel import CoupangParallelPanel
+
+        app = QApplication.instance() or QApplication([])
+        self.QApplication = app
+        self.CategoryNode = CategoryNode
+        self.CoupangParallelPanel = CoupangParallelPanel
+        self.panel = CoupangParallelPanel()
+        self._set_groups()
+
+    def tearDown(self) -> None:
+        self.panel.deleteLater()
+
+    def _set_groups(self) -> None:
+        # productCount 가 붙은 트리 — 채소 1개(큰) + 잎채소·뿌리채소(작은).
+        node = self.CategoryNode(
+            id="194432",
+            name="채소",
+            uri="/np/categories/194432",
+            product_count=377_000,
+            children=[
+                self.CategoryNode(
+                    "194433",
+                    "잎채소",
+                    "/np/categories/194433",
+                    [],
+                    product_count=30_000,
+                ),
+                self.CategoryNode(
+                    "194434",
+                    "뿌리채소",
+                    "/np/categories/194434",
+                    [],
+                    product_count=20_000,
+                ),
+            ],
+        )
+        self.panel.set_category_groups([("쇼핑", [node])])
+
+    def _select_root(self) -> None:
+        group = self.panel.category_tree.topLevelItem(0)
+        group.child(0).setSelected(True)
+
+    def _shard_mode(self) -> None:
+        self.panel.mode_combo.setCurrentIndex(1)
+
+    def test_preview_reports_volume_and_split(self):
+        self._select_root()
+        self._shard_mode()
+        label = self.panel.selected_label.text()
+        self.assertIn("총 물량 427,000개", label)
+        self.assertIn("조각 분할", label)
+        self.assertIn("작업 단위", label)
+        # 큰 카테고리(채소)는 목록 조각으로, 작은 두 개는 whole 로 나뉜다.
+        self.assertTrue(
+            any("목록" in name for name in self.panel._family_names)
+        )
+
+    def test_build_run_config_carries_unit_specs_and_root_family(self):
+        self._select_root()
+        self._shard_mode()
+        config = self.panel.build_run_config(
+            output_dir="/tmp/volume_out", instance_count=4
+        )
+        self.assertIsNotNone(config)
+        self.assertIsNotNone(config.unit_specs)
+        self.assertIsNotNone(config.root_family)
+        self.assertEqual(len(config.root_family), 3)
+        kinds = {spec["kind"] for spec in config.unit_specs}
+        self.assertIn("pages", kinds)
+        self.assertIn("whole", kinds)
+        # families 와 단위 사양이 1:1 로 정렬돼 있다(설정 검증 통과).
+        self.assertEqual(len(config.families), len(config.unit_specs))
+
+    def test_append_unit_names_extends_card_labels(self):
+        """실행 중 배출된 판매자 조각 라벨이 카드 표기에 추가된다(§5.3).
+
+        배출 단위는 시작 계획에 없어 인덱스가 _family_names 범위 밖이
+        되는데, 워커 units_appended 시그널 → append_unit_names 로 라벨을
+        받으면 카드가 기본 라벨로 떨어지지 않는다.
+        """
+        self._select_root()
+        self._shard_mode()
+        beyond = len(self.panel._family_names)
+        self.assertEqual(self.panel._family_name_for(beyond), "")
+        self.panel.append_unit_names(["채소 판매자 1/2", "채소 판매자 2/2"])
+        self.assertEqual(self.panel._family_name_for(beyond), "채소 판매자 1/2")
+        self.assertEqual(
+            self.panel._family_name_for(beyond + 1), "채소 판매자 2/2"
+        )
+
+    def test_units_beyond_instance_count_do_not_trim(self):
+        """작업 단위가 인스턴스 수보다 많으면 축소하지 않는다(카테고리 수
+        상한 극복 — §1)."""
+        self._select_root()
+        self._shard_mode()
+        config = self.panel.build_run_config(
+            output_dir="/tmp/volume_out", instance_count=2
+        )
+        self.assertGreater(len(config.families), config.instance_count)
+
+    def test_shrink_message_uses_work_unit_wording(self):
+        """물량 없이 단위 수가 인스턴스 수보다 적을 때 — '작업 단위' 축소."""
+        node = self.CategoryNode(
+            id="194688",
+            name="축산",
+            uri="/np/categories/194688",
+            children=[],
+        )
+        self.panel.set_category_groups([("쇼핑", [node])])
+        group = self.panel.category_tree.topLevelItem(0)
+        group.child(0).setSelected(True)
+        self._shard_mode()
+        config = self.panel.build_run_config(
+            output_dir="/tmp/leaf_out", instance_count=3
+        )
+        self.assertIsNotNone(config)
+        self.assertEqual(config.instance_count, 1)
+        logs = self.panel.log_view.toPlainText().splitlines()
+        self.assertTrue(
+            any("작업 단위" in line and "축소" in line for line in logs),
+            logs,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

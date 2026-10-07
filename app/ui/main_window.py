@@ -2135,6 +2135,7 @@ class MainWindow(QMainWindow):
         worker.log_message.connect(self.coupang_parallel_panel.append_log)
         worker.instance_state_changed.connect(self.coupang_parallel_panel.update_instance)
         worker.sellers_appended.connect(self.coupang_parallel_panel.add_seller_rows)
+        worker.units_appended.connect(self.coupang_parallel_panel.append_unit_names)
         worker.warning_message.connect(self._on_parallel_warning)
         worker.finished_parallel.connect(self._on_parallel_finished)
         worker.finished.connect(self._on_parallel_thread_done)

@@ -31,8 +31,6 @@ from test_coupang_parallel_manager import (  # noqa: E402
 )
 
 STEP_SECONDS = 600  # 시뮬레이션 시계 보폭 (10분)
-FAMILY_COUNT = 12
-INSTANCE_COUNT = 7
 MAX_STEPS = 600  # 100시간분 — 넉넉한 상한
 
 
@@ -140,11 +138,21 @@ def _seller_payload(vendor_id: str) -> dict:
 
 
 class ParallelEndurance7Test(unittest.TestCase):
-    """7-병렬 장시간 순환 — 공정성·무결성·회전·복원."""
+    """다중 병렬 장시간 순환 — 공정성·무결성·회전·복원.
+
+    2026-10-06 볼륨 인지 분할 설계 §8-3: 기존 7인스턴트 시나리오를
+    파라미터화해 20인스턴스(MAX_INSTANCES 상한) 변형을 함께 돈다.
+    """
 
     def test_seven_instances_complete_all_families_with_rotation_and_resume(
         self,
     ) -> None:
+        self._run_endurance(instance_count=7, family_count=12)
+
+    def test_twenty_instances_endure_rotation_and_resume(self) -> None:
+        self._run_endurance(instance_count=20, family_count=30)
+
+    def _run_endurance(self, *, instance_count: int, family_count: int) -> None:
         calls: list = []
         dead: dict = {}
         fake = _fake_decodo(calls, ready=True, dead_sids=dead)
@@ -153,9 +161,10 @@ class ParallelEndurance7Test(unittest.TestCase):
             out_root = root / "out"
             events: list = []
 
-            # 12개 가족(카테고리 1개씩) — 풀과 무관하게 자체 생성
+            # 가족(카테고리 1개씩) family_count개 — 풀과 무관하게 자체 생성
             families = [
-                [(f"90{index:04d}", f"내구가족/{index}")] for index in range(FAMILY_COUNT)
+                [(f"90{index:04d}", f"내구가족/{index}")]
+                for index in range(family_count)
             ]
             family_vendors: dict[str, str] = {}
             seller_payloads: dict = {}
@@ -175,11 +184,11 @@ class ParallelEndurance7Test(unittest.TestCase):
                     families,
                     events,
                     factory=factory,
-                    instance_count=INSTANCE_COUNT,
+                    instance_count=instance_count,
                     interval_minutes=int(INTERVAL_SECONDS // 60),
                     listing_pages=1,
                 )
-                self.assertEqual(len(manager.instances), INSTANCE_COUNT)
+                self.assertEqual(len(manager.instances), instance_count)
 
                 session_before_resume = 0
                 rotated_total = 0
@@ -198,7 +207,7 @@ class ParallelEndurance7Test(unittest.TestCase):
 
                     manager.run_due(t)
                     t += STEP_SECONDS
-                    for sid in range(1, INSTANCE_COUNT + 1):
+                    for sid in range(1, instance_count + 1):
                         ledger = root / f"state_{sid}" / "canary_guard.json"
                         if ledger.exists():
                             _age_guard(ledger.parent)
@@ -210,7 +219,7 @@ class ParallelEndurance7Test(unittest.TestCase):
                     )
 
                     # 중간 복원 지점 — 절반가량 진행됐을 때 매니저 재구성.
-                    if not resumed and step == 60:
+                    if not resumed and step == 60 and not manager.all_done():
                         totals_before = {
                             key: state.total_products
                             for key, state in manager.instances.items()
@@ -221,7 +230,7 @@ class ParallelEndurance7Test(unittest.TestCase):
                             families,
                             events,
                             factory=factory,
-                            instance_count=INSTANCE_COUNT,
+                            instance_count=instance_count,
                             interval_minutes=int(INTERVAL_SECONDS // 60),
                             listing_pages=1,
                         )
@@ -249,8 +258,8 @@ class ParallelEndurance7Test(unittest.TestCase):
                     self.assertEqual(
                         state.status, "done", f"인스턴스 {key}: {state.status}"
                     )
-                # 2) 12개 가족 전부 상품+판매자 확보 (데이터 무결성)
-                for index in range(FAMILY_COUNT):
+                # 2) 전 가족 상품+판매자 확보 (데이터 무결성)
+                for index in range(family_count):
                     family_dir = out_root / f"family_{index + 1:02d}"
                     products = family_dir / "top_products.csv"
                     sellers = family_dir / "top_sellers.csv"
@@ -278,14 +287,21 @@ class ParallelEndurance7Test(unittest.TestCase):
                     per_instance[instance_id] = (
                         per_instance.get(instance_id, 0) + 1
                     )
-                self.assertEqual(len(per_instance), INSTANCE_COUNT)
+                self.assertEqual(len(per_instance), instance_count)
                 counts = sorted(per_instance.values())
                 self.assertGreaterEqual(counts[0], 3)
-                self.assertLessEqual(counts[-1] - counts[0], 4, per_instance)
+                self.assertLessEqual(
+                    counts[-1] - counts[0],
+                    max(4, instance_count // 4),
+                    per_instance,
+                )
                 # 4) 세션 사망 주입에 자동 교체가 실제로 일어났다.
                 self.assertGreaterEqual(rotated_total, 1)
                 # 5) 복원 이후에도 세션이 계속돌았다(재시작이 정지가 아님).
-                self.assertGreater(len(factory.captured), session_before_resume)
+                if resumed:
+                    self.assertGreater(
+                        len(factory.captured), session_before_resume
+                    )
 
 
 if __name__ == "__main__":

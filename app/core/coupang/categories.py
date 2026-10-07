@@ -64,12 +64,19 @@ DEFAULT_SEED_CACHE_PATH = (
 
 @dataclass
 class CategoryNode:
-    """카테고리 트리 노드 (id = URL 의 카테고리 번호)."""
+    """카테고리 트리 노드 (id = URL 의 카테고리 번호).
+
+    product_count 는 category-list 응답의 productCount(노드 상품 수,
+    2026-10-06 덤프에서 확인) — 볼륨 인지 작업 분할 설계 §4 의 1순위
+    물량 소스다. 부착되지 않은 노드는 0(미지)이며, 계획은 근사로만
+    쓰므로 0 을 '정확히 0개'가 아니라 '모른다'로 해석한다.
+    """
 
     id: str
     name: str
     uri: str
     children: list["CategoryNode"] = field(default_factory=list)
+    product_count: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -77,6 +84,7 @@ class CategoryNode:
             "name": self.name,
             "uri": self.uri,
             "children": [c.to_dict() for c in self.children],
+            "productCount": self.product_count,
         }
 
     @classmethod
@@ -86,6 +94,7 @@ class CategoryNode:
             name=str(raw.get("name", "")),
             uri=str(raw.get("uri", "")),
             children=[cls.from_dict(c) for c in raw.get("children", [])],
+            product_count=_coerce_product_count(raw.get("productCount")),
         )
 
     def count(self) -> int:
@@ -93,6 +102,16 @@ class CategoryNode:
 
 
 # ── 파서 (순수 함수) ─────────────────────────────────────────────────────
+
+
+def _coerce_product_count(value: object) -> int:
+    """productCount 원시값 → 0 이상 정수. 불가능하면 0(미지)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    if isinstance(value, float) and not value.is_integer():
+        return 0
+    count = int(value)
+    return count if count > 0 else 0
 
 
 def parse_category_node(raw: dict) -> CategoryNode | None:
@@ -118,7 +137,9 @@ def parse_category_node(raw: dict) -> CategoryNode | None:
         cid = uri[len(CATEGORY_URI_PREFIX):].split("?")[0].split("/")[0]
         if cid.isdigit():
             return CategoryNode(id=cid, name=str(raw.get("name") or cid),
-                                uri=uri, children=children)
+                                uri=uri, children=children,
+                                product_count=_coerce_product_count(
+                                    raw.get("productCount")))
     # 비카테고리 노드: 카테고리 자식이 있으면 승격 (없으면 버림)
     return CategoryNode(id="", name=str(raw.get("name") or ""), uri="",
                         children=children) if children else None
@@ -232,6 +253,10 @@ class CategoryTreeCache:
                 return False
         elif uri or not children:
             # 비카테고리 구조 부모는 자식이 있을 때만 허용한다.
+            return False
+        # productCount 는 선택 키다 — 없는 옛 캐시도 그대로 읽힌다(0=미지).
+        count = raw.get("productCount", 0)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             return False
         return all(
             CategoryTreeCache._valid_raw_cached_node(child, depth + 1)

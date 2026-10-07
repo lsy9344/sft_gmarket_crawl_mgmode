@@ -71,6 +71,8 @@ class CoupangParallelWorker(QThread):
     instance_state_changed = pyqtSignal(str, str, dict)
     # 결과 표에 붙일 판매자 행 목록(키는 SELLER_DISPLAY_FIELDS)
     sellers_appended = pyqtSignal(list)
+    # 실행 중 배출된 작업 단위(판매자 조각)의 카드 표기 라벨 목록
+    units_appended = pyqtSignal(list)
     warning_message = pyqtSignal(str)
     # 최종 요약 dict — main_window 가 결과 안내·잠금 해제에 쓴다
     finished_parallel = pyqtSignal(object)
@@ -183,6 +185,11 @@ class CoupangParallelWorker(QThread):
 
         if event_type == "log":
             self.log_message.emit(str(event.get("message") or ""))
+        elif event_type == "units_appended":
+            # 배출 규칙이 대기 큐에 늘린 작업 단위 — 카드 표기용 라벨.
+            self.units_appended.emit(
+                [str(label) for label in event.get("labels") or []]
+            )
         elif event_type == "status":
             summary = {
                 "family_index": event.get("family_index"),

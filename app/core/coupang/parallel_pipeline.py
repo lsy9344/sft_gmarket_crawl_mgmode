@@ -57,8 +57,14 @@ ROTATABLE_ERROR_KINDS = frozenset({"response", "connection", "timeout", "other"}
 def choose_action(
     output_dir: Path,
     categories: list[tuple[str, str]] | None = None,
+    *,
+    page_from: int | None = None,
+    page_to: int | None = None,
+    products_paths: list[Path] | None = None,
+    slice_index: int | None = None,
+    slice_count: int = 1,
 ) -> dict:
-    """네트워크 요청 없이 다음 예약 작업을 고른다. 판매자가 항상 우선이다.
+    """네트워크 요청 없이 다음 예약 작업을 고른다.
 
     반환은 {"action": …, "reason": …} 이고 action 은 sellers/category/
     complete/halted 중 하나다. 프로토타입 실행기의 예외 경계(main 의
@@ -67,14 +73,91 @@ def choose_action(
 
     categories는 이 인스턴스의 카테고리 가족(병렬 확장 설계 §3.1). 다른
     가족 상태 파일을 기본 목록으로 읽으면 검증이 실패하므로 함께 받는다.
+
+    단계 판정은 작업 단위 종류를 따른다(볼륨 인지 분할 §5.3 — 단계 혼합
+    큐). page_to 를 주면 목록 조각(목록만 확인, 판매자는 이 폴더에서 안
+    돈다), products_paths/slice_* 를 주면 판매자 조각(매핑 대기열만 확인),
+    둘 다 없으면 현행 통짜 규약(가족 안에서 목록→판매자 순서 고정).
     """
     try:
+        if page_to is not None:
+            return _choose_pages_action(
+                output_dir, categories, page_from, page_to
+            )
+        if products_paths is not None or slice_count > 1:
+            return _choose_sellers_action(
+                output_dir, products_paths, slice_index, slice_count
+            )
         return _choose_action(output_dir, categories)
     except Exception as error:  # noqa: BLE001 - 예약 경계에서 안전하게 중단
         return {
             "action": "halted",
             "reason": f"{type(error).__name__}: {error}",
         }
+
+
+def _choose_pages_action(
+    output_dir: Path,
+    categories: list[tuple[str, str]] | None,
+    page_from: int | None,
+    page_to: int,
+) -> dict:
+    """목록 조각(work pages)의 다음 작업 — 목록만 보고 판정한다.
+
+    판매자는 이 카테고리의 목록 전 조각이 완료된 뒤 별도 판매자 조각으로
+    배출되므로(§5.3 배출 규칙), 이 폴더에서는 상품 목록 상태만 본다.
+    완주 판정 시점에 판매자 저장소 파일이 없으면 매니저의 완성형 생성
+    (build_all_finals)이 실패하므로 여기서 빈 파일을 만들어 둔다.
+    """
+    from app.core.coupang.patchright_top_sellers import TopSellerStore
+    from app.core.coupang.patchright_top_thousand import read_state
+
+    TopSellerStore(output_dir).ensure_files()
+    state = read_state(output_dir, categories, page_from=page_from, page_to=page_to)
+    if state["status"] == "running":
+        return {"action": "category", "reason": "이어서 상품 목록을 확인합니다."}
+    return {"action": "complete", "reason": "목록 조각 구간을 모두 확인했습니다."}
+
+
+def _choose_sellers_action(
+    output_dir: Path,
+    products_paths: list[Path] | None,
+    slice_index: int | None,
+    slice_count: int,
+) -> dict:
+    """판매자 조각(work sellers)의 다음 작업 — 매핑 대기열만 판정한다."""
+    from app.core.coupang.patchright_top_sellers import TopSellerStore, _work
+
+    store = TopSellerStore(output_dir)
+    store.ensure_files()
+
+    control = read_seller_control(output_dir)
+    if control["status"] == "halted":
+        reason = str(control.get("reason") or "앞선 판매자 작업이 끝나지 않았습니다.")
+        return {"action": "halted", "reason": reason}
+    store.requeue_unconfirmed_sellers()
+
+    pending, unmapped = _work(
+        store,
+        1,
+        products_paths=products_paths,
+        slice_index=slice_index,
+        slice_count=slice_count,
+    )
+    if pending or unmapped:
+        return {
+            "action": "sellers",
+            "reason": "남은 상품의 판매자 사업자정보를 수집합니다.",
+        }
+    failed_mappings = json.loads(
+        store.failed_mappings_path.read_text(encoding="utf-8")
+    )
+    if failed_mappings:
+        return {
+            "action": "halted",
+            "reason": "판매자를 연결하지 못한 상품이 있어 자동 진행을 멈춥니다.",
+        }
+    return {"action": "complete", "reason": "이 조각의 판매자 수집이 끝났습니다."}
 
 
 def _choose_action(
@@ -180,6 +263,19 @@ def next_session_id(session_id: str) -> str:
     return sid + "2"
 
 
+def _sid_namespace(session_id: str) -> str:
+    """sid 의 인스턴스 네임스페이스 — 마지막 숫자 1자리를 뺀 접두사.
+
+    인스턴스 N 은 i{N}0~i{N}9 를 쓰므로 같은 인스턴스의 sid 들은 이 접두사가
+    같다(i20·i23 → "i2", i200·i207 → "i20"). 끝자리가 숫자가 아니면 통째로
+    반환한다(구형 단일 인스턴스 sid b01 계열끼리는 "b0" 로 같다).
+    """
+    sid = str(session_id or "").strip()
+    if sid and sid[-1].isdigit():
+        return sid[:-1]
+    return sid
+
+
 def check_and_rotate_session(
     output_dir: Path, cli_session_id: str
 ) -> tuple[dict, str]:
@@ -191,7 +287,12 @@ def check_and_rotate_session(
     실행 시작 시 자동화한다.
 
     시작 sid는 상태 파일(proxy_session_state.json)의 마지막 성공 sid,
-    없으면 호출자가 넘긴 sid. 점검에 실패하고 원인이 세션 수준
+    없으면 호출자가 넘긴 sid. 단 폴더에 남은 sid가 호출자 인스턴스의
+    네임스페이스(i{N}_) 소속이 아니면 승계하지 않는다 — 조각/샤드 승계로
+    다른 인스턴스가 쓰던 폴더를 물려받을 때 그 회선(출구 IP)까지 물려받으면
+    두 인스턴스가 같은 IP를 공유하거나 프로필(쿠키)-IP 불일치 조합이
+    생긴다(2026-10-04 sid 충돌 사고와 같은 실패 유형). 이때는 자기
+    네임스페이스의 sid로 시작한다. 점검에 실패하고 원인이 세션 수준
     (ROTATABLE_ERROR_KINDS)이면 sid를 교체해 다시 점검한다 — 최대 교체
     3회, 원본 포함 총 4회. 원인이 계정 수준(quota/auth/unknown_407)이면
     sid와 무관하므로 교체 없이 원본으로 진행한다. 점검은 Decodo
@@ -202,7 +303,10 @@ def check_and_rotate_session(
     스스로 실패하게 한다(예약 자동 비활성 = 현행 안전거동 유지).
     app/core/decodo.py 는 실행 시점에 없을 수 있어 늦은 import 로 가져온다.
     """
-    start_sid = read_proxy_session_state(output_dir) or cli_session_id
+    stored_sid = read_proxy_session_state(output_dir)
+    if _sid_namespace(stored_sid) != _sid_namespace(cli_session_id):
+        stored_sid = ""
+    start_sid = stored_sid or cli_session_id
     tried = [start_sid]
     failure = {
         "event": "exit_ip_check",

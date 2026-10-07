@@ -150,9 +150,26 @@ def _control_path(output_dir: Path) -> Path:
     return output_dir / TOP_SELLER_CONTROL_FILENAME
 
 
-def _work(store: TopSellerStore, limit: int) -> tuple[list[tuple[str, dict]], list[dict]]:
-    """이번 세션에 처리할 (판매자, 상품) 대기열 — 공용 규칙의 상품 스키마만 다른 래퍼."""
-    return seller_work_queue(store, PRODUCT_FIELDS, limit)
+def _work(
+    store: TopSellerStore,
+    limit: int,
+    *,
+    products_paths: list[Path] | None = None,
+    slice_index: int | None = None,
+    slice_count: int = 1,
+) -> tuple[list[tuple[str, dict]], list[dict]]:
+    """이번 세션에 처리할 (판매자, 상품) 대기열 — 공용 규칙의 상품 스키마만 다른 래퍼.
+
+    products_paths/slice_* 는 판매자 조각(볼륨 인지 분할 §5.2) 확장.
+    """
+    return seller_work_queue(
+        store,
+        PRODUCT_FIELDS,
+        limit,
+        products_paths=products_paths,
+        slice_index=slice_index,
+        slice_count=slice_count,
+    )
 
 
 def read_seller_control(output_dir: Path) -> dict:
@@ -296,8 +313,17 @@ def run_top_seller_batch(
     browser_profile_root: Path | None = None,
     browser_scope_factory: Callable | None = None,
     proxy: dict | None = None,
+    products_paths: list[Path] | None = None,
+    slice_index: int | None = None,
+    slice_count: int = 1,
 ) -> dict:
-    """저장된 상품을 판매자와 연결하고 공개 사업자정보를 중간 저장한다."""
+    """저장된 상품을 판매자와 연결하고 공개 사업자정보를 중간 저장한다.
+
+    products_paths/slice_index/slice_count 를 주면 판매자 조각(볼륨 인지
+    분할 §5.2)으로 동작한다 — 상품은 경로들의 top_products.csv 를 합쳐
+    읽고, 그중 vendor_item_id 해시 슬라이스에 속한 상품만 이 세션의
+    일감으로 삼는다. 매핑·판매자 결과는 output_dir(조각 폴더)에 쌓인다.
+    """
     if not 1 <= limit <= MAX_SESSION_PRODUCTS:
         raise ValueError(f"limit는 1~{MAX_SESSION_PRODUCTS}여야 합니다.")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -319,7 +345,13 @@ def run_top_seller_batch(
     # 대기열로 되돌린다 — 그래야 이어하기가 그 판매자를 다시 수집한다.
     requeued = store.requeue_unconfirmed_sellers()
 
-    pending, unmapped = _work(store, limit)
+    pending, unmapped = _work(
+        store,
+        limit,
+        products_paths=products_paths,
+        slice_index=slice_index,
+        slice_count=slice_count,
+    )
     planned_items = len(pending) + len(unmapped)
     if planned_items == 0:
         _save_control(output_dir, "completed")
@@ -500,7 +532,13 @@ def run_top_seller_batch(
                 if start + MAPPING_BATCH_SIZE < len(unmapped):
                     _wait(page, MAPPING_DELAY_MS, control)
 
-            remaining_pending, remaining_unmapped = _work(store, 1)
+            remaining_pending, remaining_unmapped = _work(
+                store,
+                1,
+                products_paths=products_paths,
+                slice_index=slice_index,
+                slice_count=slice_count,
+            )
             complete = not remaining_pending and not remaining_unmapped
             _save_control(output_dir, "completed" if complete else "ready")
             settled, settle_reason = settle_live_attempt(
