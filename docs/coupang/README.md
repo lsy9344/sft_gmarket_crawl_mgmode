@@ -1,5 +1,10 @@
 # Coupang OMP Crawler - 문서 인덱스
 
+## 2026-10-07 볼륨 인지 분할 라이브 검증
+
+- [볼륨 인지 분할 라이브 실행 기록](VOLUME_AWARE_LIVE_RUN_20261007.md): 채소 20인스턴스 완주·병합(판매자 1,646명) — 순수 가동시간 단가 실측(완성형 1,000명당 16.1시간, 판매자 매핑 세션이 순수의 ~70%). 라이브 발견: productCount 전 노드 미부착(→ 목록 1페이지 probe 구현), 페이지네이션 data-total 소멸(→ 스크롤 후 max(data-page)). 축산물 20인스턴스 가동 경과(조각 계획 41유닛, 판매자 조각 배출·재시작 재심사 실증).
+- 관련: [설계](PARALLEL_VOLUME_AWARE_SPLIT_DESIGN_20261006.md) · [구현 기록](VOLUME_AWARE_SPLIT_IMPLEMENTATION_20261006.md)(검토 반영·probe 추가 포함)
+
 ## 2026-09-28 직접 접속 중단 조사
 
 - [12:58~13:01 Sandbox 재개 실패: Decodo 초기 홈 403](research/SANDBOX_PROXY_HOME_BLOCK_20260928.md): 완료 6개·목록 39개 정상 인식. 한국 프록시 IP 3개 모두 초기 Chromium 홈에서 차단됐으며, 집 회선 전환·판매자 조회 전 실패.
