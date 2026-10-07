@@ -565,18 +565,25 @@ class CoupangParallelPanel(QWidget):
         """물량 미지 가족의 계획 조사(§4 2순위) — 목록 1페이지 probe.
 
         트리 응답에 productCount 가 없으면(2026-10-07 실측: 전 노드 미부착)
-        카테고리당 목록 1페이지를 직접 회선으로 확인해 페이지 수로 물량을
-        추정한다. 조사 중에는 진행 상황을 로그로 남기고 이벤트 루프를
-        돌려 UI가 멈춘 것처럼 보이지 않게 한다. 실패하면 빈 사전
-        (라운드로빈 균등 분할로 시작 — 계획은 근사일 뿐이므로 안전하다).
+        카테고리당 목록 1페이지로 페이지 수를 읽어 물량을 추정한다 — 직접
+        회선이 차단돼 있으면 Decodo 조사 전용 회선(sid i990)으로 재시도,
+        같은 가족을 24시간 이내에 조사했으면 캐시를 재사용한다(쿠팡 접촉
+        최소화). 조사 중에는 진행 상황을 로그로 남기고 이벤트 루프를 돌려
+        UI가 멈춘 것처럼 보이지 않게 한다. 실패하면 빈 사전(라운드로빈
+        균등 분할로 시작 — 계획은 근사일 뿐이므로 안전하다).
         """
         from PyQt6.QtWidgets import QApplication
 
-        from app.core.coupang.volume_probe import probe_family_volumes
+        from app.core.config import DEFAULT_OUTPUT_DIR
+        from app.core.coupang.volume_probe import (
+            PROBE_CACHE_FILENAME,
+            plan_volume_probe,
+        )
 
         self.append_log(
             f"[계획] 물량 정보(productCount)가 없어 목록 1페이지 조사를"
-            f" 합니다 — 카테고리 {len(family)}개, 직접 회선(카테고리당 1회)."
+            f" 합니다 — 카테고리 {len(family)}개(카테고리당 1회,"
+            " 직접 회선 → 차단 시 Decodo 조사 회선)."
         )
 
         def progress(name: str, volume: int, index: int, total: int) -> None:
@@ -586,7 +593,14 @@ class CoupangParallelPanel(QWidget):
             )
 
         try:
-            return probe_family_volumes(family, on_progress=progress)
+            return plan_volume_probe(
+                family,
+                on_progress=progress,
+                on_cached=lambda: self.append_log(
+                    "[계획] 최근 조사 결과(24시간 이내)를 재사용합니다."
+                ),
+                cache_path=DEFAULT_OUTPUT_DIR / PROBE_CACHE_FILENAME,
+            )
         except Exception as error:  # noqa: BLE001 - 조사 실패는 균등 분할 폴백
             self.append_log(
                 f"[계획] 물량 조사 실패({type(error).__name__}: {error})"

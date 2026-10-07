@@ -771,7 +771,7 @@ class PanelVolumeAwareSplitTest(unittest.TestCase):
         self._shard_mode()
         probed = {"194688": 400_000, "194810": 30_000}
 
-        def fake_probe(family, factory=None, *, on_progress=None):
+        def fake_probe(family, factory=None, *, on_progress=None, on_cached=None, cache_path=None):
             if on_progress is not None:
                 for index, (category_id, name) in enumerate(family):
                     on_progress(
@@ -780,7 +780,7 @@ class PanelVolumeAwareSplitTest(unittest.TestCase):
             return dict(probed)
 
         with mock.patch.object(
-            volume_probe, "probe_family_volumes", side_effect=fake_probe
+            volume_probe, "plan_volume_probe", side_effect=fake_probe
         ):
             config = self.panel.build_run_config(
                 output_dir="/tmp/livestock_probe_out", instance_count=20

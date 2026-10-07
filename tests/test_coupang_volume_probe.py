@@ -17,6 +17,7 @@ from app.core.coupang.patchright_canary import HOME_URL  # noqa: E402
 from app.core.coupang.patchright_top_thousand import MAX_LISTING_ITEMS  # noqa: E402
 from app.core.coupang.volume_probe import (  # noqa: E402
     EXTRACT_LISTING_SIZE_JS,
+    PROBE_CACHE_FILENAME,
     probe_family_volumes,
 )
 
@@ -160,6 +161,120 @@ class ProbeVolumeTest(unittest.TestCase):
         self.assertEqual(
             [url for url in page.visited if "/np/categories/" in url], []
         )
+
+
+class PlanVolumeProbeTest(unittest.TestCase):
+    """상위 진입 — 캐시 재사용, 직접 회선 차단 시 decodo 조사 회선 재시도."""
+
+    def _fake_decodo_module(self):
+        import sys
+        import types
+
+        module = types.ModuleType("app.core.decodo")
+        module.credentials_ready = lambda settings=None: True
+        module.load_settings = lambda path=None: object()
+        module.sticky_proxy_dict = (
+            lambda settings=None, session_id="": {"server": "decodo", "sid": session_id}
+        )
+        return module
+
+    def test_direct_success_saves_cache_and_skips_decodo(self):
+        import tempfile
+        from pathlib import Path
+
+        from app.core.coupang import volume_probe
+
+        page = _ProbePage({_url("194688"): {"totalPages": 4, "links": 9}})
+        factory = _Factory(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / PROBE_CACHE_FILENAME
+            volumes = volume_probe.plan_volume_probe(
+                _FAMILY[:2], factory, cache_path=cache_path
+            )
+            self.assertIn("194688", volumes)
+            self.assertTrue(cache_path.exists())
+            # 직접 회선 1회만 — 프록시가 붙은 조사 회선은 쓰지 않는다.
+            self.assertEqual([proxy for _, _, proxy in factory.captured], [None])
+            # 같은 가족 재조사는 캐시를 쓴다 — 브라우저를 다시 안 연다.
+            cached_calls = len(factory.captured)
+            seen_cached: list = []
+            again = volume_probe.plan_volume_probe(
+                _FAMILY[:2], factory,
+                on_cached=lambda: seen_cached.append(True),
+                cache_path=cache_path,
+            )
+            self.assertEqual(again, volumes)
+            self.assertEqual(len(factory.captured), cached_calls)
+            self.assertEqual(seen_cached, [True])
+
+    def test_blocked_direct_falls_back_to_decodo_probe_line(self):
+        """직접 회선 차단 → decodo 조사 전용 회선(sid i990)으로 재시도한다."""
+        import sys
+        from unittest import mock
+
+        from app.core.coupang import volume_probe
+
+        blocked_page = _ProbePage(blocked_urls=[HOME_URL])
+        ok_page = _ProbePage({_url("194688"): {"totalPages": 10, "links": 9}})
+
+        class _Routing:
+            def __init__(self):
+                self.captured: list = []
+
+            @contextmanager
+            def _open(self, user_data_dir, headless=False, proxy=None):
+                self.captured.append(proxy)
+                # 직접(proxy=None)은 차단 페이지, 프록시 회선은 정상 페이지.
+                yield _Context(blocked_page if proxy is None else ok_page)
+
+            def __call__(self, user_data_dir, *, headless=False, proxy=None):
+                return self._open(user_data_dir, headless, proxy)
+
+        routing = _Routing()
+        fake = self._fake_decodo_module()
+        with mock.patch.dict(sys.modules, {"app.core.decodo": fake}):
+            volumes = volume_probe.plan_volume_probe(_FAMILY[:2], routing)
+        self.assertEqual(routing.captured, [None, {"server": "decodo", "sid": "i990"}])
+        # 194810 은 빈 목록(판독 결과 없음) — 최소 물량 1로 계획에 참여.
+        self.assertEqual(
+            volumes, {"194688": 10 * MAX_LISTING_ITEMS, "194810": 1}
+        )
+
+    def test_stale_or_other_family_cache_is_ignored(self):
+        import tempfile
+        from pathlib import Path
+
+        from app.core.coupang import volume_probe
+
+        page = _ProbePage({_url("194688"): {"totalPages": 2, "links": 9}})
+        factory = _Factory(page)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / PROBE_CACHE_FILENAME
+            # 다른 가족의 캐시 — 재사용하지 않는다.
+            volume_probe._save_cached_volumes(
+                cache_path, [("999999", "다른가족")], {"999999": 100}
+            )
+            volumes = volume_probe.plan_volume_probe(
+                _FAMILY[:2], factory, cache_path=cache_path
+            )
+            self.assertIn("194688", volumes)
+            self.assertEqual(len(factory.captured), 1)  # 브라우저를 열었다
+            # 만료된 캐시 — 재사용하지 않는다.
+            stale = Path(tmp) / "stale.json"
+            volume_probe._save_cached_volumes(stale, _FAMILY[:2], {"194688": 5})
+            raw = __import__("json").loads(stale.read_text(encoding="utf-8"))
+            raw["saved_ts"] -= volume_probe.PROBE_CACHE_TTL_SECONDS + 1
+            stale.write_text(
+                __import__("json").dumps(raw), encoding="utf-8"
+            )
+            factory2 = _Factory(
+                _ProbePage({_url("194688"): {"totalPages": 3, "links": 9}})
+            )
+            volumes = volume_probe.plan_volume_probe(
+                _FAMILY[:2], factory2, cache_path=stale
+            )
+            self.assertIn("194688", volumes)
+            self.assertEqual(len(factory2.captured), 1)
 
 
 if __name__ == "__main__":
