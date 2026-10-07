@@ -556,12 +556,21 @@ class PanelShardModeTest(unittest.TestCase):
         from PyQt6.QtWidgets import QApplication
 
         from app.core.coupang.categories import CategoryNode
+        from app.core.coupang import volume_probe
         from app.ui.coupang_parallel_panel import CoupangParallelPanel
 
         app = QApplication.instance() or QApplication([])
         self.QApplication = app
         self.CategoryNode = CategoryNode
         self.CoupangParallelPanel = CoupangParallelPanel
+        # 이 클래스의 트리는 productCount 가 없다 — 시작 시 목록 probe 가
+        # 돌지 않게 스텁으로 고정한다(테스트 밀봉 — 실 브라우저 금지).
+        # 스텁은 빈 결과: 라운드로빈 폴백 경로를 검증한다.
+        patcher = mock.patch.object(
+            volume_probe, "plan_volume_probe", return_value={}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.panel = CoupangParallelPanel()
         self._set_groups()
 
@@ -806,6 +815,8 @@ class PanelVolumeAwareSplitTest(unittest.TestCase):
 
     def test_shrink_message_uses_work_unit_wording(self):
         """물량 없이 단위 수가 인스턴스 수보다 적을 때 — '작업 단위' 축소."""
+        from app.core.coupang import volume_probe
+
         node = self.CategoryNode(
             id="194688",
             name="축산",
@@ -816,9 +827,13 @@ class PanelVolumeAwareSplitTest(unittest.TestCase):
         group = self.panel.category_tree.topLevelItem(0)
         group.child(0).setSelected(True)
         self._shard_mode()
-        config = self.panel.build_run_config(
-            output_dir="/tmp/leaf_out", instance_count=3
-        )
+        # probe 스텁 — 조사 실패(빈 결과) 경로: 라운드로빈 폴백 + 축소 안내.
+        with mock.patch.object(
+            volume_probe, "plan_volume_probe", return_value={}
+        ):
+            config = self.panel.build_run_config(
+                output_dir="/tmp/leaf_out", instance_count=3
+            )
         self.assertIsNotNone(config)
         self.assertEqual(config.instance_count, 1)
         logs = self.panel.log_view.toPlainText().splitlines()
