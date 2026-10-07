@@ -42,20 +42,28 @@ __all__ = [
     "PROBE_CACHE_TTL_SECONDS",
     "PROBE_DELAY_MS",
     "PROBE_SESSION_ID",
+    "SCROLL_TO_BOTTOM_JS",
     "plan_volume_probe",
     "probe_family_volumes",
 ]
 
-# 목록 페이지의 전체 페이지 수는 페이지네이션 요소의 data-total 에 있다
-# (PAGE_STRUCTURE §리스팅 — 전체 페이지 수). 카드 링크 수는 폴백용.
+# 목록 페이지의 전체 페이지 수 — 2026-10-07 실측: 페이지네이션 바는
+# 스크롤해야 늦게 렌더되고(지연 마운트) 이전 문서의 .product-list-paging
+# data-total 은 없다. 현재 DOM 은 Pagination_* 클래스의 data-page 속성
+# (링크별 페이지 번호)라서 최댓값이 전체 페이지 수다(긴 목록은 말줄임
+# 뒤 마지막 페이지 번호가 함께 렌더된다). 카드 링크 수는 폴백용.
+SCROLL_TO_BOTTOM_JS = r"() => { window.scrollTo(0, document.body.scrollHeight); }"
+
 EXTRACT_LISTING_SIZE_JS = r"""
 () => {
-  const paging = document.querySelector('.product-list-paging[data-total]');
-  const raw = paging ? paging.getAttribute('data-total') : '';
-  const total = parseInt(raw || '', 10);
+  const pages = [];
+  for (const el of document.querySelectorAll('[data-page]')) {
+    const n = parseInt(el.getAttribute('data-page') || '', 10);
+    if (Number.isFinite(n) && n > 0) pages.push(n);
+  }
   const links = document.querySelectorAll('a[href*="/vp/products/"]').length;
   return {
-    totalPages: Number.isFinite(total) && total > 0 ? total : null,
+    totalPages: pages.length ? Math.max.apply(null, pages) : null,
     links: links,
   };
 }
@@ -63,6 +71,8 @@ EXTRACT_LISTING_SIZE_JS = r"""
 
 # 카테고리 사이 대기 — 목록 세션의 페이지 간격과 같은 무게(2초).
 PROBE_DELAY_MS = 2_000
+# 하단 스크롤 후 페이지네이션 바가 렌더될 때까지의 대기(2026-10-07 실측).
+PAGINATION_RENDER_MS = 2_500
 
 # 조사 전용 decodo sid — 인스턴스 네임스페이스(i{N}0~i{N}9, N=2~20)와
 # 겹치지 않는 십진 영역. 회선이 겹치면 조사 트래픽이 수집 회선 평판을
@@ -129,6 +139,9 @@ def probe_family_volumes(
                     )
                     if blocked:
                         break  # 조사 중단 — 부분 결과만 반환(가드가 이어서 심사)
+                    # 페이지네이션 바는 스크롤해야 렌더된다(2026-10-07 실측).
+                    page.evaluate(SCROLL_TO_BOTTOM_JS)
+                    _wait(page, PAGINATION_RENDER_MS, None)
                     size = page.evaluate(EXTRACT_LISTING_SIZE_JS)
                 except Exception:  # noqa: BLE001 - 한 카테고리 실패는 미지로
                     size = None

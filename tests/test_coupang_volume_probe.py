@@ -18,6 +18,7 @@ from app.core.coupang.patchright_top_thousand import MAX_LISTING_ITEMS  # noqa: 
 from app.core.coupang.volume_probe import (  # noqa: E402
     EXTRACT_LISTING_SIZE_JS,
     PROBE_CACHE_FILENAME,
+    SCROLL_TO_BOTTOM_JS,
     probe_family_volumes,
 )
 
@@ -46,6 +47,7 @@ class _ProbePage:
         self.blocked_urls = set(blocked_urls or ())
         self.url = "about:blank"
         self.visited: list[str] = []
+        self.scripts: list[str] = []  # evaluate 호출 순서 기록(스크롤→판독)
 
     def goto(self, url, **_kwargs):
         self.url = str(url)
@@ -61,6 +63,11 @@ class _ProbePage:
         return "<html><body>normal page content</body></html>"
 
     def evaluate(self, script, argument=None):
+        self.scripts.append(
+            "scroll" if script == SCROLL_TO_BOTTOM_JS else "extract"
+        )
+        if script == SCROLL_TO_BOTTOM_JS:
+            return True
         if script != EXTRACT_LISTING_SIZE_JS:
             raise AssertionError("unexpected script")
         result = self.script.get(self.url)
@@ -108,6 +115,21 @@ class ProbeVolumeTest(unittest.TestCase):
         self.assertEqual(volumes["194688"], 120 * MAX_LISTING_ITEMS)
         self.assertEqual(volumes["194810"], MAX_LISTING_ITEMS)
         self.assertEqual(volumes["194817"], 1)
+
+    def test_scrolls_to_bottom_before_reading_pagination(self):
+        """페이지네이션 바는 스크롤해야 렌더된다(2026-10-07 실측) —
+        카테고리마다 하단 스크롤 → 판독 순서로 실행한다."""
+        page = _ProbePage({_url("194688"): {"totalPages": 7, "links": 58}})
+        probe_family_volumes(_FAMILY[:2], _Factory(page))
+        scrolls = [
+            i for i, label in enumerate(page.scripts) if label == "scroll"
+        ]
+        reads = [
+            i for i, label in enumerate(page.scripts) if label == "extract"
+        ]
+        self.assertEqual(len(scrolls), 2)   # 카테고리당 1회 스크롤
+        self.assertEqual(len(reads), 2)
+        self.assertLess(scrolls[0], reads[0])  # 스크롤이 판독보다 먼저
 
     def test_request_cap_is_one_page_per_category_plus_home(self):
         """요청 상한 — 홈 웜업 1회 + 카테고리당 목록 1페이지(§4)."""
