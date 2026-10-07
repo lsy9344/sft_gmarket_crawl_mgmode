@@ -32,8 +32,13 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 # ── 설정 ────────────────────────────────────────────────────────────────
-TARGET_CATEGORY = "채소"                # 사용자 지정 수집 대상 카테고리
-TARGET_CATEGORY_ID = "194432"           # 식품 > 채소 URL id(linkCode) — 시드=라이브 일치 확인됨
+TARGET_CATEGORY = os.environ.get("UI7_CATEGORY", "채소")  # 수집 대상 카테고리 이름
+TARGET_CATEGORY_ID = os.environ.get("UI7_CATEGORY_ID", "194432")  # URL id(linkCode)
+# UI7_REFRESH=1 — 대상이 시드/캐시에 있어도 '카테고리 목록 새로고침'을 먼저
+# 누른다. 2026-10-06 볼륨 인지 분할의 물량 소스(productCount)는 라이브
+# category-list 응답에만 붙어 오므로, 새로 고친 트리에서 계획을 세우려면
+# 필수다(없으면 라운드로빈 열화 호환으로 돈다).
+FORCE_REFRESH = os.environ.get("UI7_REFRESH") == "1"
 INSTANCE_COUNT = int(os.environ.get("UI7_INSTANCES", "7"))
 # 첫 라운드(전 인스턴스 1세션씩) 관찰 예산 — 초과하면 정지 요청.
 OBSERVE_SECONDS = int(os.environ.get("UI7_OBSERVE_SECONDS", "2400"))
@@ -93,13 +98,18 @@ def shot(window, tag: str) -> None:
         say(f"스크린샷 실패({tag}): {error}")
 
 
-def find_category_item(tree, category_name: str):
-    """트리 전체(모든 깊이)에서 이름이 정확히 일치하는 카테고리 아이템을 찾는다.
+def find_category_item(tree, category_name: str, category_id: str = ""):
+    """트리 전체(모든 깊이)에서 카테고리 항목을 찾는다.
 
-    찾은 항목의 모든 조상을 펼쳐 눈에 보이게 만든 뒤 반환한다.
+    category_id 를 주면 id 로 먼저 찾는다(동명 노드·인코딩 무관하게
+    확정적). 이름으로만 찾을 때는 정확히 일치하는 첫 항목. 찾은 항목의
+    모든 조상을 펼쳐 눈에 보이게 만든 뒤 반환한다.
     """
     def walk(item):
-        if item.data(0, 0x0100) and item.text(0) == category_name:
+        if category_id:
+            if str(item.data(0, 0x0100) or "") == category_id:
+                return item
+        elif item.data(0, 0x0100) and item.text(0) == category_name:
             return item
         for index in range(item.childCount()):
             found = walk(item.child(index))
@@ -242,7 +252,14 @@ class Driver:
         )
         say(f"'Coupang 카테고리' 탭(index {tab_index})으로 전환")
         self.window.tab_widget.setCurrentIndex(tab_index)
-        if self.panel().category_tree.topLevelItemCount() > 0:
+        if FORCE_REFRESH:
+            say(
+                "UI7_REFRESH=1 — 물량(productCount) 확보를 위해 "
+                "'카테고리 목록 새로고침' 클릭(라이브 fetch)"
+            )
+            shot(self.window, "before_refresh")
+            self._start_refresh()
+        elif self.panel().category_tree.topLevelItemCount() > 0:
             say(
                 "카테고리 트리 이미 로드됨(시작 시 캐시/기본 목록) — "
                 f"{self.panel().cache_label.text()}"
@@ -283,21 +300,21 @@ class Driver:
 
     def _phase_select(self) -> None:
         tree = self.panel().category_tree
-        item = find_category_item(tree, TARGET_CATEGORY)
+        item = find_category_item(tree, TARGET_CATEGORY, TARGET_CATEGORY_ID)
         if item is None:
             if not _state.get("refresh_done"):
                 # 캐시/시드 목록에 대상이 없다 — 사용자처럼 새로고침해서
                 # 현재 쿠팡 트리를 받아온 뒤 다시 찾는다.
                 say(
-                    f"'{TARGET_CATEGORY}' 항목이 현재 목록에 없음 — "
-                    "'카테고리 목록 새로고침' 클릭(라이브 fetch)"
+                    f"'{TARGET_CATEGORY}'(id={TARGET_CATEGORY_ID}) 항목이 "
+                    "현재 목록에 없음 — '카테고리 목록 새로고침' 클릭(라이브 fetch)"
                 )
                 shot(self.window, "before_refresh")
                 self._start_refresh()
                 return
             say(
-                f"[중단] 새로고침한 트리에서도 '{TARGET_CATEGORY}' 항목을 "
-                "찾지 못했습니다."
+                f"[중단] 새로고침한 트리에서도 '{TARGET_CATEGORY}'"
+                f"(id={TARGET_CATEGORY_ID}) 항목을 찾지 못했습니다."
             )
             shot(self.window, "category_not_found")
             self._finish()
