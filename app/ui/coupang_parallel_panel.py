@@ -748,6 +748,14 @@ class CoupangParallelPanel(QWidget):
             families = [list(unit.categories) for unit in units]
             unit_specs = [unit_to_dict(unit) for unit in units]
             root_family = [tuple(pair) for pair in family]
+            # probe 가 시작 시점에 계획을 다시 세우면 미리보기 때보다 단위가
+            # 늘어난다 — 카드 표기도 새 계획의 라벨로 갱신한다(기본 라벨 방지).
+            self._family_names = [
+                f"샤드 {index + 1} (카테고리 {len(unit.categories)}개)"
+                if unit.kind == WORK_KIND_WHOLE
+                else unit.label
+                for index, unit in enumerate(units)
+            ]
             if len(families) < count:
                 self.append_log(
                     f"[시작] 작업 단위 {len(families)}개라 인스턴스 "

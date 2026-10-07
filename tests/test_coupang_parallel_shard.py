@@ -799,6 +799,10 @@ class PanelVolumeAwareSplitTest(unittest.TestCase):
         kinds = {spec["kind"] for spec in config.unit_specs}
         self.assertIn("pages", kinds)  # 큰 카테고리(194688)가 조각으로 나뉜다
         self.assertGreater(len(config.families), config.instance_count)
+        # probe 로 다시 세운 계획의 라벨이 카드 표기에도 반영된다.
+        self.assertTrue(
+            any("목록" in name for name in self.panel._family_names)
+        )
         logs = self.panel.log_view.toPlainText()
         self.assertIn("물량 정보(productCount)가 없어", logs)
         self.assertIn("약 400,000개", logs)  # 조사 진행 로그
