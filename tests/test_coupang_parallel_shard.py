@@ -746,6 +746,54 @@ class PanelVolumeAwareSplitTest(unittest.TestCase):
             self.panel._family_name_for(beyond + 1), "채소 판매자 2/2"
         )
 
+    def test_start_without_product_count_probes_volumes(self):
+        """트리에 물량이 없으면 시작 시 목록 1페이지 조사로 가중 계획(§4 2순위).
+
+        라이브 실측(2026-10-07): category-list 응답에 productCount 가 전혀
+        붙지 않는다 — 이 경로가 가동 계획의 주경로다. 조사 결과로 목록
+        조각(pages)이 만들어지고 조사 진행 로그가 남는다.
+        """
+        from app.core.coupang import volume_probe
+
+        # productCount 없는 트리(라이브 응답 형태)로 교체.
+        node = self.CategoryNode(
+            id="194688",
+            name="축산/계란/식용곤충",
+            uri="/np/categories/194688",
+            children=[
+                self.CategoryNode(
+                    "194810", "계란", "/np/categories/194810", []
+                ),
+            ],
+        )
+        self.panel.set_category_groups([("쇼핑", [node])])
+        self._select_root()
+        self._shard_mode()
+        probed = {"194688": 400_000, "194810": 30_000}
+
+        def fake_probe(family, factory=None, *, on_progress=None):
+            if on_progress is not None:
+                for index, (category_id, name) in enumerate(family):
+                    on_progress(
+                        name, probed.get(category_id, 1), index + 1, len(family)
+                    )
+            return dict(probed)
+
+        with mock.patch.object(
+            volume_probe, "probe_family_volumes", side_effect=fake_probe
+        ):
+            config = self.panel.build_run_config(
+                output_dir="/tmp/livestock_probe_out", instance_count=20
+            )
+        self.assertIsNotNone(config)
+        self.assertIsNotNone(config.unit_specs)
+        kinds = {spec["kind"] for spec in config.unit_specs}
+        self.assertIn("pages", kinds)  # 큰 카테고리(194688)가 조각으로 나뉜다
+        self.assertGreater(len(config.families), config.instance_count)
+        logs = self.panel.log_view.toPlainText()
+        self.assertIn("물량 정보(productCount)가 없어", logs)
+        self.assertIn("약 400,000개", logs)  # 조사 진행 로그
+
     def test_units_beyond_instance_count_do_not_trim(self):
         """작업 단위가 인스턴스 수보다 많으면 축소하지 않는다(카테고리 수
         상한 극복 — §1)."""

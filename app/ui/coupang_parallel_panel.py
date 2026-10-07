@@ -561,6 +561,39 @@ class CoupangParallelPanel(QWidget):
         selection = self._split_selection()
         return selection[0] if selection is not None else None
 
+    def _probe_volumes(self, family: list[tuple[str, str]]) -> dict[str, int]:
+        """물량 미지 가족의 계획 조사(§4 2순위) — 목록 1페이지 probe.
+
+        트리 응답에 productCount 가 없으면(2026-10-07 실측: 전 노드 미부착)
+        카테고리당 목록 1페이지를 직접 회선으로 확인해 페이지 수로 물량을
+        추정한다. 조사 중에는 진행 상황을 로그로 남기고 이벤트 루프를
+        돌려 UI가 멈춘 것처럼 보이지 않게 한다. 실패하면 빈 사전
+        (라운드로빈 균등 분할로 시작 — 계획은 근사일 뿐이므로 안전하다).
+        """
+        from PyQt6.QtWidgets import QApplication
+
+        from app.core.coupang.volume_probe import probe_family_volumes
+
+        self.append_log(
+            f"[계획] 물량 정보(productCount)가 없어 목록 1페이지 조사를"
+            f" 합니다 — 카테고리 {len(family)}개, 직접 회선(카테고리당 1회)."
+        )
+
+        def progress(name: str, volume: int, index: int, total: int) -> None:
+            QApplication.processEvents()
+            self.append_log(
+                f"[계획] ({index}/{total}) {name}: 약 {volume:,}개"
+            )
+
+        try:
+            return probe_family_volumes(family, on_progress=progress)
+        except Exception as error:  # noqa: BLE001 - 조사 실패는 균등 분할 폴백
+            self.append_log(
+                f"[계획] 물량 조사 실패({type(error).__name__}: {error})"
+                " — 라운드로빈 균등 분할로 시작합니다."
+            )
+            return {}
+
     # ── 인스턴스 카드 ───────────────────────────────────────────────
 
     def set_instance_count_preview(self, count: int) -> None:
@@ -691,8 +724,12 @@ class CoupangParallelPanel(QWidget):
                 if instance_count is not None
                 else self.spin_instances.value()
             )
-            # 물량 가중 작업 단위(§5) — productCount 유무에 따라 조각 분할이
-            # 결정된다. 미지면 라운드로빈 whole 유닛(현행과 동일 결과).
+            if not volumes:
+                # §4 2순위 — 트리에 productCount 가 없으면 목록 1페이지
+                # 조사로 물량을 추정한다(카테고리당 요청 1회, 직접 회선).
+                volumes = self._probe_volumes(family)
+            # 물량 가중 작업 단위(§5) — 물량 유무에 따라 조각 분할이 결정된다.
+            # 미지면 라운드로빈 whole 유닛(현행과 동일 결과).
             units = plan_work_units(family, volumes, count)
             families = [list(unit.categories) for unit in units]
             unit_specs = [unit_to_dict(unit) for unit in units]
@@ -700,9 +737,9 @@ class CoupangParallelPanel(QWidget):
             if len(families) < count:
                 self.append_log(
                     f"[시작] 작업 단위 {len(families)}개라 인스턴스 "
-                    f"{len(families)}개로 축소합니다 — 물량을 알아도 이 가족은"
-                    " 더 잘게 쪼갤 만큼 크지 않습니다(카테고리 새로고침으로"
-                    " productCount 를 받아오면 조각 분할이 가능해집니다)."
+                    f"{len(families)}개로 축소합니다 — 이 가족은 더 잘게"
+                    " 쪼갤 만큼 크지 않습니다(물량 조사에 실패했으면"
+                    " 카테고리 새로고침 후 다시 시도해도 됩니다)."
                 )
                 count = len(families)
         else:
