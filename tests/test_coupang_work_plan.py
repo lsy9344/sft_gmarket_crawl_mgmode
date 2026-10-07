@@ -132,6 +132,34 @@ class PlanWorkUnitsTest(unittest.TestCase):
                 self.assertEqual(next_from, prev_to + 1)  # 연속·서로소
             self.assertLessEqual(spans[-1][1], 50)
 
+    def test_last_piece_extends_to_global_cap(self):
+        """마지막 조각은 전역 상한(50쪽)까지 열린다 — 물량 과소평가 흡수.
+
+        productCount 가 실제 목록 깊이를 과소평가해도(페이지당 상품이 60보다
+        적은 경우 등) 끝 조각이 실제 끝까지 추적한다. 예상이 맞으면 빈 페이지
+        2회 관용(EMPTY_PAGE_TOLERANCE)이 예상 종료 직후 조각을 완주시키므로
+        추가 비용은 빈 페이지 방문뿐, 서로소성도 유지된다(끝 조각만 연장).
+        """
+        family = [("194432", "채소")]
+        volumes = {"194432": 1_200}  # 예상 20쪽(1,200/60) — 상한(50) 이하
+        units = plan_work_units(family, volumes, 7)
+        spans = _piece_page_spans(units, "194432")
+        self.assertGreaterEqual(len(spans), 2)
+        self.assertEqual(spans[-1][1], 50)  # 끝 조각이 상한까지 개방
+        # 예상 구간(1~20쪽)은 여전히 빠짐없이 커버 — 연장은 그 뒤에만.
+        covered = set()
+        for page_from, page_to in spans:
+            covered.update(range(page_from, min(page_to, 20) + 1))
+        self.assertEqual(covered, set(range(1, 21)))
+        # 정렬(무거운 것 먼저)이 끝 조각 연장에 왜곡되지 않는다 — 큐 순서는
+        # 구간 길이 기준 내림차순(연장된 끝 조각이 먼저 배분된다).
+        queue_lengths = [
+            unit.page_to - unit.page_from + 1
+            for unit in units
+            if unit.kind == WORK_KIND_PAGES
+        ]
+        self.assertEqual(queue_lengths, sorted(queue_lengths, reverse=True))
+
     def test_single_big_category_fills_all_instances(self):
         """카테고리 1개 < 인스턴스 수여도 조각이 전 회선 일감을 만든다(§1)."""
         family = [("194432", "채소")]

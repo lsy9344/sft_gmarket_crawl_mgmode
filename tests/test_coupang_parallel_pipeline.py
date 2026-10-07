@@ -771,6 +771,56 @@ class CheckAndRotateSessionTest(unittest.TestCase):
             self.assertEqual(effective_sid, "b08")
             self.assertEqual(_proxy_state(output_dir)["session_id"], "b08")
 
+    def test_state_file_sid_from_other_namespace_is_not_inherited(self):
+        """타 인스턴스 네임스페이스의 폴더 sid는 승계하지 않는다.
+
+        조각/샤드 승계로 다른 인스턴스가 쓰던 폴더를 물려받아도 그 회선
+        (출구 IP)까지 물려받지 않는다 — 두 인스턴스가 같은 IP를 공유하거나
+        프로필(쿠키)-IP 불일치가 생기는 걸 막는다(2026-10-04 sid 충돌
+        사고와 같은 실패 유형). 자기 네임스페이스 sid로 시작하고 상태
+        파일도 자기 sid로 덮어쓴다.
+        """
+        calls: list = []
+        fake = _fake_decodo(calls)
+        _script_fetch_by_sid(fake, calls, {"*": _alive("1.1.1.1")})
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            (output_dir / PROXY_STATE_FILENAME).write_text(
+                json.dumps({"session_id": "i57", "updated_at": "x"}),
+                encoding="utf-8",
+            )
+            event, effective_sid = self._rotate(fake, output_dir, "i20")
+            self.assertEqual(_fetch_sids(calls), ["i20"])
+            self.assertEqual(effective_sid, "i20")
+            self.assertEqual(event["tried"], ["i20"])
+            self.assertEqual(_proxy_state(output_dir)["session_id"], "i20")
+
+    def test_state_file_sid_namespace_boundaries(self):
+        """같은 인스턴스 네임스페이스(i{N}_)면 승계, 숫자 자리수가 다른
+        타 인스턴스(i2x vs i20x)는 거부한다."""
+        cases = [
+            ("i23", "i20", "i23"),    # 같은 인스턴스 2 — 승계
+            ("i207", "i200", "i207"),  # 같은 인스턴스 20 — 승계
+            ("i207", "i20", "i20"),   # 인스턴스 20 → 2 침범 거부
+            ("i2", "i20", "i20"),     # 구형 짧은 sid 거부(안전 방향)
+        ]
+        for stored, caller, expected in cases:
+            with self.subTest(stored=stored, caller=caller):
+                calls: list = []
+                fake = _fake_decodo(calls)
+                _script_fetch_by_sid(fake, calls, {"*": _alive()})
+                with tempfile.TemporaryDirectory() as tmp:
+                    output_dir = Path(tmp) / "out"
+                    _prepare(output_dir, [_product_row("viid-1")])
+                    (output_dir / PROXY_STATE_FILENAME).write_text(
+                        json.dumps({"session_id": stored, "updated_at": "x"}),
+                        encoding="utf-8",
+                    )
+                    _event, effective_sid = self._rotate(fake, output_dir, caller)
+                    self.assertEqual(_fetch_sids(calls), [expected])
+                    self.assertEqual(effective_sid, expected)
+
     def test_account_level_kinds_do_not_rotate(self):
         """quota/auth/unknown_407은 계정 수준 문제 — 교체 없이 원본 sid로."""
         for kind in ("quota", "auth", "unknown_407"):

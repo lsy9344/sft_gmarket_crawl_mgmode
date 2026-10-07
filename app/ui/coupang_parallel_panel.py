@@ -604,6 +604,15 @@ class CoupangParallelPanel(QWidget):
             card = self._make_instance_card(int(key) if key.isdigit() else 1)
         card.update_state(state_str, summary)
 
+    def append_unit_names(self, labels: list) -> None:
+        """실행 중 배출된 작업 단위(판매자 조각) 라벨을 카드 표기에 추가.
+
+        배출 규칙(§5.3)이 대기 큐에 늘린 단위는 시작 시점 계획에 없어
+        _family_names 범위 밖 인덱스가 된다 — 워커의 units_appended 시그널로
+        라벨을 받아 카드 표기가 기본 라벨로 떨어지지 않게 한다.
+        """
+        self._family_names.extend(str(label) for label in labels)
+
     # ── 상태 머신 ───────────────────────────────────────────────────
 
     def set_state(self, state: str) -> None:

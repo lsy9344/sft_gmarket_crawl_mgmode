@@ -516,6 +516,75 @@ class SellerEmissionRuleTest(unittest.TestCase):
                 all(unit.slice_count == 3 for unit in manager.units[1:])
             )
 
+    def test_emission_revives_done_instances_and_appends_labels(self):
+        """배출 시점에 종료(DONE) 인스턴스가 있으면 다시 가동한다(§5.3).
+
+        판매자 조각은 목록 완료 시점(실행 후반)에 배출되므로, 다른 인스턴스가
+        대기 큐가 빈 순간 DONE 이 된 뒤 배출되면 그대로 두면 마지막 한
+        인스턴스가 조각 전부를 홀로 순차 처리한다 — 부활해 큐를 함께
+        승계받게 한다. 차단/오류 인스턴스는 안전 장치 재심사 대상이라
+        건드리지 않는다. 배출과 함께 units_appended 이벤트(카드 표기
+        라벨)도 나간다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events: list = []
+            units = [
+                WorkUnit(WORK_KIND_PAGES, (_CATEGORY,), page_from=1, page_to=2),
+                WorkUnit(WORK_KIND_PAGES, (_CATEGORY,), page_from=3, page_to=4),
+            ]
+            calls: list = []
+            with _decodo(_fake_decodo(calls)):
+                manager = _make_manager(
+                    root,
+                    events,
+                    units=units,
+                    root_family=[_CATEGORY],
+                    instance_count=2,
+                )
+            # 인스턴스 1이 자기 조각을 완주하고 대기 큐가 비어 DONE 이 된 상황.
+            manager.instances["1"].family_index = None
+            manager.instances["1"].status = pm.STATUS_DONE
+            _write_piece_state(
+                root / "out" / "shard_01",
+                [_CATEGORY],
+                page_from=1,
+                page_to=2,
+                products=[
+                    _product_row(_CATEGORY, f"viid-{number}")
+                    for number in range(150)
+                ],
+            )
+            _write_piece_state(
+                root / "out" / "shard_02",
+                [_CATEGORY],
+                page_from=3,
+                page_to=4,
+                products=[
+                    _product_row(_CATEGORY, f"viid-x-{number}")
+                    for number in range(50)
+                ],
+            )
+            self.assertEqual(manager._sweep_emit_seller_units(), 2)  # 200행 → K=2
+            revived = manager.instances["1"]
+            self.assertEqual(revived.status, pm.STATUS_WAITING)
+            self.assertIsNone(revived.family_index)
+            self.assertEqual(revived.next_run_at, 0.0)
+            self.assertIn("다시 가동", _logs_text(events))
+            appended = _events_of(events, "units_appended")
+            self.assertEqual(len(appended), 1)
+            self.assertEqual(len(appended[0]["labels"]), 2)
+            self.assertTrue(
+                all("판매자" in label for label in appended[0]["labels"])
+            )
+            # 차단 인스턴스는 부활하지 않는다(재시작 시 안전 장치가 재심사).
+            blocked = manager.instances["2"]
+            blocked.status = pm.STATUS_BLOCKED
+            revived.status = pm.STATUS_DONE
+            manager._revive_done_instances()
+            self.assertEqual(revived.status, pm.STATUS_WAITING)
+            self.assertEqual(blocked.status, pm.STATUS_BLOCKED)
+
 
 # ── 2. 목록 조각 세션 + 혼합 큐 완주(§5.2, §8-2) ─────────────────────
 

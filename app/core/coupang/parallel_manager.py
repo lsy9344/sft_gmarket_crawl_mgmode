@@ -1117,6 +1117,14 @@ class ParallelCoupangManager:
             emitted += len(new_units)
             self._emit(
                 {
+                    "type": "units_appended",
+                    "instance": "",
+                    "first_family_index": first_index,
+                    "labels": [unit.label for unit in new_units],
+                }
+            )
+            self._emit(
+                {
                     "type": "log",
                     "instance": "",
                     "message": (
@@ -1127,8 +1135,42 @@ class ParallelCoupangManager:
                 }
             )
         if emitted:
+            self._revive_done_instances()
             self.persist_state()
         return emitted
+
+    def _revive_done_instances(self) -> int:
+        """대기 큐가 다시 찼을 때 종료(DONE) 인스턴스를 깨운다(§5.3).
+
+        인스턴스는 대기 큐가 빈 순간 DONE 이 되는데, 판매자 조각은 목록
+        완료 시점(실행 후반)에 배출되므로 그대로 두면 마지막 한 인스턴스가
+        배출 조각 전부를 80분 간격으로 홀로 순차 처리한다 — "어떤 회선도
+        굶지 않는다"(§5.3)가 런의 끝자락에서 깨진다. 차단/오류 인스턴스는
+        안전 장치 재심사 대상이므로 건드리지 않는다(재시작 시 _restore_state
+        가 다시 연다). 부활 인스턴스는 다음 run_due 에서 대기 큐를 승계한다.
+        """
+        revived = 0
+        for state in self._ordered_instances():
+            if state.status != STATUS_DONE:
+                continue
+            state.status = STATUS_WAITING
+            state.family_index = None
+            state.next_run_at = 0.0
+            state.total_products = 0
+            state.total_sellers = 0
+            revived += 1
+        if revived:
+            self._emit(
+                {
+                    "type": "log",
+                    "instance": "",
+                    "message": (
+                        f"배출된 조각을 받을 종료 인스턴스 {revived}개를"
+                        " 다시 가동합니다."
+                    ),
+                }
+            )
+        return revived
 
     def _ramp_capped_limits(self, ramp_limit: int | None) -> tuple[int, int]:
         """복구 확대 단계에 맞춘 이번 세션 규모 — (목록 페이지, 판매자 상한).

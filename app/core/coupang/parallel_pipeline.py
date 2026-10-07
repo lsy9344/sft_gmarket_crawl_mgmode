@@ -263,6 +263,19 @@ def next_session_id(session_id: str) -> str:
     return sid + "2"
 
 
+def _sid_namespace(session_id: str) -> str:
+    """sid 의 인스턴스 네임스페이스 — 마지막 숫자 1자리를 뺀 접두사.
+
+    인스턴스 N 은 i{N}0~i{N}9 를 쓰므로 같은 인스턴스의 sid 들은 이 접두사가
+    같다(i20·i23 → "i2", i200·i207 → "i20"). 끝자리가 숫자가 아니면 통째로
+    반환한다(구형 단일 인스턴스 sid b01 계열끼리는 "b0" 로 같다).
+    """
+    sid = str(session_id or "").strip()
+    if sid and sid[-1].isdigit():
+        return sid[:-1]
+    return sid
+
+
 def check_and_rotate_session(
     output_dir: Path, cli_session_id: str
 ) -> tuple[dict, str]:
@@ -274,7 +287,12 @@ def check_and_rotate_session(
     실행 시작 시 자동화한다.
 
     시작 sid는 상태 파일(proxy_session_state.json)의 마지막 성공 sid,
-    없으면 호출자가 넘긴 sid. 점검에 실패하고 원인이 세션 수준
+    없으면 호출자가 넘긴 sid. 단 폴더에 남은 sid가 호출자 인스턴스의
+    네임스페이스(i{N}_) 소속이 아니면 승계하지 않는다 — 조각/샤드 승계로
+    다른 인스턴스가 쓰던 폴더를 물려받을 때 그 회선(출구 IP)까지 물려받으면
+    두 인스턴스가 같은 IP를 공유하거나 프로필(쿠키)-IP 불일치 조합이
+    생긴다(2026-10-04 sid 충돌 사고와 같은 실패 유형). 이때는 자기
+    네임스페이스의 sid로 시작한다. 점검에 실패하고 원인이 세션 수준
     (ROTATABLE_ERROR_KINDS)이면 sid를 교체해 다시 점검한다 — 최대 교체
     3회, 원본 포함 총 4회. 원인이 계정 수준(quota/auth/unknown_407)이면
     sid와 무관하므로 교체 없이 원본으로 진행한다. 점검은 Decodo
@@ -285,7 +303,10 @@ def check_and_rotate_session(
     스스로 실패하게 한다(예약 자동 비활성 = 현행 안전거동 유지).
     app/core/decodo.py 는 실행 시점에 없을 수 있어 늦은 import 로 가져온다.
     """
-    start_sid = read_proxy_session_state(output_dir) or cli_session_id
+    stored_sid = read_proxy_session_state(output_dir)
+    if _sid_namespace(stored_sid) != _sid_namespace(cli_session_id):
+        stored_sid = ""
+    start_sid = stored_sid or cli_session_id
     tried = [start_sid]
     failure = {
         "event": "exit_ip_check",

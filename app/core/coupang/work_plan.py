@@ -271,9 +271,13 @@ def _page_pieces(
     예상 페이지 수 = 물량 / 페이지당 상품(60) — productCount 는 로켓 배송
     상품도 세므로 3P 실측보다 크게 잡힌다. 근사로만 쓴다(모듈 docstring).
     조각 수는 물량/G — 각 조각의 예상 물량이 G 에 가까워진다. 페이지는
-    연속·서로소 구간으로 나누고 마지막 조각이 나머지를 흡수한다.
-    실제 목록이 예상보다 짧으면 빈 페이지 2회 관용(EMPTY_PAGE_TOLERANCE)으로
-    조각이 스스로 완주한다.
+    연속·서로소 구간으로 나눈다. 마지막 조각만 예상 종료 페이지 대신 전역
+    상한(MAX_CATEGORY_PAGES)까지 열어두는데, productCount 가 목록 깊이를
+    과소평가해도(페이지당 상품이 60보다 적은 경우 등) 목록의 실제 끝까지
+    추적하게 하기 위해서다 — 예상이 맞으면 빈 페이지 2회 관용
+    (EMPTY_PAGE_TOLERANCE)이 예상 종료 직후 조각을 스스로 완주시키므로
+    추가 비용은 빈 페이지 방문 2회뿐이고, 조각 간 서로소성도 유지된다
+    (끝 조각의 뒤쪽만 연장).
     """
     estimated_pages = max(
         1, min(MAX_CATEGORY_PAGES, -(-volume // MAX_LISTING_ITEMS))
@@ -293,6 +297,14 @@ def _page_pieces(
             )
         )
         start = end + 1
+    if pieces and pieces[-1].page_to < MAX_CATEGORY_PAGES:
+        last = pieces[-1]
+        pieces[-1] = WorkUnit(
+            kind=WORK_KIND_PAGES,
+            categories=(category,),
+            page_from=last.page_from,
+            page_to=MAX_CATEGORY_PAGES,
+        )
     return pieces
 
 
@@ -371,8 +383,16 @@ def plan_work_units(
     pieces: list[WorkUnit] = []
     for pair, volume in bigs:
         pieces.extend(_page_pieces(pair, volume, target_volume))
-    # 무거운 카테고리의 조각이 먼저 큐에 오도록 — 초기 1:1 배분의 공평성.
-    pieces.sort(key=lambda unit: (-unit.page_to, unit.category_id))
+    # 무거운(예상 구간이 긴) 조각이 먼저 큐에 오도록 — 초기 1:1 배분의
+    # 공평성. 마지막 조각은 전역 상한까지 열려 있어 page_to 가 의도 무게와
+    # 무관하므로 구간 길이로 정렬한다.
+    pieces.sort(
+        key=lambda unit: (
+            -(unit.page_to - unit.page_from + 1),
+            unit.category_id,
+            unit.page_from,
+        )
+    )
 
     whole_bins = max(1, unit_budget - len(pieces)) if smalls else 0
     wholes = _pack_whole_units(smalls, filled, whole_bins) if smalls else []

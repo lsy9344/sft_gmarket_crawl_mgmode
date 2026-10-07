@@ -729,6 +729,23 @@ class PanelVolumeAwareSplitTest(unittest.TestCase):
         # families 와 단위 사양이 1:1 로 정렬돼 있다(설정 검증 통과).
         self.assertEqual(len(config.families), len(config.unit_specs))
 
+    def test_append_unit_names_extends_card_labels(self):
+        """실행 중 배출된 판매자 조각 라벨이 카드 표기에 추가된다(§5.3).
+
+        배출 단위는 시작 계획에 없어 인덱스가 _family_names 범위 밖이
+        되는데, 워커 units_appended 시그널 → append_unit_names 로 라벨을
+        받으면 카드가 기본 라벨로 떨어지지 않는다.
+        """
+        self._select_root()
+        self._shard_mode()
+        beyond = len(self.panel._family_names)
+        self.assertEqual(self.panel._family_name_for(beyond), "")
+        self.panel.append_unit_names(["채소 판매자 1/2", "채소 판매자 2/2"])
+        self.assertEqual(self.panel._family_name_for(beyond), "채소 판매자 1/2")
+        self.assertEqual(
+            self.panel._family_name_for(beyond + 1), "채소 판매자 2/2"
+        )
+
     def test_units_beyond_instance_count_do_not_trim(self):
         """작업 단위가 인스턴스 수보다 많으면 축소하지 않는다(카테고리 수
         상한 극복 — §1)."""
