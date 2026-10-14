@@ -39,6 +39,12 @@ class SellerRecordTest(unittest.TestCase):
         )
         self.assertEqual(rec.filled_count(), 6)
 
+    def test_power_dealer_flag_is_not_a_success_field(self) -> None:
+        rec = SellerRecord(goodscode="1", url="u", 파워딜러="True")
+        self.assertFalse(rec.is_valid())
+        self.assertEqual(rec.filled_count(), 0)
+        self.assertEqual(rec.to_dict()["파워딜러"], "True")
+
 
 class PrescanResultTest(unittest.TestCase):
     def test_status_labels(self) -> None:

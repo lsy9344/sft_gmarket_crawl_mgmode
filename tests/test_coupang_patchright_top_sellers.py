@@ -185,7 +185,11 @@ class TopSellersTest(unittest.TestCase):
     def test_maps_products_and_saves_business_info(self):
         page = _Page(
             vendors_by_item={"viid-1": "A00001"},
-            sellers_by_id={"A00001": _seller_payload()},
+            sellers_by_id={
+                "A00001": _seller_payload(
+                    qualitySellerBadgeDto={"qualityTitle": "파워판매자"},
+                )
+            },
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -213,6 +217,11 @@ class TopSellersTest(unittest.TestCase):
             self.assertEqual(len(final_rows), 1)
             self.assertEqual(final_rows[0]["상호"], "주식회사테스트")
             self.assertEqual(final_rows[0]["대표자"], "홍길동")
+            self.assertEqual(final_rows[0]["전화"], "02-1234-5678")
+            self.assertEqual(final_rows[0]["이메일"], "test@example.com")
+            self.assertEqual(final_rows[0]["파워셀러"], "True")
+            self.assertEqual(final_rows[0]["파워셀러등급"], "파워판매자")
+            self.assertNotIn("우수판매자여부", final_rows[0])
             self.assertEqual(final_rows[0]["소속카테고리목록"], "식품/견과/건과")
             self.assertEqual(final_rows[0]["상품수"], "1")
             control = json.loads(
@@ -320,6 +329,11 @@ class TopSellersTest(unittest.TestCase):
             rows = _read_rows(path)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["판매자ID"], "A00001")
+            self.assertEqual(rows[0]["파워셀러"], "False")
+            self.assertEqual(rows[0]["파워셀러등급"], "")
+            self.assertEqual(rows[0]["전화"], "p")
+            self.assertEqual(rows[0]["이메일"], "e")
+            self.assertNotIn("우수판매자여부", rows[0])
             self.assertEqual(path.name, "coupang_판매자_1명.csv")
 
 

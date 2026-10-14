@@ -129,6 +129,10 @@ class GmarketCategoryCrawlWorker(QThread):
 
             # ── Phase B: 판매자정보 (기존 파이프라인 재사용) ───────────────
             self.phase_changed.emit(PHASE_SELLER, 2, 2)
+            power_dealers: dict[str, bool] = {}
+            for outcome in outcomes:
+                for code, flag in outcome.power_dealers.items():
+                    power_dealers[code] = power_dealers.get(code, False) or flag
             crawler = SellerCrawler(
                 storage,
                 control=self.control,
@@ -138,6 +142,7 @@ class GmarketCategoryCrawlWorker(QThread):
                 on_collected=self.item_collected.emit,
                 on_error=self.error_occurred.emit,
                 delay=self.config.phase2_delay,
+                power_dealers=power_dealers,
             )
             summary = crawler.crawl(plan)
             self.summary = summary

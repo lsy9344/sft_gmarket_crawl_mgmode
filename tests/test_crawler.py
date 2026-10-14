@@ -901,6 +901,25 @@ class BuildCrawlPlanTest(unittest.TestCase):
         self.assertNotEqual(plan_a.plan_hash, plan_c.plan_hash)
 
 
+class PowerDealerFlagTest(_FastCrawlTestCase):
+    def test_listing_map_writes_true_false_or_blank(self) -> None:
+        storage = Storage(tempfile.mkdtemp())
+        crawler = SellerCrawler(
+            storage,
+            control=Control(),
+            delay=0.0,
+            power_dealers={"111": True, "222": False},
+        )
+        crawler.fetch_seller_info = lambda gc: FetchResult(OUTCOME_OK, _rec(gc))  # type: ignore[assignment]
+        plan = CategoryPlan("냉장고선반", "category", ("111", "222", "333"))
+        records, stats, cancelled, error = crawler.crawl_category(plan, set())
+        self.assertEqual(stats.success, 3)
+        self.assertFalse(cancelled)
+        self.assertIsNone(error)
+        by_code = {row["goodscode"]: row["파워딜러"] for row in records}
+        self.assertEqual(by_code, {"111": "True", "222": "False", "333": ""})
+
+
 class FinalSaveFailureTest(_FastCrawlTestCase):
     """MEDIUM-1 회귀: 전체 통합(ALL) 파일 저장 실패가 summary 반환 자체를 막으면 안 된다."""
 

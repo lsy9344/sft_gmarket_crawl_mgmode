@@ -71,6 +71,8 @@ class SellerRecord:
     ceo_name: str = ""
     email: str = ""
     phone: str = ""
+    # 리스팅 sellerTagText == "파워딜러" 만 "True"/"False". 목록에 없으면 "".
+    파워딜러: str = ""
     business_number: str = ""
     address: str = ""
     collected_at: str = ""
@@ -97,6 +99,7 @@ RECORD_FIELDS = [
     "ceo_name",
     "email",
     "phone",
+    "파워딜러",
     "business_number",
     "address",
     "collected_at",

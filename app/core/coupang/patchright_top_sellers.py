@@ -225,7 +225,7 @@ def authorize_http_503_retry(
     return True, ""
 
 
-# 완성형 판매자 데이터셋 열 — 2026-09-28 반찬 캠페인 산출물 형식과 같은 순서.
+# 완성형 판매자 데이터셋 열. 파워셀러 열은 화면 표기와 같은 이름이다.
 FINAL_SELLER_FIELDS = (
     "판매자ID",
     "URL",
@@ -237,8 +237,8 @@ FINAL_SELLER_FIELDS = (
     "이메일",
     "주소",
     "통신판매업신고번호",
-    "우수판매자여부",
-    "우수판매자등급",
+    "파워셀러",
+    "파워셀러등급",
     "평가수",
     "추천비율",
     "소속카테고리목록",
@@ -255,8 +255,8 @@ _SELLER_FIELD_MAP = {
     "email": "이메일",
     "address": "주소",
     "ecommerce_report_number": "통신판매업신고번호",
-    "power_seller": "우수판매자여부",
-    "power_seller_title": "우수판매자등급",
+    "power_seller": "파워셀러",
+    "power_seller_title": "파워셀러등급",
     "rating_count": "평가수",
     "thumb_up_ratio": "추천비율",
 }

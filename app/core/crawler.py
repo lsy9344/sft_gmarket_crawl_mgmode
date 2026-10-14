@@ -368,6 +368,7 @@ class SellerCrawler:
         on_collected: CollectedFn = _noop,
         on_error: ErrorFn = _noop,
         delay: float = config.DEFAULT_DELAY,
+        power_dealers: dict[str, bool] | None = None,
     ) -> None:
         self.storage = storage
         self.control = control or Control()
@@ -377,6 +378,8 @@ class SellerCrawler:
         self.on_collected = on_collected
         self.on_error = on_error
         self.delay = delay
+        # 카테고리 리스팅에서 넘어온 goodscode → 파워딜러. 없으면 칸은 빈 값.
+        self.power_dealers = power_dealers or {}
         self._session = requests.Session()
         self._session.headers.update(config.HEADERS)
 
@@ -502,6 +505,12 @@ class SellerCrawler:
                 if result.outcome == OUTCOME_OK and result.record is not None:
                     consecutive_fails = 0
                     result.record["source"] = cat_plan.category_name
+                    if code in self.power_dealers:
+                        result.record["파워딜러"] = (
+                            "True" if self.power_dealers[code] else "False"
+                        )
+                    else:
+                        result.record["파워딜러"] = ""
                     records.append(result.record)
                     newly_collected.add(code)  # 로컬에만 반영 — 아직 durable 아님
                     stats.success += 1

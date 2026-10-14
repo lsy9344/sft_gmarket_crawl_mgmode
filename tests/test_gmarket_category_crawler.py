@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from unittest import mock
 
@@ -21,6 +22,7 @@ from app.core.gmarket_category_crawler import (
     GmarketCategoryRunConfig,
     build_result_from_codes,
     category_list_url,
+    parse_power_dealers,
 )
 from app.models.records import (
     SOURCE_CATEGORY,
@@ -157,6 +159,37 @@ def _listing_html(codes: list[str]) -> str:
         f'<a href="https://item.gmarket.co.kr/Item?goodscode={c}">상품</a>' for c in codes
     )
     return f"<html><body>{links}</body></html>"
+
+
+def _grade_item(item_no: str, *tag_texts: str) -> dict:
+    return {
+        "itemNo": item_no,
+        "seller": {
+            "sellerGradeTags": [
+                {"sellerTagText": text, "sellerTagAltText": text} for text in tag_texts
+            ],
+        },
+    }
+
+
+def _listing_html_with_grades(items: list[dict], extra_codes: list[str] | None = None) -> str:
+    codes = [str(item["itemNo"]) for item in items]
+    if extra_codes:
+        codes.extend(extra_codes)
+    payload = {
+        "props": {
+            "pageProps": {
+                "modules": [{"rows": [{"viewModel": item} for item in items]}]
+            }
+        }
+    }
+    body = _listing_html(codes)
+    script = (
+        '<script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(payload, ensure_ascii=False)
+        + "</script>"
+    )
+    return body.replace("</body>", script + "</body>")
 
 
 class ListerTest(unittest.TestCase):
@@ -430,6 +463,68 @@ class CollectTokenTest(unittest.TestCase):
         self.assertEqual(call["json"]["zone"], "my_zone")
         self.assertEqual(call["json"]["country"], "us")
         self.assertEqual(call["headers"]["Authorization"], "Bearer ui-tok")
+        self.assertEqual(outcomes[0].power_dealers, {})
+
+
+class PowerDealerParseTest(unittest.TestCase):
+    def test_power_dealer_tag_only(self):
+        html = _listing_html_with_grades([
+            _grade_item("3486042693", "파워딜러", "고객만족우수"),
+            _grade_item("1000000002", "우수딜러"),
+            _grade_item("1000000003", "고객만족우수"),
+            _grade_item("1000000004"),
+        ])
+        grades = parse_power_dealers(html)
+        self.assertEqual(grades["3486042693"], True)
+        self.assertEqual(grades["1000000002"], False)
+        self.assertEqual(grades["1000000003"], False)
+        self.assertEqual(grades["1000000004"], False)
+
+    def test_duplicate_item_ors_true(self):
+        html = _listing_html_with_grades([
+            _grade_item("3486042693", "우수딜러"),
+            _grade_item("3486042693", "파워딜러"),
+        ])
+        self.assertEqual(parse_power_dealers(html), {"3486042693": True})
+
+    def test_missing_json_is_unknown(self):
+        self.assertEqual(parse_power_dealers(_listing_html(["111111111"])), {})
+        self.assertEqual(parse_power_dealers("<html></html>"), {})
+        self.assertEqual(
+            parse_power_dealers('<script id="__NEXT_DATA__">not-json</script>'),
+            {},
+        )
+
+    def test_collect_one_keeps_grades_and_leaves_unparsed_blank(self):
+        url1 = category_list_url("300028265", None)
+        url2 = category_list_url("300028265", 2)
+        page1 = _listing_html_with_grades(
+            [
+                _grade_item("111111111", "우수딜러"),
+                _grade_item("222222222", "파워딜러", "고객만족우수"),
+            ],
+            extra_codes=["333333333"],
+        )
+        page2 = _listing_html_with_grades([
+            _grade_item("111111111", "파워딜러"),
+            _grade_item("444444444"),
+        ])
+        session = _FakeUnlockerSession({
+            url1: _FakeResponse(200, page1),
+            url2: _FakeResponse(200, page2),
+        })
+        lister = GmarketCategoryLister(
+            control=Control(), on_log=lambda _m: None, max_pages=2,
+            page_delay_min=0, page_delay_max=0,
+        )
+        lister._token = "tok"
+        out = lister._collect_one(session, CategoryTarget("300028265", "냉장고선반"))
+        self.assertEqual(out.codes, ["111111111", "222222222", "333333333", "444444444"])
+        self.assertEqual(out.power_dealers["111111111"], True)
+        self.assertEqual(out.power_dealers["222222222"], True)
+        self.assertNotIn("333333333", out.power_dealers)
+        self.assertEqual(out.power_dealers["444444444"], False)
+        self.assertFalse(out.blocked)
 
 
 if __name__ == "__main__":

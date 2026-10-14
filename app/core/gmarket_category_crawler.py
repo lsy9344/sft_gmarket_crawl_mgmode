@@ -13,6 +13,8 @@ Phase A 는 Bright Data Web Unlocker 로 `/n/list` 리스팅을 fetch 한다
   7개뿐인 셸)으로 응답할 수 있다 → 제한적으로 재요청하고, 회복하지 못하면
   미수집으로 처리한다. 수집 대상은 중/소분류(M/S)를 권장한다.
 - goodscode 는 기존 `extract_goodscodes()`(정규식)로 뽑는다.
+- 파워딜러 여부는 같은 HTML 의 `__NEXT_DATA__` `sellerTagText` 로 뽑는다.
+  추가 요청은 없다. `고객만족우수`·`우수딜러`는 파워딜러가 아니다.
 
 수집 결과는 PrescanResult 목록으로 만들어져, 기존 Phase B
 (build_crawl_plan + SellerCrawler + Storage) 파이프라인에 그대로 흘러간다.
@@ -20,7 +22,9 @@ Phase A 는 Bright Data Web Unlocker 로 `/n/list` 리스팅을 fetch 한다
 
 from __future__ import annotations
 
+import json
 import random
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -66,6 +70,55 @@ class ListingOutcome:
     label: str
     codes: list[str] = field(default_factory=list)
     blocked: bool = False
+    # goodscode → 파워딜러. 목록 JSON 에 없는 코드는 키 자체가 없다(알 수 없음).
+    power_dealers: dict[str, bool] = field(default_factory=dict)
+
+
+_NEXT_DATA_RE = re.compile(
+    r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_power_dealers(html: str) -> dict[str, bool]:
+    """리스팅 HTML 에서 goodscode 별 파워딜러 여부를 뽑는다.
+
+    `itemNo` 와 `seller.sellerGradeTags` 가 같이 있는 객체만 본다. 태그의
+    `sellerTagText` 가 `파워딜러` 이면 True. 같은 상품이 광고·일반으로 두 번
+    나오면 OR. JSON 이 없거나 깨지면 빈 dict(알 수 없음 — False 가 아니다).
+    """
+    match = _NEXT_DATA_RE.search(html or "")
+    if not match:
+        return {}
+    try:
+        root = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return {}
+
+    found: dict[str, bool] = {}
+    stack: list[object] = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            item_no = node.get("itemNo")
+            seller = node.get("seller")
+            if (
+                item_no is not None
+                and isinstance(seller, dict)
+                and "sellerGradeTags" in seller
+            ):
+                code = str(item_no).strip()
+                tags = seller.get("sellerGradeTags") or []
+                is_power = isinstance(tags, list) and any(
+                    isinstance(tag, dict) and tag.get("sellerTagText") == "파워딜러"
+                    for tag in tags
+                )
+                if code.isdigit():
+                    found[code] = found.get(code, False) or is_power
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
 
 
 def category_list_url(code: str, page: int | None = None) -> str:
@@ -175,6 +228,8 @@ class GmarketCategoryLister:
         self._token = ""
         self._zone = config.BRIGHTDATA_ZONE
         self._country = config.BRIGHTDATA_COUNTRY
+        # _fetch_page 가 방금 읽은 페이지의 파워딜러 맵. 호출부가 바로 읽는다.
+        self._last_power_dealers: dict[str, bool] = {}
 
     # ── 공개 API ──────────────────────────────────────────────────────────
     def collect(self, targets: list[CategoryTarget]) -> list[ListingOutcome]:
@@ -232,6 +287,7 @@ class GmarketCategoryLister:
         """단일 카테고리 리스팅 페이지 1..N 순회 → ListingOutcome."""
         seen: list[str] = []
         seen_set: set[str] = set()
+        power_dealers: dict[str, bool] = {}
         empty_streak = 0
 
         for page in range(1, self.max_pages + 1):
@@ -241,13 +297,22 @@ class GmarketCategoryLister:
             self.on_log(f"  [{target.label}] page {page} 로드...")
 
             codes, blocked = self._fetch_page(session, url, target)
+            page_power = self._last_power_dealers
             if blocked:
                 self.on_log(
                     f"  [{target.label}] page {page}: 목록 확인 실패 — 일부 미수집 "
                     f"(확보한 상품번호 {len(seen)}개, 이 카테고리는 재수집 필요)"
                 )
-                return ListingOutcome(label=target.label, codes=seen, blocked=True)
+                return ListingOutcome(
+                    label=target.label,
+                    codes=seen,
+                    blocked=True,
+                    power_dealers=power_dealers,
+                )
 
+            for code, flag in page_power.items():
+                if code in codes:
+                    power_dealers[code] = power_dealers.get(code, False) or flag
             fresh = [c for c in codes if c not in seen_set]
             if fresh:
                 empty_streak = 0
@@ -270,7 +335,9 @@ class GmarketCategoryLister:
             if page < self.max_pages:
                 self._sleep(random.uniform(self.page_delay_min, self.page_delay_max))
 
-        return ListingOutcome(label=target.label, codes=seen, blocked=False)
+        return ListingOutcome(
+            label=target.label, codes=seen, blocked=False, power_dealers=power_dealers
+        )
 
     def _fetch_page(self, session: requests.Session, url: str,
                     target: CategoryTarget) -> tuple[list[str], bool]:
@@ -296,6 +363,7 @@ class GmarketCategoryLister:
         headers = {"Authorization": f"Bearer {self._token}"}
         empty_retried = False
         legacy_seen = False
+        self._last_power_dealers = {}
 
         for attempt in range(config.LISTING_MAX_RETRIES + 1):
             self._checkpoint()
@@ -348,6 +416,7 @@ class GmarketCategoryLister:
 
             codes = extract_goodscodes(html)
             if codes:
+                self._last_power_dealers = parse_power_dealers(html)
                 return codes, False
 
             # ── 빈 껍데기 회복 재시도 (200 + 코드 0) ─────────────────────
