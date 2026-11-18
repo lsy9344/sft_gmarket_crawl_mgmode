@@ -27,6 +27,7 @@ from app.core.coupang.patchright_canary import (
     settle_live_attempt,
 )
 from app.core.coupang.patchright_full_fruit import (
+    PRODUCT_SELLER_DEFAULTS,
     PRODUCT_SELLER_FIELDS,
     SELLER_FIELDS,
 )
@@ -109,7 +110,11 @@ class TopSellerStore:
             for row in sellers
         ):
             raise ValueError(f"{self.sellers_path.name} 판매자 상태가 잘못됐습니다.")
-        read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
+        read_csv(
+            self.product_seller_path,
+            PRODUCT_SELLER_FIELDS,
+            defaults=PRODUCT_SELLER_DEFAULTS,
+        )
         for path in (self.failed_sellers_path, self.failed_mappings_path):
             try:
                 value = json.loads(path.read_text(encoding="utf-8"))
@@ -139,6 +144,7 @@ class TopSellerStore:
             rows,
             key_of=item_key,
             validate=validate_mapping_row,
+            defaults=PRODUCT_SELLER_DEFAULTS,
         )
 
     def record_failed_seller(self, row: dict) -> None:
@@ -336,7 +342,11 @@ def build_seller_final(output_dir: Path) -> Path:
     """
     store = TopSellerStore(output_dir)
     products = read_csv(store.products_path, PRODUCT_FIELDS)
-    mappings = read_csv(store.product_seller_path, PRODUCT_SELLER_FIELDS)
+    mappings = read_csv(
+        store.product_seller_path,
+        PRODUCT_SELLER_FIELDS,
+        defaults=PRODUCT_SELLER_DEFAULTS,
+    )
     products_by_item = {row["vendor_item_id"]: row for row in products}
     categories: dict[str, list[str]] = {}
     product_counts: dict[str, int] = {}

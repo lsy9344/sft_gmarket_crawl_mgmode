@@ -19,6 +19,7 @@ from typing import ClassVar
 
 from app.core.base import Control
 from app.core.coupang.parallel_pipeline import choose_action
+from app.core.coupang.patchright_full_sellers import _mapping_rows
 from app.core.coupang.patchright_sample import (
     FETCH_STORE_REVIEW_JS,
     FETCH_VENDORS_JS,
@@ -446,6 +447,120 @@ class TopSellersTest(unittest.TestCase):
             self.assertEqual(rows[0]["이메일"], "e")
             self.assertNotIn("우수판매자여부", rows[0])
             self.assertEqual(path.name, "coupang_판매자_1명.csv")
+
+
+class SellerStoreNameTest(unittest.TestCase):
+    """스토어명 출처 — 저장된 매핑의 storeInfoArea.displayName 보존."""
+
+    def test_mapping_rows_save_store_display_name(self):
+        data = _vendors_payload("viid-1")
+        rows, vendors = _mapping_rows(
+            data,
+            [{"product_id": "10", "item_id": "20", "vendor_item_id": "viid-1"}],
+        )
+        self.assertEqual(rows[0]["store_name"], "테스트스토어")
+        self.assertEqual(vendors["A00001"]["displayName"], "테스트스토어")
+
+    def test_saved_mapping_store_name_reaches_saved_row(self):
+        from app.core.coupang.patchright_full_fruit import (
+            PRODUCT_SELLER_FIELDS,
+            _write_csv,
+        )
+
+        page = _Page(
+            vendors_by_item={"viid-1": "A00001"},
+            sellers_by_id={"A00001": _seller_payload()},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            _write_csv(
+                output_dir / "top_product_seller.csv",
+                PRODUCT_SELLER_FIELDS,
+                [
+                    {
+                        "product_id": "10",
+                        "item_id": "20",
+                        "vendor_item_id": "viid-1",
+                        "vendor_id": "A00001",
+                        "mapped_at": "2026-11-18 00:00:00",
+                        "store_name": "저장된스토어",
+                    }
+                ],
+            )
+            result = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page),
+            )
+            self.assertEqual(result["event"], "seller_collection_complete")
+            sellers = _read_rows(output_dir / "top_sellers.csv")
+            self.assertEqual(sellers[0]["store_name"], "저장된스토어")
+            final_rows = _read_rows(output_dir / "coupang_판매자_1명.csv")
+            self.assertEqual(final_rows[0]["스토어명"], "저장된스토어")
+
+    def test_legacy_mapping_file_without_store_name_column_is_read(self):
+        page = _Page(
+            vendors_by_item={"viid-1": "A00001"},
+            sellers_by_id={"A00001": _seller_payload()},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            with (output_dir / "top_product_seller.csv").open(
+                "w", encoding="utf-8-sig", newline=""
+            ) as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "product_id",
+                        "item_id",
+                        "vendor_item_id",
+                        "vendor_id",
+                        "mapped_at",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "product_id": "10",
+                        "item_id": "20",
+                        "vendor_item_id": "viid-1",
+                        "vendor_id": "A00001",
+                        "mapped_at": "2026-11-18 00:00:00",
+                    }
+                )
+            result = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page),
+            )
+            self.assertEqual(result["event"], "seller_collection_complete")
+            sellers = _read_rows(output_dir / "top_sellers.csv")
+            self.assertEqual(sellers[0]["status"], "saved")
+            self.assertEqual(sellers[0]["store_name"], "")
+
+    def test_empty_new_store_name_keeps_previous_value(self):
+        row = _seller_row(
+            "A00001",
+            {"displayName": "", "previous": {"store_name": "이전스토어"}},
+            _seller_payload(),
+            status="saved",
+        )
+        self.assertEqual(row["store_name"], "이전스토어")
+
+    def test_mapping_store_name_wins_over_previous_value(self):
+        row = _seller_row(
+            "A00001",
+            {"displayName": "새스토어", "previous": {"store_name": "이전스토어"}},
+            _seller_payload(),
+            status="saved",
+        )
+        self.assertEqual(row["store_name"], "새스토어")
 
 
 class CancelResumeTest(unittest.TestCase):

@@ -146,12 +146,31 @@ def write_csv(path: Path, fields: tuple[str, ...], rows: list[dict]) -> None:
         raise
 
 
-def read_csv(path: Path, fields: tuple[str, ...]) -> list[dict]:
+def read_csv(
+    path: Path,
+    fields: tuple[str, ...],
+    *,
+    defaults: dict[str, str] | None = None,
+) -> list[dict]:
+    """열 순서를 검증해 읽는다.
+
+    ``defaults`` 는 나중에 추가된 열의 기본값이다. 예전 파일이 그 열만
+    빠진 순서 그대로라면 빈 값으로 채워 읽어, 기존 저장본을 다시 쓰지
+    않고도 새 스키마 코드가 읽을 수 있게 한다.
+    """
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
-            if tuple(reader.fieldnames or ()) != fields:
-                raise ValueError(f"{path.name} 열 형식이 잘못됐습니다.")
+            fieldnames = tuple(reader.fieldnames or ())
+            if fieldnames != fields:
+                legacy = (
+                    tuple(field for field in fields if field not in defaults)
+                    if defaults
+                    else None
+                )
+                if not defaults or fieldnames != legacy:
+                    raise ValueError(f"{path.name} 열 형식이 잘못됐습니다.")
+                return [{**defaults, **dict(row)} for row in reader]
             return [dict(row) for row in reader]
     except OSError as error:
         raise ValueError(f"{path.name}을 읽지 못했습니다: {error}") from error
@@ -166,6 +185,7 @@ def merge_by_key(
     validate: Callable[[dict], None] | None = None,
     should_replace: Callable[[dict, dict], bool] | None = None,
     existing_key_of: Callable[[dict], object] | None = None,
+    defaults: dict[str, str] | None = None,
 ) -> tuple[int, int]:
     """키가 같은 기존 행을 덮어쓰지 않고 합친다. 반환은 (총 행 수, 증가 수).
 
@@ -175,9 +195,10 @@ def merge_by_key(
     행을 새 행으로 바꾼다(failed 행이 비failed 결과에 자리를 내주는 규칙).
     existing_key_of 는 저장된 행을 읽을 때만 쓰는 키(기본값 key_of) —
     카테고리×상품 병합에서 저장 행은 상품 ID 만으로 인덱싱하는 관례.
+    defaults 는 나중에 추가된 열의 기본값을 예전 저장본에 채우는 값이다.
     """
     index_key = existing_key_of or key_of
-    existing = read_csv(path, fields)
+    existing = read_csv(path, fields, defaults=defaults)
     by_key: dict[object, dict] = {}
     for row in existing:
         key = index_key(row)

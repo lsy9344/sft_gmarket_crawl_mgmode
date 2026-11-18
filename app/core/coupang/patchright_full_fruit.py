@@ -61,7 +61,12 @@ PRODUCT_SELLER_FIELDS = (
     "vendor_item_id",
     "vendor_id",
     "mapped_at",
+    # 매핑 API의 storeInfoArea.displayName. 저장된 매핑으로 다시 조회할 때
+    # 스토어명이 사라지지 않도록 함께 남긴다.
+    "store_name",
 )
+# 2026-11 이전 저장본에는 store_name 열이 없다 — 읽을 때만 빈 값으로 채운다.
+PRODUCT_SELLER_DEFAULTS = {"store_name": ""}
 
 STATE_FILENAME = "fruit_collection_state.json"
 PRODUCTS_FILENAME = "fruit_products.csv"
@@ -135,7 +140,11 @@ class FullFruitStore:
             for row in sellers
         ):
             raise ValueError(f"{self.sellers_path.name} 판매자 상태가 잘못됐습니다.")
-        _read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
+        _read_csv(
+            self.product_seller_path,
+            PRODUCT_SELLER_FIELDS,
+            defaults=PRODUCT_SELLER_DEFAULTS,
+        )
         for path, expected_type in (
             (self.failed_sellers_path, list),
             (self.failed_mappings_path, list),
@@ -172,6 +181,7 @@ class FullFruitStore:
             rows,
             key_of=item_key,
             validate=validate_mapping_row,
+            defaults=PRODUCT_SELLER_DEFAULTS,
         )
 
     def update_summary(self, *, raw_products_seen: int, unique_products: int) -> None:
@@ -189,7 +199,11 @@ class FullFruitStore:
 
     def update_seller_summary(self, *, status: str) -> None:
         sellers = _read_csv(self.sellers_path, SELLER_FIELDS)
-        mappings = _read_csv(self.product_seller_path, PRODUCT_SELLER_FIELDS)
+        mappings = _read_csv(
+            self.product_seller_path,
+            PRODUCT_SELLER_FIELDS,
+            defaults=PRODUCT_SELLER_DEFAULTS,
+        )
         failed_mappings = json.loads(
             self.failed_mappings_path.read_text(encoding="utf-8")
         )

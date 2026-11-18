@@ -23,6 +23,7 @@ from app.core.coupang.patchright_canary import (
 )
 from app.core.coupang.patchright_full_fruit import (
     PRODUCT_FIELDS,
+    PRODUCT_SELLER_DEFAULTS,
     PRODUCT_SELLER_FIELDS,
     SELLER_FIELDS,
     FullFruitStore,
@@ -185,6 +186,7 @@ def _mapping_rows(data: dict, requested: list[dict]) -> tuple[list[dict], dict[s
                 "vendor_item_id": vendor_item_id,
                 "vendor_id": vendor_id,
                 "mapped_at": mapped_at,
+                "store_name": str(store_info.get("displayName") or "").strip(),
             }
         )
         vendors.setdefault(
@@ -208,7 +210,11 @@ def _vendor_from_saved_mapping(
     previous = seller or {}
     return {
         "vendorId": mapping["vendor_id"],
-        "displayName": previous.get("store_name") or "",
+        # 상세 페이지는 스토어명을 주지 않으므로, 먼저 저장된 매핑의
+        # storeInfoArea.displayName을 쓰고 비어 있을 때만 이전 행 값을 쓴다.
+        "displayName": mapping.get("store_name")
+        or previous.get("store_name")
+        or "",
         "productId": mapping.get("product_id") or product.get("product_id"),
         "itemId": mapping.get("item_id") or product.get("item_id"),
         "vendorItemId": mapping["vendor_item_id"],
@@ -307,7 +313,11 @@ def seller_work_queue(
             if seller_slice_index(row["vendor_item_id"], slice_count)
             == slice_index
         ]
-    mappings = _read_csv(store.product_seller_path, PRODUCT_SELLER_FIELDS)
+    mappings = _read_csv(
+        store.product_seller_path,
+        PRODUCT_SELLER_FIELDS,
+        defaults=PRODUCT_SELLER_DEFAULTS,
+    )
     sellers = _read_csv(store.sellers_path, SELLER_FIELDS)
     failed_mappings = json.loads(store.failed_mappings_path.read_text(encoding="utf-8"))
     products_by_id = {row["vendor_item_id"]: row for row in products}

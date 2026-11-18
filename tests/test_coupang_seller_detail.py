@@ -98,6 +98,21 @@ class SellerDetailStatusTest(unittest.TestCase):
         self.assertEqual(result["status"], "saved")
         self.assertEqual(result["data"]["name"], "주식회사테스트")
 
+    def test_detail_vendor_name_is_not_used_as_store_name(self):
+        """``sellerDetailInfo.vendorName`` 은 상호이지 스토어명이 아니다."""
+        result = _fetch(
+            _Page(
+                rows={"company_ceo": "주식회사테스트 / 홍길동"},
+                review={
+                    "vendorName": "주식회사테스트",
+                    "storeName": "테스트스토어",
+                },
+            )
+        )
+        self.assertEqual(result["status"], "saved")
+        self.assertNotIn("storeName", result["data"])
+        self.assertNotIn("store_name", result["data"])
+
     def test_blocked_page_is_reported_to_caller(self):
         result = _fetch(
             _Page(status=403, content="<html><body>Access Denied</body></html>")

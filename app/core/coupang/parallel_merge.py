@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from app.core.coupang.patchright_full_fruit import (
+    PRODUCT_SELLER_DEFAULTS,
     PRODUCT_SELLER_FIELDS,
     SELLER_FIELDS,
 )
@@ -45,11 +46,16 @@ __all__ = [
 MERGE_STATE_FILENAME = "coupang_shard_merge.json"
 
 
-def _read_csv_if_exists(path: Path, fields: tuple[str, ...]) -> list[dict]:
+def _read_csv_if_exists(
+    path: Path,
+    fields: tuple[str, ...],
+    *,
+    defaults: dict[str, str] | None = None,
+) -> list[dict]:
     """샤드 저장소 CSV 를 읽는다. 파일이 없으면 빈 목록(빈 샤드 결과)."""
     if not path.exists():
         return []
-    return read_csv(path, fields)
+    return read_csv(path, fields, defaults=defaults)
 
 
 def _read_json_list_if_exists(path: Path) -> list[dict]:
@@ -100,7 +106,9 @@ def merge_shard_outputs(output_root: Path, shard_dirs: list[Path]) -> dict:
         )
         mappings.extend(
             _read_csv_if_exists(
-                shard_dir / "top_product_seller.csv", PRODUCT_SELLER_FIELDS
+                shard_dir / "top_product_seller.csv",
+                PRODUCT_SELLER_FIELDS,
+                defaults=PRODUCT_SELLER_DEFAULTS,
             )
         )
     failed_mappings = _merge_failed_json(
