@@ -15,8 +15,9 @@ import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from typing import ClassVar
 
-from app.core.base import CancelledError, Control
+from app.core.base import Control
 from app.core.coupang.parallel_pipeline import choose_action
 from app.core.coupang.patchright_sample import (
     FETCH_STORE_REVIEW_JS,
@@ -24,15 +25,21 @@ from app.core.coupang.patchright_sample import (
 )
 from app.core.coupang.patchright_top_sellers import (
     TopSellerStore,
+    _seller_row,
     _work,
     authorize_http_503_retry,
     build_seller_final,
+    mark_legacy_sellers_for_recheck,
     run_top_seller_batch,
 )
 from app.core.coupang.patchright_top_thousand import (
     PRODUCT_FIELDS,
     TopThousandStore,
     read_state,
+)
+from app.core.coupang.seller_detail import (
+    EXPAND_SELLER_DETAIL_JS,
+    EXTRACT_SELLER_DETAIL_JS,
 )
 
 
@@ -97,14 +104,23 @@ def _seller_payload(**changes) -> dict:
 
 class _Page:
     def __init__(self, *, vendors_by_item=None, sellers_by_id=None,
-                 seller_error_at="") -> None:
+                 seller_error_at="", detail_rows_by_id=None,
+                 detail_section=True) -> None:
         self.url = "about:blank"
         self.vendors_by_item = vendors_by_item or {}
         self.sellers_by_id = sellers_by_id or {}
         self.seller_error_at = seller_error_at
+        self.detail_rows_by_id = detail_rows_by_id or {}
+        self.detail_section = detail_section
+        self.current_vendor = ""
+        self.review_calls = 0
 
     def goto(self, url, **_kwargs):
         self.url = str(url)
+        vendor_item_id = ""
+        if "vendorItemId=" in self.url:
+            vendor_item_id = self.url.split("vendorItemId=", 1)[1].split("&", 1)[0]
+        self.current_vendor = self.vendors_by_item.get(vendor_item_id, "")
         return _Response()
 
     def wait_for_timeout(self, _milliseconds):
@@ -133,9 +149,43 @@ class _Page:
                     }
                 )
             return {"status": 200, "body": json.dumps({"code": 200, "data": {"products": products}})}
+        if script == EXTRACT_SELLER_DETAIL_JS:
+            if self.current_vendor == self.seller_error_at:
+                return {"rows": {}, "hasSection": False, "url": self.url, "title": ""}
+            rows = self.detail_rows_by_id.get(self.current_vendor)
+            if rows is None:
+                payload = self.sellers_by_id.get(self.current_vendor)
+                rows = {}
+                if payload:
+                    if payload.get("name"):
+                        rows["company_ceo"] = (
+                            f"{payload.get('name', '')} / "
+                            f"{payload.get('repPersonName', '')}".strip()
+                        )
+                    if payload.get("businessNumber"):
+                        rows["business_number"] = payload["businessNumber"]
+                    if payload.get("repPhoneNum"):
+                        rows["phone"] = payload["repPhoneNum"]
+                    if payload.get("repEmail"):
+                        rows["email"] = payload["repEmail"]
+                    if payload.get("repAddr1"):
+                        rows["address"] = payload["repAddr1"]
+                    if payload.get("eCommerceReportNumber"):
+                        rows["ecommerce_report_number"] = payload[
+                            "eCommerceReportNumber"
+                        ]
+            return {
+                "rows": rows,
+                "hasSection": self.detail_section,
+                "url": self.url,
+                "title": "",
+            }
+        if script == EXPAND_SELLER_DETAIL_JS:
+            return True
         if script == FETCH_STORE_REVIEW_JS:
+            self.review_calls += 1
             if argument == self.seller_error_at:
-                return {"status": 503, "body": "Service Unavailable"}
+                return {"status": 200, "body": json.dumps({})}
             payload = self.sellers_by_id.get(argument)
             if payload is None:
                 return {"status": 200, "body": json.dumps({})}
@@ -146,6 +196,23 @@ class _Page:
 class _Context:
     def __init__(self, page: _Page) -> None:
         self.pages = [page]
+
+
+class _TwoPageContext(_Context):
+    def __init__(self, page: _Page, review_page: _Page) -> None:
+        super().__init__(page)
+        self.review_page = review_page
+
+    def new_page(self):
+        return self.review_page
+
+
+def _two_page_factory(page: _Page, review_page: _Page):
+    @contextmanager
+    def open_browser(user_data_dir, *, headless=False, proxy=None):
+        yield _TwoPageContext(page, review_page)
+
+    return open_browser
 
 
 def _factory(page: _Page):
@@ -229,11 +296,37 @@ class TopSellersTest(unittest.TestCase):
             )
             self.assertEqual(control["status"], "completed")
 
-    def test_http_503_halts_and_retry_requires_three_hours(self):
+    def test_review_api_uses_separate_shop_tab(self):
+        page = _Page(
+            vendors_by_item={"viid-1": "A00001"},
+            sellers_by_id={"A00001": _seller_payload()},
+        )
+        review_page = _Page(
+            vendors_by_item={"viid-1": "A00001"},
+            sellers_by_id={"A00001": _seller_payload()},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            result = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                state_root=root / "guard",
+                browser_scope_factory=_two_page_factory(page, review_page),
+            )
+            self.assertEqual(result["event"], "seller_collection_complete")
+            self.assertEqual(review_page.review_calls, 1)
+            self.assertEqual(page.review_calls, 0)
+            sellers = _read_rows(output_dir / "top_sellers.csv")
+            self.assertEqual(sellers[0]["status"], "saved")
+
+    def test_missing_detail_section_halts_instead_of_zero_saved(self):
         page = _Page(
             vendors_by_item={"viid-1": "A00001"},
             sellers_by_id={"A00001": _seller_payload()},
             seller_error_at="A00001",
+            detail_section=False,
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -250,7 +343,22 @@ class TopSellersTest(unittest.TestCase):
                 (output_dir / "top_seller_control.json").read_text("utf-8")
             )
             self.assertEqual(control["status"], "halted")
-            self.assertIn("HTTP 503", str(control["reason"]))
+            self.assertIn("한 건도 저장하지 못했습니다", str(control["reason"]))
+            self.assertFalse((output_dir / "coupang_판매자_0명.csv").exists())
+
+    def test_http_503_retry_requires_three_hours(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            output_dir.mkdir()
+            control = {
+                "version": 1,
+                "status": "halted",
+                "reason": "판매자 처리 실패: HTTP 503",
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            (output_dir / "top_seller_control.json").write_text(
+                json.dumps(control, ensure_ascii=False), encoding="utf-8"
+            )
             allowed_now, reason = authorize_http_503_retry(output_dir)
             self.assertFalse(allowed_now)
             self.assertIn("남았습니다", reason)
@@ -279,12 +387,11 @@ class TopSellersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             output_dir = root / "out"
-            store = TopSellerStore(output_dir)
             _prepare(output_dir, [_product_row("viid-1")])
-            from app.core.coupang.patchright_full_fruit import _write_csv
             from app.core.coupang.patchright_full_fruit import (
                 PRODUCT_SELLER_FIELDS,
                 SELLER_FIELDS,
+                _write_csv,
             )
 
             _write_csv(
@@ -325,8 +432,12 @@ class TopSellersTest(unittest.TestCase):
                 SELLER_FIELDS,
                 [no_info, saved],
             )
+            (output_dir / "coupang_판매자_0명.csv").write_text(
+                "stale", encoding="utf-8"
+            )
             path = build_seller_final(output_dir)
             rows = _read_rows(path)
+            self.assertFalse((output_dir / "coupang_판매자_0명.csv").exists())
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["판매자ID"], "A00001")
             self.assertEqual(rows[0]["파워셀러"], "False")
@@ -537,6 +648,200 @@ class RunTopSellersProxyTest(unittest.TestCase):
             )
         self.assertEqual(result["event"], "seller_collection_complete")
         self.assertEqual(received, [None])
+
+
+class LegacySellerRecoveryTest(unittest.TestCase):
+    """2026-11 이전 no_public_info 행을 한 번만 재조회 대기열로 되돌린다."""
+
+    _VENDOR: ClassVar[dict] = {
+        "vendorId": "A00001",
+        "displayName": "테스트스토어",
+        "productId": 10,
+        "itemId": 20,
+        "vendorItemId": "viid-1",
+    }
+
+    def _write_legacy(self, output_dir: Path) -> None:
+        from app.core.coupang.patchright_full_fruit import (
+            PRODUCT_SELLER_FIELDS,
+            SELLER_FIELDS,
+            _write_csv,
+        )
+
+        _write_csv(
+            output_dir / "top_product_seller.csv",
+            PRODUCT_SELLER_FIELDS,
+            [
+                {
+                    "product_id": "10",
+                    "item_id": "20",
+                    "vendor_item_id": "viid-1",
+                    "vendor_id": "A00001",
+                    "mapped_at": "2026-11-16 13:12:09",
+                }
+            ],
+        )
+        _write_csv(
+            output_dir / "top_sellers.csv",
+            SELLER_FIELDS,
+            [_seller_row("A00001", self._VENDOR, None)],
+        )
+
+    def test_legacy_no_public_info_is_recovered_from_detail_page(self):
+        page = _Page(sellers_by_id={"A00001": _seller_payload()})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            self._write_legacy(output_dir)
+            result = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page),
+            )
+            self.assertEqual(result["event"], "seller_collection_complete")
+            sellers = _read_rows(output_dir / "top_sellers.csv")
+            self.assertEqual(
+                [(row["vendor_id"], row["status"]) for row in sellers],
+                [("A00001", "saved")],
+            )
+            self.assertEqual(sellers[0]["company_name"], "주식회사테스트")
+            final_rows = _read_rows(output_dir / "coupang_판매자_1명.csv")
+            self.assertEqual(final_rows[0]["판매자ID"], "A00001")
+            marker = json.loads(
+                (output_dir / "seller_detail_recovery.json").read_text("utf-8")
+            )
+            self.assertEqual(marker["requeued"], 1)
+            self.assertEqual(marker["vendor_ids"], ["A00001"])
+
+    def test_recovery_marker_prevents_second_requeue(self):
+        from app.core.coupang.parallel_pipeline import seller_recovery_pending
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            self._write_legacy(output_dir)
+            store = TopSellerStore(output_dir)
+            self.assertTrue(seller_recovery_pending(output_dir))
+            first = mark_legacy_sellers_for_recheck(store)
+            self.assertEqual(first["requeued"], 1)
+            self.assertFalse(seller_recovery_pending(output_dir))
+            second = mark_legacy_sellers_for_recheck(store)
+            self.assertEqual(second["requeued"], 0)
+            rows = _read_rows(output_dir / "top_sellers.csv")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["status"], "failed")
+            self.assertEqual(
+                rows[0]["error"], "상세 페이지 재확인 대기(2026-11 이전 판정)"
+            )
+
+    def test_zero_saved_existing_rows_do_not_complete(self):
+        page = _Page()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            _prepare(output_dir, [])
+            from app.core.coupang.patchright_full_fruit import (
+                SELLER_FIELDS,
+                _write_csv,
+            )
+
+            _write_csv(
+                output_dir / "top_sellers.csv",
+                SELLER_FIELDS,
+                [_seller_row("A00001", self._VENDOR, None)],
+            )
+            (output_dir / "seller_detail_recovery.json").write_text(
+                json.dumps({"version": 1, "requeued": 0}), encoding="utf-8"
+            )
+            result = run_top_seller_batch(
+                output_dir=output_dir,
+                limit=10,
+                state_root=root / "guard",
+                browser_scope_factory=_factory(page),
+            )
+            self.assertEqual(result["event"], "failed")
+            control = json.loads(
+                (output_dir / "top_seller_control.json").read_text("utf-8")
+            )
+            self.assertEqual(control["status"], "halted")
+            self.assertFalse((output_dir / "coupang_판매자_0명.csv").exists())
+
+    def test_blocked_halt_is_not_resumed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            (output_dir / "top_seller_control.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "status": "halted",
+                        "reason": "상품-판매자 연결 요청에서 차단됐습니다.",
+                        "updated_at": "2026-11-17 16:21:00",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            result = mark_legacy_sellers_for_recheck(TopSellerStore(output_dir))
+            self.assertFalse(result["resumed_halted"])
+            from app.core.coupang.parallel_pipeline import seller_recovery_pending
+
+            self.assertFalse(seller_recovery_pending(output_dir))
+            control = json.loads(
+                (output_dir / "top_seller_control.json").read_text("utf-8")
+            )
+            self.assertEqual(control["status"], "halted")
+
+    def test_failed_to_fetch_halt_is_resumed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            _prepare(output_dir, [_product_row("viid-1")])
+            (output_dir / "top_seller_control.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "status": "halted",
+                        "reason": "판매자 A00001 처리 실패: Failed to fetch",
+                        "updated_at": "2026-11-17 16:21:00",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            result = mark_legacy_sellers_for_recheck(TopSellerStore(output_dir))
+            self.assertTrue(result["resumed_halted"])
+            control = json.loads(
+                (output_dir / "top_seller_control.json").read_text("utf-8")
+            )
+            self.assertEqual(control["status"], "cancelled")
+
+
+class SellerDetailPayloadTest(unittest.TestCase):
+    def test_combined_company_and_representative_are_split(self):
+        from app.core.coupang.seller_detail import seller_detail_payload
+
+        data = seller_detail_payload(
+            {
+                "rows": {
+                    "company_ceo": "주식회사테스트 / 홍길동",
+                    "business_number": "123-45-67890",
+                    "phone": "02-1234-5678",
+                    "email": "test@example.com",
+                    "address": "서울특별시 강남구 테헤란로 1",
+                    "ecommerce_report_number": "2026-서울강남-0001",
+                }
+            }
+        )
+        self.assertEqual(data["name"], "주식회사테스트")
+        self.assertEqual(data["repPersonName"], "홍길동")
+        self.assertEqual(data["businessNumber"], "123-45-67890")
+        self.assertEqual(data["repPhoneNum"], "02-1234-5678")
+        self.assertEqual(data["repEmail"], "test@example.com")
+        self.assertEqual(data["repAddr1"], "서울특별시 강남구 테헤란로 1")
+        self.assertEqual(data["eCommerceReportNumber"], "2026-서울강남-0001")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,6 @@ from app.core.coupang.patchright_full_fruit import (
     _write_json,
 )
 from app.core.coupang.patchright_sample import (
-    FETCH_STORE_REVIEW_JS,
     FETCH_VENDORS_JS,
     SHOP_SESSION_URL,
     _api_block,
@@ -38,7 +37,11 @@ from app.core.coupang.patchright_sample import (
     _navigate,
     _wait,
 )
-from app.core.coupang.store_files import UNCONFIRMED_SELLER_ERROR
+from app.core.coupang.seller_detail import fetch_seller_detail
+from app.core.coupang.store_files import (
+    SELLER_RECHECK_ERROR,
+    UNCONFIRMED_SELLER_ERROR,
+)
 from app.core.coupang.work_plan import seller_slice_index
 from app.models.coupang_records import RECORD_FIELDS
 
@@ -47,6 +50,8 @@ MAX_SESSION_PRODUCTS = 600
 MAPPING_BATCH_SIZE = 10
 MAPPING_DELAY_MS = 3_000
 SELLER_DELAY_MS = 3_000
+CONSECUTIVE_FAILED_SELLER_LIMIT = 20
+CONSECUTIVE_EMPTY_SELLER_LIMIT = 50
 MIN_HTTP_503_RETRY_SECONDS = 3 * 60 * 60
 
 
@@ -194,22 +199,59 @@ def _mapping_rows(data: dict, requested: list[dict]) -> tuple[list[dict], dict[s
     return rows, vendors
 
 
-def _vendor_from_saved_mapping(mapping: dict, products_by_id: dict[str, dict]) -> dict:
+def _vendor_from_saved_mapping(
+    mapping: dict, products_by_id: dict[str, dict], seller: dict | None = None
+) -> dict:
     product = products_by_id.get(mapping["vendor_item_id"], {})
+    previous = seller or {}
     return {
         "vendorId": mapping["vendor_id"],
-        "displayName": "",
+        "displayName": previous.get("store_name") or "",
         "productId": mapping.get("product_id") or product.get("product_id"),
         "itemId": mapping.get("item_id") or product.get("item_id"),
         "vendorItemId": mapping["vendor_item_id"],
+        "url": previous.get("url") or "",
+        "previous": previous,
     }
 
 
-def _seller_row(vendor_id: str, vendor: dict, data: dict | None, error: str = "") -> dict:
-    if data is not None and data.get("name"):
+def _seller_row(
+    vendor_id: str,
+    vendor: dict,
+    data: dict | None,
+    error: str = "",
+    *,
+    status: str | None = None,
+) -> dict:
+    if status is None:
+        status = "saved" if data is not None and data.get("name") else (
+            "failed" if error else "no_public_info"
+        )
+    if status == "saved" and data is None:
+        status = "failed"
+        error = error or "저장할 판매자 데이터가 없습니다."
+    if status == "saved" and data is not None:
+        record = _build_record(vendor_id, data, vendor)
+        previous = vendor.get("previous") or {}
+        # 재확인 행이 남긴 스토어명·평점은 새 응답이 비어 있을 때만 보존한다.
+        for field in (
+            "store_name",
+            "power_seller",
+            "power_seller_title",
+            "rating_count",
+            "thumb_up_ratio",
+        ):
+            current = str(record.get(field) or "")
+            previous_value = str(previous.get(field) or "")
+            if current in ("", "False", "0") and previous_value not in (
+                "",
+                "False",
+                "0",
+            ):
+                record[field] = previous[field]
         return {
             "status": "saved",
-            **_build_record(vendor_id, data, vendor),
+            **record,
             "error": "",
             "updated_at": _now_text(),
         }
@@ -220,7 +262,7 @@ def _seller_row(vendor_id: str, vendor: dict, data: dict | None, error: str = ""
         store_name=vendor.get("displayName") or "",
     )
     return {
-        "status": "failed" if error else "no_public_info",
+        "status": status,
         **blank,
         "error": error,
         "updated_at": _now_text(),
@@ -267,7 +309,14 @@ def seller_work_queue(
     sellers = _read_csv(store.sellers_path, SELLER_FIELDS)
     failed_mappings = json.loads(store.failed_mappings_path.read_text(encoding="utf-8"))
     products_by_id = {row["vendor_item_id"]: row for row in products}
-    completed_vendors = {row["vendor_id"] for row in sellers if row["vendor_id"]}
+    sellers_by_id = {
+        row["vendor_id"]: row for row in sellers if row.get("vendor_id")
+    }
+    completed_vendors = {
+        row["vendor_id"]
+        for row in sellers
+        if row["vendor_id"] and row.get("error") != SELLER_RECHECK_ERROR
+    }
     failed_mapping_ids = {
         str(row.get("vendor_item_id") or "")
         for row in failed_mappings
@@ -281,7 +330,12 @@ def seller_work_queue(
         if vendor_id in completed_vendors or vendor_id in pending_ids:
             continue
         pending.append(
-            (vendor_id, _vendor_from_saved_mapping(mapping, products_by_id))
+            (
+                vendor_id,
+                _vendor_from_saved_mapping(
+                    mapping, products_by_id, sellers_by_id.get(vendor_id)
+                ),
+            )
         )
         pending_ids.add(vendor_id)
         if len(pending) == limit:
@@ -330,6 +384,17 @@ def run_seller_batch(
     pending, unmapped = _work(store, limit)
     planned_items = len(pending) + len(unmapped)
     if planned_items == 0:
+        existing_sellers = _read_csv(store.sellers_path, SELLER_FIELDS)
+        if existing_sellers and not any(
+            row.get("status") == "saved" for row in existing_sellers
+        ):
+            reason = (
+                "판매자 사업자정보가 한 건도 저장되지 않은 상태입니다. "
+                "완료로 처리하지 않습니다 — 상세 페이지 재조회가 필요합니다."
+            )
+            _save_control(output_dir, "halted", reason=reason, event="failed")
+            store.update_seller_summary(status="halted")
+            return {"event": "failed", "reason": reason, "status": "halted"}
         _save_control(output_dir, "completed")
         store.update_seller_summary(status="completed")
         return {
@@ -361,10 +426,13 @@ def run_seller_batch(
     processed_vendors = {
         row["vendor_id"]
         for row in _read_csv(store.sellers_path, SELLER_FIELDS)
-        if row["vendor_id"]
+        if row["vendor_id"] and row.get("error") != SELLER_RECHECK_ERROR
     }
     mapped_products = 0
     processed_sellers = 0
+    saved_sellers = 0
+    consecutive_failed = 0
+    consecutive_empty = 0
 
     def emit(event: str, **changes: object) -> dict:
         state.update(event=event, **changes)
@@ -401,8 +469,31 @@ def run_seller_batch(
                         status=status,
                     )
 
+            # 상세 페이지는 www.coupang.com 으로 이동하므로 보조 API는
+            # shop.coupang.com 에 머무는 별도 탭에서 호출한다(같은 출처).
+            review_page = page
+            new_page = getattr(context, "new_page", None)
+            if callable(new_page):
+                try:
+                    review_page = new_page()
+                    blocked, status, reference = _navigate(
+                        review_page, SHOP_SESSION_URL, 1_000, control, state
+                    )
+                    if blocked:
+                        record_block(state_root, reference=reference)
+                        return halt(
+                            "blocked",
+                            "판매자 보조 API 탭에서 차단 신호를 확인했습니다.",
+                            blocked_at="shop_session",
+                            reference=reference,
+                            status=status,
+                        )
+                except Exception:  # noqa: BLE001 - 보조 탭 실패는 본 탭으로
+                    review_page = page
+
             def fetch_seller(vendor_id: str, vendor: dict) -> dict | None:
-                nonlocal processed_sellers
+                nonlocal processed_sellers, saved_sellers, consecutive_failed
+                nonlocal consecutive_empty
                 if vendor_id in processed_vendors:
                     return None
                 _checkpoint(control)
@@ -415,29 +506,59 @@ def run_seller_batch(
                     UNCONFIRMED_SELLER_ERROR,
                 )
                 store.merge_sellers([attempted])
-                state["api_calls"] += 1
-                result = page.evaluate(FETCH_STORE_REVIEW_JS, vendor_id)
-                blocked, reference = _api_block(result)
-                if blocked:
+                detail = fetch_seller_detail(
+                    page, vendor_id, vendor, control, state, review_page=review_page
+                )
+                if detail["blocked"]:
                     failed = _seller_row(
                         vendor_id, vendor, None, "판매자정보 요청에서 차단됨"
                     )
                     store.merge_sellers([failed])
                     store.record_failed_seller(failed)
                     processed_vendors.add(vendor_id)
-                    record_block(state_root, reference=reference)
-                    raise _SellerBlocked(vendor_id, reference)
-                data, error = _decode_api(result, f"판매자 {vendor_id} 정보")
-                row = _seller_row(vendor_id, vendor, data, error)
+                    record_block(state_root, reference=detail["reference"])
+                    raise _SellerBlocked(vendor_id, detail["reference"])
+                row = _seller_row(
+                    vendor_id,
+                    vendor,
+                    detail["data"],
+                    detail["error"],
+                    status=detail["status"],
+                )
                 store.merge_sellers([row])
                 if row["status"] == "failed":
                     store.record_failed_seller(row)
                 processed_vendors.add(vendor_id)
                 processed_sellers += 1
+                if row["status"] == "saved":
+                    saved_sellers += 1
+                    consecutive_failed = 0
+                    consecutive_empty = 0
+                elif row["status"] == "failed":
+                    consecutive_failed += 1
+                    consecutive_empty = 0
+                else:
+                    consecutive_failed = 0
+                    consecutive_empty += 1
                 store.update_seller_summary(status="running")
-                emit("seller_saved", processed_sellers=processed_sellers)
-                if error:
-                    raise _SellerFailed(vendor_id, error)
+                emit(
+                    "seller_saved",
+                    processed_sellers=processed_sellers,
+                    saved_sellers=saved_sellers,
+                )
+                if consecutive_failed >= CONSECUTIVE_FAILED_SELLER_LIMIT:
+                    raise _SellerFailed(
+                        vendor_id,
+                        "상품 상세 페이지 판매자 정보 추출이 연속 "
+                        f"{consecutive_failed}회 실패했습니다.",
+                    )
+                if consecutive_empty >= CONSECUTIVE_EMPTY_SELLER_LIMIT:
+                    raise _SellerFailed(
+                        vendor_id,
+                        "상품 상세 페이지 판매자 정보가 연속 "
+                        f"{consecutive_empty}회 비어 있습니다. 페이지 구조나 "
+                        "접근 조건이 달라졌는지 확인하세요.",
+                    )
                 _wait(page, SELLER_DELAY_MS, control)
                 return row
 
@@ -447,8 +568,27 @@ def run_seller_batch(
             for start in range(0, len(unmapped), MAPPING_BATCH_SIZE):
                 batch = unmapped[start : start + MAPPING_BATCH_SIZE]
                 _checkpoint(control)
+                if review_page is page and not str(page.url).startswith(
+                    SHOP_SESSION_URL
+                ):
+                    # 보조 탭을 못 연 경우, 상세 페이지가 www로 이동한 뒤의
+                    # 매핑 POST가 동일 출처를 잃지 않게 shop으로 돌아간다.
+                    blocked, status, reference = _navigate(
+                        page, SHOP_SESSION_URL, 1_000, control, state
+                    )
+                    if blocked:
+                        record_block(state_root, reference=reference)
+                        return halt(
+                            "blocked",
+                            "상품-판매자 연결 준비 중 차단됐습니다.",
+                            blocked_at="shop_session",
+                            reference=reference,
+                            status=status,
+                        )
                 state["api_calls"] += 1
-                result = page.evaluate(
+                # 매핑 API는 shop.coupang.com 동일 출처가 필요하다. 상세
+                # 페이지가 www로 이동하므로 shop 탭(review_page)에서 호출한다.
+                result = review_page.evaluate(
                     FETCH_VENDORS_JS,
                     [row["vendor_item_id"] for row in batch],
                 )
@@ -497,6 +637,14 @@ def run_seller_batch(
 
             remaining_pending, remaining_unmapped = _work(store, 1)
             complete = not remaining_pending and not remaining_unmapped
+            if complete and processed_sellers and saved_sellers == 0:
+                return halt(
+                    "failed",
+                    "판매자 사업자정보를 한 건도 저장하지 못했습니다. "
+                    "상세 페이지 구조·차단 여부를 확인하기 전에는 완료로 "
+                    "처리하지 않습니다.",
+                    processed_sellers=processed_sellers,
+                )
             _save_control(output_dir, "completed" if complete else "ready")
             store.update_seller_summary(status="completed" if complete else "ready")
             settled, settle_reason = settle_live_attempt(
@@ -512,6 +660,7 @@ def run_seller_batch(
                 "seller_collection_complete" if complete else "seller_batch_completed",
                 mapped_products=mapped_products,
                 processed_sellers=processed_sellers,
+                saved_sellers=saved_sellers,
                 imported_sellers=imported_sellers,
                 sellers_path=str(store.sellers_path),
                 product_seller_path=str(store.product_seller_path),

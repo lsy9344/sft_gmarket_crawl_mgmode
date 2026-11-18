@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 __all__ = [
+    "SELLER_RECHECK_ERROR",
     "UNCONFIRMED_SELLER_ERROR",
     "atomic_write_text",
     "category_item_key",
@@ -35,6 +36,12 @@ __all__ = [
 # 판매자 정보 요청 직전에 먼저 남기는 표시 문구 — 이 문구를 가진 행은
 # 응답을 받기 전에 실행이 끊긴 것이므로 이어하기 전에 대기열로 되돌린다.
 UNCONFIRMED_SELLER_ERROR = "판매자정보 요청 시작; 결과 미확정"
+
+# 2026-11 이전 판정(no_public_info/failed)을 상세 페이지로 다시 확인할 때
+# 붙이는 표시. 행을 지우지 않고 이 표시만 남겨 기존 스토어명·평점 같은
+# 메타데이터를 보존한다. seller_work_queue 는 이 표시가 있는 판매자를
+# 미완료로 보고 다시 대기열에 올린다.
+SELLER_RECHECK_ERROR = "상세 페이지 재확인 대기(2026-11 이전 판정)"
 
 # 유효한 판매자 처리 상태 — 세 저장소가 공유하는 계약.
 _SELLER_STATUSES = ("saved", "no_public_info", "failed")
@@ -76,7 +83,13 @@ def validate_mapping_row(row: dict) -> None:
 
 
 def saved_supersedes_failed(previous: dict, row: dict) -> bool:
-    """failed 로 남은 판매자는 나중에 온 비failed 결과에 자리를 내준다."""
+    """failed 로 남은 판매자는 나중에 온 비failed 결과에 자리를 내준다.
+
+    재확인 대기 표시가 붙은 행은 재조회 결과(같은 failed 포함)로 덮어써
+    이전 판정 문구가 남지 않게 한다.
+    """
+    if previous.get("error") == SELLER_RECHECK_ERROR:
+        return True
     return previous.get("status") == "failed" and row.get("status") != "failed"
 
 

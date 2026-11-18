@@ -41,6 +41,7 @@ __all__ = [
     "load_categories_file",
     "next_session_id",
     "read_proxy_session_state",
+    "seller_recovery_pending",
 ]
 
 # 실행 로그 JSONL 파일명 — 프로토타입 파이프라인과 동일한 이름을 쓴다.
@@ -52,6 +53,55 @@ MAX_SESSION_ROTATIONS = 3  # 원본 sid 포함 총 4회 점검
 # 세션 수준 사망(게이트 502 터널 실패 등) — sid 교체로 회복되는 오류 종류.
 # quota/auth/unknown_407 은 계정 수준 문제라 sid를 바꿔도 소용없다.
 ROTATABLE_ERROR_KINDS = frozenset({"response", "connection", "timeout", "other"})
+
+
+def seller_recovery_pending(output_dir: Path) -> bool:
+    """이 폴더에 2026-11 이전 판정으로 재조회할 판매자가 남았는지.
+
+    매니저가 재시작할 때 이미 완료(done)된 인스턴스도 이 폴더를 다시 열어야
+    하는지 판단하는 읽기 전용 검사다. 복구 표시 파일이 이미 있으면 그 폴더의
+    한 번짜리 복구는 끝난 것이므로 False — 재조회 뒤 다시 no_public_info 로
+    남은 정상 판정을 매번 되돌리지 않는다.
+    """
+    from app.core.coupang.patchright_full_fruit import SELLER_FIELDS
+    from app.core.coupang.patchright_top_sellers import (
+        SELLER_RECOVERY_FILENAME,
+        TopSellerStore,
+        read_seller_control,
+    )
+    from app.core.coupang.store_files import (
+        UNCONFIRMED_SELLER_ERROR,
+        read_csv,
+    )
+
+    try:
+        control = read_seller_control(output_dir)
+    except (OSError, ValueError):
+        return False
+    reason = str(control.get("reason") or "")
+    # 차단으로 멈춘 폴더는 안전 장치가 풀릴 때까지 재가동하지 않는다.
+    if control["status"] == "halted" and "차단" in reason:
+        return False
+    if (output_dir / SELLER_RECOVERY_FILENAME).exists():
+        return False
+    store = TopSellerStore(output_dir)
+    if store.sellers_path.exists():
+        try:
+            rows = read_csv(store.sellers_path, SELLER_FIELDS)
+        except (OSError, ValueError):
+            # 손상된 파일은 복구 판정으로 덮지 않는다 — 실제 세션의
+            # validate() 가 사용자에게 표면화한다.
+            return False
+        if any(
+            row.get("status") in ("no_public_info", "failed")
+            and row.get("error") != UNCONFIRMED_SELLER_ERROR
+            for row in rows
+        ):
+            return True
+    return (
+        control["status"] == "halted"
+        and "Failed to fetch" in reason
+    )
 
 
 def choose_action(
@@ -126,10 +176,15 @@ def _choose_sellers_action(
     slice_count: int,
 ) -> dict:
     """판매자 조각(work sellers)의 다음 작업 — 매핑 대기열만 판정한다."""
-    from app.core.coupang.patchright_top_sellers import TopSellerStore, _work
+    from app.core.coupang.patchright_top_sellers import (
+        TopSellerStore,
+        _work,
+        mark_legacy_sellers_for_recheck,
+    )
 
     store = TopSellerStore(output_dir)
     store.ensure_files()
+    mark_legacy_sellers_for_recheck(store)
 
     control = read_seller_control(output_dir)
     if control["status"] == "halted":
@@ -164,10 +219,14 @@ def _choose_action(
     output_dir: Path,
     categories: list[tuple[str, str]] | None = None,
 ) -> dict:
-    from app.core.coupang.patchright_top_sellers import TopSellerStore
+    from app.core.coupang.patchright_top_sellers import (
+        TopSellerStore,
+        mark_legacy_sellers_for_recheck,
+    )
 
     store = TopSellerStore(output_dir)
     store.ensure_files()
+    mark_legacy_sellers_for_recheck(store)
 
     control = read_seller_control(output_dir)
     if control["status"] == "halted":

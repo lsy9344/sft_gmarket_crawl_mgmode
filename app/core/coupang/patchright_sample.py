@@ -294,12 +294,12 @@ def _build_record(vendor_id: str, data: dict, vendor: dict) -> dict:
     product_id = vendor.get("productId")
     item_id = vendor.get("itemId")
     vendor_item_id = vendor.get("vendorItemId")
-    url = (
-        f"https://www.coupang.com/vp/products/{product_id}"
-        f"?itemId={item_id}&vendorItemId={vendor_item_id}"
-        if product_id and item_id and vendor_item_id
-        else ""
-    )
+    url = str(vendor.get("url") or "")
+    if not url and product_id and item_id and vendor_item_id:
+        url = (
+            f"https://www.coupang.com/vp/products/{product_id}"
+            f"?itemId={item_id}&vendorItemId={vendor_item_id}"
+        )
     badge = data.get("qualitySellerBadgeDto") or {}
     return CoupangRecord(
         vendor_id=vendor_id,

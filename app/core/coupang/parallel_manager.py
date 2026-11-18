@@ -38,6 +38,7 @@ from app.core.coupang.parallel_pipeline import (
     build_all_finals,
     check_and_rotate_session,
     choose_action,
+    seller_recovery_pending,
 )
 from app.core.coupang.patchright_canary import (
     advance_recovery_ramp,
@@ -1172,6 +1173,60 @@ class ParallelCoupangManager:
             )
         return revived
 
+    def _revive_seller_recovery_instances(self) -> int:
+        """복구 대기 판매자가 남은 작업을 재시작 때 다시 연다.
+
+        2026-11 사고 자료는 완료된 샤드에도 ``no_public_info`` 행이 남아
+        있다. 그 샤드를 맡았던 인스턴스는 DONE 이라 ``run_due`` 대상에서
+        빠지고, 인스턴스가 이미 다른 가족으로 넘어갔으면 그 샤드는 어느
+        인스턴스에도 배정되지 않는다. 그래서 두 가지를 함께 처리한다:
+
+        1. DONE 인스턴스의 현재 작업 폴더에 재조회 행이 있으면 같은 작업
+           인덱스를 유지한 채 WAITING 으로 되돌린다.
+        2. 어느 인스턴스에도 배정되지 않은 작업 폴더에 재조회 행이 있으면
+           대기 큐에 넣고, 남은 DONE 인스턴스를 깨워 승계하게 한다.
+        """
+        revived = 0
+        for state in self._ordered_instances():
+            if state.status != STATUS_DONE or state.family_index is None:
+                continue
+            if not seller_recovery_pending(self._family_output_dir(state)):
+                continue
+            state.status = STATUS_WAITING
+            state.next_run_at = 0.0
+            revived += 1
+        assigned = {
+            state.family_index
+            for state in self.instances.values()
+            if state.family_index is not None
+        }
+        queued = 0
+        for index in range(len(self.config.families)):
+            if index in assigned or index in self.pending_families:
+                continue
+            if not seller_recovery_pending(
+                self.config.output_dir / self.config.work_dir_name(index)
+            ):
+                continue
+            self.pending_families.append(index)
+            queued += 1
+        if queued and self._revive_done_instances():
+            queued_note = f"대기 큐에 복구 작업 {queued}개를 넣었습니다."
+        else:
+            queued_note = ""
+        if revived or queued:
+            self._emit(
+                {
+                    "type": "log",
+                    "instance": "",
+                    "message": (
+                        f"상세 페이지 재조회가 필요한 작업 {revived + queued}개를"
+                        f" 다시 엽니다. {queued_note}".strip()
+                    ),
+                }
+            )
+        return revived + queued
+
     def _ramp_capped_limits(self, ramp_limit: int | None) -> tuple[int, int]:
         """복구 확대 단계에 맞춘 이번 세션 규모 — (목록 페이지, 판매자 상한).
 
@@ -1497,6 +1552,12 @@ class ParallelCoupangManager:
             restored_note += (
                 f" 차단/오류 인스턴스 {requeued_stopped}개를 다시 심사합니다"
                 "(안전 장치와 세션 절차가 회복 조건을 판정합니다)."
+            )
+        recovery_revived = self._revive_seller_recovery_instances()
+        if recovery_revived:
+            restored_note += (
+                f" 상세 페이지 재조회가 필요한 완료 작업 "
+                f"{recovery_revived}개를 다시 엽니다."
             )
         self._emit({"type": "log", "instance": "", "message": restored_note})
         if self.plan_version == PLAN_VERSION:

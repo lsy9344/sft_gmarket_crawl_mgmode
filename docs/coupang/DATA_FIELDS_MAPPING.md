@@ -1,5 +1,12 @@
 # Coupang OMP - Data Fields & Mapping
 
+> **2026-11-18 정정 — 판매자 사업자정보 출처 변경.**
+> 현재 `getStoreReview`는 사업자정보 키를 반환하지 않는다. 상품 상세
+> 페이지의 "판매자 정보" 표(내부 RSC `sellerDetailInfo`)가 실제 출처이며,
+> 매핑은 `name`→`vendorName`, `businessNumber`→`bizNum`,
+> `repAddr1/2`→`repAddress1/2`로 대응한다. 코드·복구 절차는
+> `SELLER_INFO_SOURCE_CHANGE_20261118.md` 참조.
+
 > **rev.6 (2026-07-26) — 구현 완료, 실측 매핑으로 대체.**
 > - 사업자정보 확보처는 상세페이지가 아니라 **`getStoreReview` 스토어 API**
 >   (상세페이지는 항상 403). 실측 확정 매핑은 **`CRAWL_RESULTS.md` §3.1**.

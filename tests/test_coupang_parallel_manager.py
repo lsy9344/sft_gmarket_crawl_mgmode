@@ -1224,6 +1224,39 @@ class PersistRestoreTest(unittest.TestCase):
             self.assertFalse(second.run_due(T0 + INTERVAL_SECONDS - 1))
             self.assertEqual(len(restored_factory.captured), 0)
 
+    def test_done_instance_with_legacy_seller_rows_is_reopened(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            families = _families(1)
+            family_dir = _prepare_complete_family(root / "out", 0, families[0])
+            first = _make_manager(root, families, [], factory=_RoutingFactory())
+            self.assertTrue(first.run_due(T0))
+            self.assertEqual(first.instances["1"].status, "done")
+
+            # 새 코드가 만든 폴더가 아니라 2026-11 이전 폴더를 흉내낸다 —
+            # 구버전에는 복구 표시 파일이 없다.
+            (family_dir / "seller_detail_recovery.json").unlink(missing_ok=True)
+            legacy = {field: "" for field in SELLER_FIELDS}
+            legacy.update(
+                status="no_public_info",
+                vendor_id="A00001",
+                url="https://www.coupang.com/vp/products/10",
+                updated_at="2026-11-16 13:12:09",
+            )
+            _write_csv(family_dir / "top_sellers.csv", SELLER_FIELDS, [legacy])
+
+            events: list = []
+            second = _make_manager(
+                root, families, events, factory=_RoutingFactory()
+            )
+            self.assertEqual(second.instances["1"].status, "waiting")
+            self.assertEqual(second.instances["1"].family_index, 0)
+            logs = " ".join(
+                str(event.get("message") or "")
+                for event in _events_of(events, "log")
+            )
+            self.assertIn("다시 엽니다", logs)
+
     def test_load_state_returns_none_for_missing_or_corrupt_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
