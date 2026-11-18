@@ -13,7 +13,7 @@ import re
 import tempfile
 import time
 from collections.abc import Callable
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 from app.core.base import CancelledError, Control
@@ -499,6 +499,40 @@ def advance_recovery_ramp(
         guard["recovery_ramp_completed"] = True
     _write_guard(guard, root)
     return True, ""
+
+
+# 판매자 상세 세션에서 내려받지 않을 리소스 — 문서(HTML)와 스크립트만
+# 있으면 판매자 정보 표를 읽을 수 있다. Decodo 종량제 사용량을 줄인다.
+BLOCKED_RESOURCE_TYPES = frozenset({"image", "media", "font"})
+
+
+def block_heavy_resources(context) -> bool:
+    """컨텍스트의 이미지·폰트·미디어 요청을 차단한다(설치 성공 여부 반환).
+
+    Playwright/Patchright의 route 는 컨텍스트 생성 직후, 첫 페이지 이동 전에
+    걸어야 한다. fake 컨텍스트처럼 route 가 없는 객체는 False 를 돌려주고
+    아무 것도 하지 않는다(테스트·오프라인 경로).
+    """
+    route = getattr(context, "route", None)
+    if not callable(route):
+        return False
+
+    def _handler(route_object) -> None:
+        try:
+            resource_type = str(route_object.request.resource_type or "")
+            if resource_type in BLOCKED_RESOURCE_TYPES:
+                route_object.abort()
+            else:
+                route_object.continue_()
+        except Exception:  # noqa: BLE001 - 차단 실패는 요청을 계속한다
+            with suppress(Exception):
+                route_object.continue_()
+
+    try:
+        route("**/*", _handler)
+    except Exception:  # noqa: BLE001 - route 미지원 환경은 기존 동작 유지
+        return False
+    return True
 
 
 @contextmanager

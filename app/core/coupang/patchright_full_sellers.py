@@ -12,7 +12,9 @@ from pathlib import Path
 
 from app.core.base import CancelledError, Control
 from app.core.coupang.patchright_canary import (
+    BLOCKED_RESOURCE_TYPES,
     HOME_URL,
+    block_heavy_resources,
     claim_live_attempt,
     patchright_browser,
     profile_dir,
@@ -455,6 +457,11 @@ def run_seller_batch(
             context = stack.enter_context(factory(user_data_dir, headless=False))
             page = context.pages[0] if context.pages else context.new_page()
             emit("browser_started")
+            if block_heavy_resources(context):
+                emit(
+                    "heavy_resources_blocked",
+                    resource_types=sorted(BLOCKED_RESOURCE_TYPES),
+                )
             for name, url in (("home", HOME_URL), ("shop_session", SHOP_SESSION_URL)):
                 blocked, status, reference = _navigate(
                     page, url, 1_500, control, state
